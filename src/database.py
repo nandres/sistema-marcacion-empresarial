@@ -69,7 +69,7 @@ class Database:
 
     def connect(self) -> psycopg2.connection:
         """Abre y retorna la conexión con la base configurada."""
-        self.connection = psycopg2.connect(**self.config)
+        self.connection = psycopg2.connect(client_encoding="UTF8", **self.config)
         self.connection.autocommit = False
         return self.connection
 

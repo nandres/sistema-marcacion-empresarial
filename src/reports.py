@@ -227,6 +227,66 @@ def calcular_aguinaldo(db: Database, anio: int) -> List[Dict[str, Any]]:
     return resultados
 
 
+def resumen_consulta(
+    db: Database, user: Dict[str, Any], fecha: date
+) -> Dict[str, Any]:
+    """Compone el resumen transparente que un empleado ve en su consulta.
+
+    Consulta de solo lectura: marcas de la fecha indicada, horas extra
+    acumuladas del mes y aguinaldo proporcional del año (Ley 6380/2019).
+    El resultado es JSON-serializable para alimentar la web y la GUI.
+
+    Args:
+        db: Capa de persistencia conectada.
+        user: Empleado autenticado por cédula (dict de ``users``).
+        fecha: Día del historial que se desea inspeccionar.
+
+    Returns:
+        Diccionario con ``usuario``, ``nombre``, ``fecha``, ``marcas_dia``,
+        ``extras_mes`` y ``aguinaldo`` (o ``None`` si aún no proyecta).
+    """
+    marcas = db.get_entries_by_date(user["id"], fecha)
+    marcas_dia = [
+        {
+            "id": m["id"],
+            "entrada": m["hora_entrada"].strftime("%H:%M:%S"),
+            "salida": m["hora_salida"].strftime("%H:%M:%S") if m["hora_salida"] else None,
+            "tardanza": bool(m["es_tardanza"]),
+            "feriado": bool(m["es_feriado"]),
+            "ordinarias": _fmt(m["horas_ordinarias"] or timedelta(0)),
+            "extra_50": _fmt(m["horas_extra_50"] or timedelta(0)),
+            "extra_100": _fmt(m["horas_extra_100"] or timedelta(0)),
+        }
+        for m in marcas
+    ]
+    del_mes = [m for m in db.get_marcajes_month(fecha.year, fecha.month) if m["user_id"] == user["id"]]
+    extra_50 = sum(
+        ((m["horas_extra_50"] or timedelta(0)) for m in del_mes), timedelta(0)
+    )
+    extra_100 = sum(
+        ((m["horas_extra_100"] or timedelta(0)) for m in del_mes), timedelta(0)
+    )
+    horas_50 = extra_50.total_seconds() / 3600
+    horas_100 = extra_100.total_seconds() / 3600
+    proyeccion = next(
+        (a for a in calcular_aguinaldo(db, fecha.year) if a["usuario"] == user["username"]),
+        None,
+    )
+    return {
+        "usuario": user["username"],
+        "nombre": user["full_name"],
+        "fecha": fecha.isoformat(),
+        "marcas_dia": marcas_dia,
+        "extras_mes": {
+            "horas_50": horas_50,
+            "horas_100": horas_100,
+            "texto_50": _fmt(extra_50),
+            "texto_100": _fmt(extra_100),
+        },
+        "aguinaldo": proyeccion,
+    }
+
+
 def exportar_aguinaldo(
     db: Database, actor: Dict, anio: int, ruta: Optional[str] = None
 ) -> str:
