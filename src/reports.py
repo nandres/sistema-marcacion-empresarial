@@ -3,18 +3,28 @@
 Consulta PostgreSQL, agrupa los marcajes del mes por empleado y exporta
 el desglose de horas ordinarias, horas extra al 50% y horas extra al 100%
 en Excel (``.xlsx``) o CSV, listo para la liquidación de haberes conforme
-a la Ley N.º 213.
+a la Ley N.º 213. Además emite el comprobante digital de cada marcación
+con hash de seguridad y proyecta el Aguinaldo Proporcional (13.º salario,
+Ley N.º 6380/2019).
 """
 
 from __future__ import annotations
 
 import csv
-from datetime import timedelta
+import hashlib
+import hmac
+import os
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import auth
 from database import Database
+
+HORAS_BASE_MENSUAL: float = 160.0
+RECARGO_EXTRA_50: float = 1.5
+RECARGO_EXTRA_100: float = 2.0
+CLAVE_COMPROBANTE: str = "sistema-marcacion-paraguay-2026"
 
 ENCABEZADO_RESUMEN: List[str] = [
     "Usuario",
@@ -125,6 +135,144 @@ def _exportar_csv(grupos: Dict[int, Dict[str, Any]], ruta: Path) -> None:
         escritor.writerow(ENCABEZADO_RESUMEN)
         for grupo in grupos.values():
             escritor.writerow(_fila_resumen(grupo))
+
+
+def _firma_comprobante(registro_id: int, tipo: str, momento: datetime) -> str:
+    """Calcula la firma SHA-256 del registro para la fidelidad legal."""
+    clave = os.getenv("COMPROBANTE_CLAVE", CLAVE_COMPROBANTE)
+    origen = f"{registro_id}|{tipo}|{momento.isoformat()}|{clave}"
+    return hashlib.sha256(origen.encode("utf-8")).hexdigest()[:16].upper()
+
+
+def comprobante_marcacion(registro_id: int, momento: datetime, tipo: str) -> str:
+    """Genera el comprobante digital tipo ticket de una marcación.
+
+    Args:
+        registro_id: Identificador del marcaje en ``marcajes``.
+        momento: Instante exacto registrado por el motor.
+        tipo: ``ENTRADA`` o ``SALIDA``.
+
+    Returns:
+        String con el ticket legible para imprimir o conservar como
+        prueba de fidelidad del registro.
+    """
+    tipo = tipo.upper()
+    if tipo not in ("ENTRADA", "SALIDA"):
+        raise ValueError("El tipo debe ser 'ENTRADA' o 'SALIDA'.")
+    firma = _firma_comprobante(registro_id, tipo, momento)
+    return (
+        "==========================================\n"
+        "  COMPROBANTE DE MARCACIÓN\n"
+        "  Sistema de Marcación - Ley 213/93\n"
+        "==========================================\n"
+        f"  Tipo: {tipo}\n"
+        f"  ID del registro: {registro_id}\n"
+        f"  Fecha: {momento.strftime('%d/%m/%Y')}\n"
+        f"  Hora exacta: {momento.strftime('%H:%M:%S')}\n"
+        f"  Hash de seguridad: {firma}\n"
+        "==========================================\n"
+        "  Conservar este comprobante como prueba\n"
+        "  de fidelidad del registro.\n"
+    )
+
+
+def verificar_comprobante(
+    registro_id: int, momento: datetime, tipo: str, firma: str
+) -> bool:
+    """Verifica la firma de un comprobante contra su recálculo."""
+    esperada = _firma_comprobante(registro_id, tipo.upper(), momento)
+    return hmac.compare_digest(esperada, firma.upper())
+
+
+def calcular_aguinaldo(db: Database, anio: int) -> List[Dict[str, Any]]:
+    """Proyecta el Aguinaldo Proporcional (13.º salario) por empleado.
+
+    Fórmula (Ley N.º 6380/2019): la doceava parte de la remuneración del
+    año, compuesta por el salario mensual multiplicado por los meses
+    trabajados más el valor de las horas extra acumuladas (50% y 100%).
+    El valor de la hora ordinaria se estima con el divisor de
+    ``HORAS_BASE_MENSUAL`` (160 horas).
+    """
+    inicio_anio = date(anio, 1, 1)
+    fin_anio = date(anio, 12, 31)
+    extras = {r["user_id"]: r for r in db.get_horas_extra_year(anio)}
+    resultados: List[Dict[str, Any]] = []
+    for usuario in db.list_users():
+        salario = float(usuario["salario_mensual"] or 0)
+        creado = usuario["created_at"]
+        base = max(creado.date(), inicio_anio)
+        if base > fin_anio:
+            meses = 0
+        else:
+            meses = (fin_anio.year - base.year) * 12 + (fin_anio.month - base.month) + 1
+        extra_50 = extras.get(usuario["id"], {}).get("extra_50") or timedelta(0)
+        extra_100 = extras.get(usuario["id"], {}).get("extra_100") or timedelta(0)
+        valor_hora = salario / HORAS_BASE_MENSUAL if salario else 0.0
+        horas_50 = extra_50.total_seconds() / 3600
+        horas_100 = extra_100.total_seconds() / 3600
+        valor_extras = valor_hora * (horas_50 * RECARGO_EXTRA_50 + horas_100 * RECARGO_EXTRA_100)
+        aguinaldo = (salario * meses + valor_extras) / 12
+        resultados.append(
+            {
+                "usuario": usuario["username"],
+                "nombre": usuario["full_name"],
+                "salario_mensual": salario,
+                "meses_trabajados": meses,
+                "extra_50": extra_50,
+                "extra_100": extra_100,
+                "valor_extras": valor_extras,
+                "aguinaldo": aguinaldo,
+            }
+        )
+    return resultados
+
+
+def exportar_aguinaldo(
+    db: Database, actor: Dict, anio: int, ruta: Optional[str] = None
+) -> str:
+    """Exporta la proyección de aguinaldo a un Excel para RRHH.
+
+    Solo Administrador y Recursos Humanos pueden ejecutarla (RBAC).
+    """
+    auth.require_role(db, actor, auth.ROLES_REPORTES)
+    datos = calcular_aguinaldo(db, anio)
+    if ruta is None:
+        ruta = Path("reportes") / f"aguinaldo_{anio:04d}.xlsx"
+    ruta = Path(ruta)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+
+    from openpyxl import Workbook
+
+    libro = Workbook()
+    hoja = libro.active
+    hoja.title = "Aguinaldo"
+    hoja.append(
+        [
+            "Usuario",
+            "Nombre completo",
+            "Salario mensual (Gs.)",
+            "Meses trabajados",
+            "Horas extra 50%",
+            "Horas extra 100%",
+            "Valor horas extra (Gs.)",
+            "Aguinaldo proporcional (Gs.)",
+        ]
+    )
+    for dato in datos:
+        hoja.append(
+            [
+                dato["usuario"],
+                dato["nombre"],
+                f"{dato['salario_mensual']:,.0f}",
+                dato["meses_trabajados"],
+                _fmt(dato["extra_50"]),
+                _fmt(dato["extra_100"]),
+                f"{dato['valor_extras']:,.0f}",
+                f"{dato['aguinaldo']:,.0f}",
+            ]
+        )
+    libro.save(ruta)
+    return str(ruta)
 
 
 def exportar_asistencia_mensual(
