@@ -14,6 +14,9 @@ flowchart LR
     GUI --> AUTH
     GUI --> ENG
     GUI --> REP
+    WEB[web_server.py - autoservicio web] --> DB
+    WEB --> REP
+    BIO[biometric_sync.py - reloj ZKTeco] --> DB
     AUTH --> DB
     ENG --> DB
     REP --> DB
@@ -30,6 +33,8 @@ flowchart LR
 | `src/clock_engine.py` | Reglas de negocio (Ley 213): entrada/salida, tardanzas y horas extra |
 | `src/reports.py` | Exportación mensual de asistencia (xlsx/csv) y aguinaldos para contabilidad |
 | `src/gui.py` | Interfaz premium en CustomTkinter: [[Diseño de Interfaz Premium UI-UX]] |
+| `src/web_server.py` | Autoservicio web FastAPI: [[Estructura Web y Conexión Biométrica]] |
+| `src/biometric_sync.py` | Sincronización TCP/IP con relojes ZKTeco (puerto 4370) |
 
 ## Flujo de datos
 
@@ -46,6 +51,7 @@ flowchart LR
 - [[Panel de Reportes y Auditoría]]
 - [[Módulo de Justificaciones y Aguinaldos]]
 - [[Diseño de Interfaz Premium UI-UX]]
+- [[Estructura Web y Conexión Biométrica]]
 
 ## Vinculación con el repositorio
 
