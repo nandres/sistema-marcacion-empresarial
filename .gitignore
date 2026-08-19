@@ -17,6 +17,9 @@ venv/
 .env.*
 !.env.example
 
+# Reportes generados (datos de empleados)
+reportes/
+
 # Base de datos local
 *.db
 *.sqlite3

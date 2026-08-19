@@ -31,13 +31,14 @@ flowchart TD
 | Asignar rol Administrador | ✔ | ✖ | ✖ |
 | Registrar marcas | ✔ | ✔ | ✔ |
 | Consultar registros propios | ✔ | ✔ | ✔ |
+| Exportar reportes mensuales | ✔ | ✔ | ✖ |
 
 ## Implementación
 
-- `src/auth.py` expone `require_role(db, user, roles_permitidos)` que valida el rol **antes** de tocar la base de datos y lanza `PermissionError` si no está autorizado.
-- Constantes: `ROLE_ADMIN`, `ROLE_RRHH`, `ROLE_EMPLEADO`.
-- Endurecimiento: solo un Administrador puede crear/editar a otro Administrador (evita escalada de privilegios desde RRHH).
-- `src/app.py` oculta las opciones del menú según el rol del usuario conectado; la validación real ocurre en `auth.py`.
+- `src/auth.py` expone `require_role(db, user, roles_permitidos)` y el decorador `@autorizado(*roles)` que validan el rol **antes** de tocar la base de datos y lanzan `PermissionError` si no está autorizado.
+- Constantes: `ROLE_ADMIN`, `ROLE_RRHH`, `ROLE_EMPLEADO`; grupos `ROLES_GESTION_USUARIOS`, `ROLES_REPORTES`, `ROLES_MARCAJES`.
+- Endurecimiento: solo un Administrador puede crear/editar a otro Administrador (evita escalada de privilegios desde RRHH) y un usuario no puede eliminarse a sí mismo.
+- `src/app.py` oculta las opciones del menú según el rol del usuario conectado; la validación real ocurre en `auth.py` (y en `reports.py` para las exportaciones, ver [[Panel de Reportes y Auditoría]]).
 
 ## Relación con el esquema
 

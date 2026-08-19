@@ -9,8 +9,10 @@ flowchart LR
     CLI[app.py - CLI principal] --> DB[database.py - capa PostgreSQL]
     CLI --> AUTH[auth.py - autenticación + RBAC]
     CLI --> ENG[clock_engine.py - lógica de marcación]
+    CLI --> REP[reports.py - exportación mensual]
     AUTH --> DB
     ENG --> DB
+    REP --> DB
     DB --> PG[(PostgreSQL)]
 ```
 
@@ -22,6 +24,7 @@ flowchart LR
 | `src/auth.py` | Autenticación (PBKDF2) y control de accesos RBAC: [[Control de Roles y Permisos RBAC]] |
 | `src/database.py` | Conexión PostgreSQL (psycopg2), esquema de roles, usuarios y marcajes |
 | `src/clock_engine.py` | Reglas de negocio: entrada/salida, cálculo de horas trabajadas y horas extra |
+| `src/reports.py` | Exportación mensual de asistencia (xlsx/csv) para contabilidad |
 
 ## Flujo de datos
 
@@ -34,6 +37,8 @@ flowchart LR
 
 - [[Control de Roles y Permisos RBAC]]
 - [[Módulo de Gestión de Usuarios]]
+- [[Motor de Reglas de Horas Extra]]
+- [[Panel de Reportes y Auditoría]]
 
 ## Vinculación con el repositorio
 

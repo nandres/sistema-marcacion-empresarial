@@ -28,7 +28,10 @@ erDiagram
         int user_id FK "ON DELETE CASCADE"
         timestamptz hora_entrada
         timestamptz hora_salida
-        interval horas_extra
+        boolean es_feriado "DEFAULT FALSE"
+        interval horas_ordinarias
+        interval horas_extra_50 "recargo diurno 50%"
+        interval horas_extra_100 "nocturno/feriados 100%"
         timestamptz created_at "DEFAULT NOW()"
     }
 ```
@@ -68,4 +71,9 @@ erDiagram
 
 ## Conexión
 
-Las credenciales de PostgreSQL se leen desde variables de entorno (`DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`) definidas en el archivo `.env`, que permanece bloqueado por `.gitignore`.
+Las credenciales de PostgreSQL se leen desde el archivo `.env` (`DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`), cargado automáticamente por `src/database.py` y bloqueado por `.gitignore`.
+
+## Notas relacionadas
+
+- [[Motor de Reglas de Horas Extra]] — cálculo del desglose horario que se persiste en `marcajes`.
+- [[Panel de Reportes y Auditoría]] — exportación mensual de los marcajes para contabilidad.

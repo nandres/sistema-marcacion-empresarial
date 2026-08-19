@@ -1,4 +1,6 @@
 import os
+from datetime import datetime
+from pathlib import Path
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -14,7 +16,20 @@ DEFAULT_CONFIG = {
 ROLES_INICIALES = ("Administrador", "Recursos Humanos", "Empleado")
 
 
+def load_dotenv(path=".env"):
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip())
+
+
 def load_config():
+    load_dotenv()
     return {
         "dbname": os.getenv("DB_NAME", DEFAULT_CONFIG["dbname"]),
         "user": os.getenv("DB_USER", DEFAULT_CONFIG["user"]),
@@ -64,9 +79,18 @@ class Database:
                 user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
                 hora_entrada TIMESTAMPTZ NOT NULL,
                 hora_salida TIMESTAMPTZ,
-                horas_extra INTERVAL,
+                es_feriado BOOLEAN NOT NULL DEFAULT FALSE,
+                horas_ordinarias INTERVAL NOT NULL DEFAULT '0 seconds',
+                horas_extra_50 INTERVAL NOT NULL DEFAULT '0 seconds',
+                horas_extra_100 INTERVAL NOT NULL DEFAULT '0 seconds',
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_marcajes_user_fecha
+            ON marcajes (user_id, hora_entrada)
             """
         )
         for nombre in ROLES_INICIALES:
@@ -174,14 +198,33 @@ class Database:
         self.connection.commit()
         return cursor.fetchone()["id"]
 
-    def close_clock_out(self, entry_id, hora_salida, horas_extra=None):
+    def close_clock_out(
+        self,
+        entry_id,
+        hora_salida,
+        es_feriado,
+        horas_ordinarias,
+        horas_extra_50,
+        horas_extra_100,
+    ):
         self._execute(
             """
             UPDATE marcajes
-            SET hora_salida = %s, horas_extra = %s
+            SET hora_salida = %s,
+                es_feriado = %s,
+                horas_ordinarias = %s,
+                horas_extra_50 = %s,
+                horas_extra_100 = %s
             WHERE id = %s
             """,
-            (hora_salida, horas_extra, entry_id),
+            (
+                hora_salida,
+                es_feriado,
+                horas_ordinarias,
+                horas_extra_50,
+                horas_extra_100,
+                entry_id,
+            ),
         )
         self.connection.commit()
 
@@ -216,5 +259,22 @@ class Database:
             ORDER BY hora_entrada DESC
             """,
             (user_id,),
+            fetch="all",
+        )
+
+    def get_marcajes_month(self, anio, mes):
+        inicio = datetime(anio, mes, 1)
+        if mes == 12:
+            fin = datetime(anio + 1, 1, 1)
+        else:
+            fin = datetime(anio, mes + 1, 1)
+        return self._execute(
+            """
+            SELECT m.*, u.username, u.full_name
+            FROM marcajes m JOIN users u ON u.id = m.user_id
+            WHERE m.hora_entrada >= %s AND m.hora_entrada < %s
+            ORDER BY u.username, m.hora_entrada
+            """,
+            (inicio, fin),
             fetch="all",
         )

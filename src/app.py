@@ -1,6 +1,7 @@
 import sys
 
 import auth
+import reports
 from clock_engine import ClockEngine
 from database import Database
 
@@ -66,6 +67,19 @@ def delete_user_menu(db, actor):
     print("Usuario eliminado.")
 
 
+def export_monthly_menu(db, actor):
+    print("\n=== Exportar asistencia mensual ===")
+    try:
+        anio = int(input("Año (ej. 2026): ").strip())
+        mes = int(input("Mes (1-12): ").strip())
+        formato = input("Formato (xlsx/csv) [xlsx]: ").strip().lower() or "xlsx"
+        ruta = reports.exportar_asistencia_mensual(db, actor, anio, mes, formato=formato)
+    except (ValueError, PermissionError) as error:
+        print(error)
+        return
+    print(f"Reporte exportado: {ruta}")
+
+
 def prompt_first_admin(db):
     print("=== Crear el primer Administrador ===")
     username = input("Nombre de usuario: ").strip()
@@ -103,6 +117,8 @@ def main():
             print("5. Listar usuarios")
             print("6. Crear usuario")
             print("7. Editar usuario")
+        if role in auth.ROLES_REPORTES:
+            print("9. Exportar reporte mensual")
         if role == auth.ROLE_ADMIN:
             print("8. Eliminar usuario")
         print("0. Salir")
@@ -135,6 +151,8 @@ def main():
             update_user_menu(db, user)
         elif option == "8" and role == auth.ROLE_ADMIN:
             delete_user_menu(db, user)
+        elif option == "9" and role in auth.ROLES_REPORTES:
+            export_monthly_menu(db, user)
         elif option == "0":
             print("Hasta pronto.")
             break
