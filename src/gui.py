@@ -4,8 +4,9 @@ Dos modos de uso:
 - Modo Recepción (pantalla pública por defecto): reloj digital en tiempo
   real, marcación por cédula/usuario y ticket criptográfico de reports.py.
 - Modo Gestión (RRHH/Administrador): acceso mediante modal de credenciales
-  autenticado con auth.py y panel protegido de cinco pestañas (personal,
-  justificaciones, reportes, correcciones y analítica visual).
+  autenticado con auth.py y panel protegido con navegación lateral
+  minimalista (personal, justificaciones, reportes, correcciones y
+  analítica visual).
 """
 
 from __future__ import annotations
@@ -29,17 +30,18 @@ from database import Database
 FONT = "Segoe UI"
 MONO = "Consolas"
 
-BG = "#121214"
-CARD = "#1B1B1F"
-CARD_BORDER = "#26262C"
-INPUT_BG = "#232329"
-INPUT_BORDER = "#34343B"
+BG = "#0B0B0C"
+CARD = "#15151A"
+CARD_BORDER = "#1E1E24"
+INPUT_BG = "#191920"
+INPUT_BORDER = "#26262C"
 PRIMARY = "#1A56DB"
 PRIMARY_HOVER = "#2E66E8"
 TEXT = "#F2F2EE"
 MUTED = "#8E8E96"
 SUCCESS = "#4ADE80"
 DANGER = "#F0544F"
+ACCENTO = "#F5C26B"
 
 DIAS = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
 MESES = (
@@ -53,7 +55,7 @@ def tarjeta(master: ctk.CTkFrame, **kwargs) -> ctk.CTkFrame:
     return ctk.CTkFrame(
         master,
         fg_color=CARD,
-        corner_radius=12,
+        corner_radius=16,
         border_width=1,
         border_color=CARD_BORDER,
         **kwargs,
@@ -70,7 +72,7 @@ def boton_primario(master, texto: str, comando: Callable) -> ctk.CTkButton:
         hover_color=PRIMARY_HOVER,
         text_color="white",
         font=(FONT, 15, "bold"),
-        corner_radius=12,
+        corner_radius=8,
         height=44,
     )
 
@@ -87,7 +89,7 @@ def boton_secundario(master, texto: str, comando: Callable) -> ctk.CTkButton:
         border_color=PRIMARY,
         text_color=PRIMARY,
         font=(FONT, 15, "bold"),
-        corner_radius=12,
+        corner_radius=8,
         height=44,
     )
 
@@ -125,7 +127,9 @@ class MarcacionApp(ctk.CTk):
         self.panel_gestion: Optional[ctk.CTkFrame] = None
         self._configurar_ventana()
         self._construir_vista_publica()
+        self._mostrar_dos_puntos = True
         self._actualizar_reloj()
+        self.after(500, self._alternar_dos_puntos)
 
     def _configurar_ventana(self) -> None:
         self.title("Sistema de Marcación · Paraguay")
@@ -163,11 +167,11 @@ class MarcacionApp(ctk.CTk):
         self._construir_tarjeta_marcacion(contenido)
         self._construir_tarjeta_ticket(contenido)
 
-        pie = ctk.CTkFrame(self.frame_publico, fg_color="transparent")
-        pie.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 16))
-        pie.grid_columnconfigure(0, weight=1)
+        self.pie = ctk.CTkFrame(self.frame_publico, fg_color="transparent")
+        self.pie.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 16))
+        self.pie.grid_columnconfigure(0, weight=1)
         boton_consulta = ctk.CTkButton(
-            pie,
+            self.pie,
             text="Consultar mis Marcas Localmente",
             command=self._abrir_consulta_local,
             fg_color="transparent",
@@ -180,7 +184,7 @@ class MarcacionApp(ctk.CTk):
         )
         boton_consulta.grid(row=0, column=0, sticky="w")
         boton_acceso = ctk.CTkButton(
-            pie,
+            self.pie,
             text="Acceso de Gestión",
             command=self._abrir_login,
             fg_color="transparent",
@@ -197,13 +201,13 @@ class MarcacionApp(ctk.CTk):
         tarjeta_reloj = tarjeta(master)
         tarjeta_reloj.grid(row=0, column=0, sticky="ew", pady=(0, 24))
         tarjeta_reloj.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_reloj, "Recepción · Marque su entrada", 13, MUTED).grid(
+        etiqueta(tarjeta_reloj, "Recepción · Marque su asistencia", 13, MUTED).grid(
             row=0, column=0, pady=(18, 0)
         )
         self.lbl_hora = ctk.CTkLabel(
             tarjeta_reloj,
             text="--:--:--",
-            font=(FONT, 76, "bold"),
+            font=(MONO, 76, "bold"),
             text_color=TEXT,
         )
         self.lbl_hora.grid(row=1, column=0, pady=(4, 0))
@@ -211,40 +215,40 @@ class MarcacionApp(ctk.CTk):
         self.lbl_fecha.grid(row=2, column=0, pady=(0, 18))
 
     def _construir_tarjeta_marcacion(self, master: ctk.CTkFrame) -> None:
-        tarjeta_marcacion = tarjeta(master)
-        tarjeta_marcacion.grid(row=1, column=0, sticky="ew", pady=(0, 24))
-        tarjeta_marcacion.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_marcacion, "Ingrese su cédula o nombre de usuario", 16, TEXT).grid(
-            row=0, column=0, pady=(22, 12)
-        )
-        self.entrada_id = entrada(tarjeta_marcacion, "Ej. 1234567 o juan")
+        self.tarjeta_marcacion = tarjeta(master)
+        self.tarjeta_marcacion.grid(row=1, column=0, sticky="ew", pady=(0, 24))
+        self.tarjeta_marcacion.grid_columnconfigure(0, weight=1)
+        etiqueta(
+            self.tarjeta_marcacion, "Ingrese su cédula o nombre de usuario", 16, TEXT
+        ).grid(row=0, column=0, pady=(22, 12))
+        self.entrada_id = entrada(self.tarjeta_marcacion, "Ej. 1234567 o juan")
         self.entrada_id.grid(row=1, column=0, pady=(0, 16))
         self.entrada_id.bind("<Return>", lambda _e: self._marcar())
-        boton_primario(tarjeta_marcacion, "REGISTRAR ASISTENCIA", self._marcar).grid(
+        boton_primario(self.tarjeta_marcacion, "REGISTRAR ASISTENCIA", self._marcar).grid(
             row=2, column=0, pady=(0, 6)
         )
         etiqueta(
-            tarjeta_marcacion,
+            self.tarjeta_marcacion,
             "El sistema detecta automáticamente si corresponde Entrada o Salida",
             12,
             MUTED,
         ).grid(row=3, column=0, pady=(0, 14))
-        self.lbl_estado = etiqueta(tarjeta_marcacion, "", 14, SUCCESS)
+        self.lbl_estado = etiqueta(self.tarjeta_marcacion, "", 14, SUCCESS)
         self.lbl_estado.grid(row=4, column=0, pady=(0, 18))
 
     def _construir_tarjeta_ticket(self, master: ctk.CTkFrame) -> None:
-        tarjeta_ticket = tarjeta(master)
-        tarjeta_ticket.grid(row=2, column=0, sticky="ew")
-        tarjeta_ticket.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_ticket, "Último comprobante criptográfico", 13, MUTED).grid(
+        self.tarjeta_ticket = tarjeta(master)
+        self.tarjeta_ticket.grid(row=2, column=0, sticky="ew")
+        self.tarjeta_ticket.grid_columnconfigure(0, weight=1)
+        etiqueta(self.tarjeta_ticket, "Último comprobante criptográfico", 13, MUTED).grid(
             row=0, column=0, sticky="w", padx=20, pady=(16, 10)
         )
         self.ticket_box = ctk.CTkTextbox(
-            tarjeta_ticket,
+            self.tarjeta_ticket,
             font=(MONO, 12),
             fg_color=INPUT_BG,
             text_color=TEXT,
-            corner_radius=10,
+            corner_radius=12,
             height=150,
             wrap="word",
         )
@@ -252,11 +256,25 @@ class MarcacionApp(ctk.CTk):
 
     def _actualizar_reloj(self) -> None:
         ahora = datetime.datetime.now()
-        self.lbl_hora.configure(text=ahora.strftime("%H:%M:%S"))
+        self.hora_actual = ahora.strftime("%H:%M:%S")
+        self._dibujar_hora()
         self.lbl_fecha.configure(
             text=f"{DIAS[ahora.weekday()]}, {ahora.day} de {MESES[ahora.month - 1]} de {ahora.year}"
         )
         self.after(1000, self._actualizar_reloj)
+
+    def _dibujar_hora(self) -> None:
+        """Renderiza la hora con los separadores visibles u ocultos."""
+        if getattr(self, "_mostrar_dos_puntos", True):
+            self.lbl_hora.configure(text=self.hora_actual)
+        else:
+            self.lbl_hora.configure(text=self.hora_actual.replace(":", " ", 2))
+
+    def _alternar_dos_puntos(self) -> None:
+        """Parpadeo suavizado de los separadores, sincronizado con la hora."""
+        self._mostrar_dos_puntos = not self._mostrar_dos_puntos
+        self._dibujar_hora()
+        self.after(500, self._alternar_dos_puntos)
 
     def _marcar(self) -> None:
         username = self.entrada_id.get().strip()
@@ -280,6 +298,55 @@ class MarcacionApp(ctk.CTk):
         self._mostrar_estado(
             f"{user['full_name']}: {tipo.lower()} registrada correctamente.", SUCCESS
         )
+        self._mostrar_panel_exito(tipo, ticket)
+
+    def _mostrar_panel_exito(self, tipo: str, ticket: str) -> None:
+        """Despliega el panel temporal de éxito con check verde y el ticket.
+
+        Reemplaza el área de marcación durante 5 segundos y vuelve al kiosco.
+        """
+        if hasattr(self, "panel_exito"):
+            self.panel_exito.destroy()
+        self.panel_exito = tarjeta(self.frame_publico)
+        self.panel_exito.grid(row=1, column=0, rowspan=2, sticky="nsew", padx=24, pady=(0, 24))
+        self.panel_exito.grid_columnconfigure(0, weight=1)
+        self.panel_exito.grid_rowconfigure(1, weight=1)
+        etiqueta(self.panel_exito, "✓", 54, SUCCESS, "bold").grid(
+            row=0, column=0, pady=(34, 0)
+        )
+        etiqueta(self.panel_exito, f"¡{tipo} Registrada!", 24, TEXT, "bold").grid(
+            row=1, column=0, pady=(6, 0)
+        )
+        etiqueta(
+            self.panel_exito, "Comprobante criptográfico · SHA-256", 12, MUTED
+        ).grid(row=2, column=0, pady=(2, 10))
+        caja_ticket = ctk.CTkTextbox(
+            self.panel_exito,
+            font=(MONO, 11),
+            fg_color=INPUT_BG,
+            text_color=MUTED,
+            corner_radius=12,
+            height=110,
+            wrap="word",
+        )
+        caja_ticket.grid(row=3, column=0, sticky="ew", padx=28, pady=(0, 8))
+        caja_ticket.insert("1.0", ticket)
+        caja_ticket.configure(state="disabled")
+        etiqueta(
+            self.panel_exito, "Volviendo a recepción…", 11, MUTED
+        ).grid(row=4, column=0, pady=(0, 26))
+        self.tarjeta_marcacion.grid_remove()
+        self.tarjeta_ticket.grid_remove()
+        self.pie.grid_remove()
+        self.after(5000, self._ocultar_panel_exito)
+
+    def _ocultar_panel_exito(self) -> None:
+        if hasattr(self, "panel_exito"):
+            self.panel_exito.destroy()
+            del self.panel_exito
+        self.tarjeta_marcacion.grid()
+        self.tarjeta_ticket.grid()
+        self.pie.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 16))
 
     def _mostrar_estado(self, mensaje: str, color: str) -> None:
         self.lbl_estado.configure(text=mensaje, text_color=color)
@@ -310,16 +377,16 @@ class MarcacionApp(ctk.CTk):
 class ConsultaLocalModal(ctk.CTkToplevel):
     """Autoservicio local: historial por rango de fechas y aguinaldo.
 
-    El empleado digita su cédula y elige el período (el botón "Hoy" fija
-    ambos extremos en la fecha actual del equipo) para revisar su histórico
-    completo desde enero sin salir de la PC.
+    El empleado digita su cédula y elige el período con accesos rápidos
+    (Mes Actual, Últimos 3 Meses, Desde Enero) o los selectores manuales;
+    el botón "Hoy" fija ambos extremos en la fecha actual del equipo.
     """
 
     def __init__(self, master: MarcacionApp, db: Database) -> None:
         super().__init__(master)
         self.db = db
         self.title("Consulta Local de Marcas")
-        self.geometry("540x680")
+        self.geometry("600x740")
         self.configure(fg_color=BG)
         self.transient(master)
         self.grab_set()
@@ -344,6 +411,25 @@ class ConsultaLocalModal(ctk.CTkToplevel):
         self.entrada_hasta = entrada(fila_rango, "Hasta · hoy", ancho=200)
         self.entrada_hasta.insert(0, datetime.date.today().isoformat())
         self.entrada_hasta.pack(side="left", padx=(6, 0))
+        fila_accesos = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
+        fila_accesos.pack(pady=(10, 0))
+        for texto, comando in (
+            ("Mes Actual", self._mes_actual),
+            ("Últimos 3 Meses", self._ultimos_3_meses),
+            ("Desde Enero", self._desde_enero),
+        ):
+            ctk.CTkButton(
+                fila_accesos,
+                text=texto,
+                command=comando,
+                fg_color=INPUT_BG,
+                hover_color=PRIMARY_HOVER,
+                text_color=MUTED,
+                font=(FONT, 12),
+                corner_radius=8,
+                width=130,
+                height=36,
+            ).pack(side="left", padx=4)
         fila_botones = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
         fila_botones.pack(pady=(10, 0))
         boton_hoy = ctk.CTkButton(
@@ -392,6 +478,37 @@ class ConsultaLocalModal(ctk.CTkToplevel):
         self.entrada_hasta.delete(0, "end")
         self.entrada_hasta.insert(0, hoy)
         self._consultar()
+
+    def _aplicar_rango(self, desde: datetime.date) -> None:
+        """Autocompleta el rango hasta hoy y refresca la consulta al instante."""
+        self.entrada_desde.delete(0, "end")
+        self.entrada_desde.insert(0, desde.isoformat())
+        self.entrada_hasta.delete(0, "end")
+        self.entrada_hasta.insert(0, datetime.date.today().isoformat())
+        self._consultar()
+
+    def _mes_actual(self) -> None:
+        """Rango del primer día del mes en curso hasta hoy."""
+        hoy = datetime.date.today()
+        self._aplicar_rango(datetime.date(hoy.year, hoy.month, 1))
+
+    def _ultimos_3_meses(self) -> None:
+        """Rango de los últimos tres meses (recortado a enero si cruza el año)."""
+        hoy = datetime.date.today()
+        mes_inicio = hoy.month - 2
+        anio_inicio = hoy.year
+        if mes_inicio < 1:
+            mes_inicio += 12
+            anio_inicio -= 1
+        if anio_inicio < hoy.year:
+            self._aplicar_rango(datetime.date(hoy.year, 1, 1))
+            return
+        self._aplicar_rango(datetime.date(anio_inicio, mes_inicio, 1))
+
+    def _desde_enero(self) -> None:
+        """Rango desde el 1 de enero del año en curso hasta hoy."""
+        hoy = datetime.date.today()
+        self._aplicar_rango(datetime.date(hoy.year, 1, 1))
 
     def _consultar(self) -> None:
         cedula = self.entrada_cedula.get().strip()
@@ -517,7 +634,15 @@ class LoginModal(ctk.CTkToplevel):
 
 
 class PanelGestion(ctk.CTkFrame):
-    """Panel protegido de cinco pestañas para RRHH/Administrador."""
+    """Panel protegido de RRHH/Administrador con navegación lateral minimalista."""
+
+    SECCIONES: List[tuple] = [
+        ("▦  Personal", "Gestión de Personal"),
+        ("✦  Justificaciones", "Justificaciones y Permisos"),
+        ("▤  Reportes", "Centro de Reportes"),
+        ("✎  Correcciones", "Solicitudes de Corrección"),
+        ("◉  Analítica", "Dashboard Analítico"),
+    ]
 
     def __init__(
         self, master: MarcacionApp, db: Database, actor: Dict, on_cerrar: Callable
@@ -526,54 +651,82 @@ class PanelGestion(ctk.CTkFrame):
         self.db = db
         self.actor = actor
         self.on_cerrar = on_cerrar
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-        cabecera = ctk.CTkFrame(self, fg_color="transparent")
-        cabecera.grid(row=0, column=0, sticky="ew", padx=24, pady=(24, 0))
-        cabecera.grid_columnconfigure(0, weight=1)
-        etiqueta(cabecera, "Panel de Gestión", 22, TEXT, "bold").grid(
-            row=0, column=0, sticky="w"
+        self._construir_sidebar()
+        self._construir_contenido()
+        self._seleccionar(0)
+
+    def _construir_sidebar(self) -> None:
+        sidebar = tarjeta(self)
+        sidebar.grid(row=0, column=0, sticky="nsew", padx=(24, 12), pady=24)
+        sidebar.grid_columnconfigure(0, weight=1)
+        etiqueta(sidebar, "Panel de Gestión", 17, TEXT, "bold").grid(
+            row=0, column=0, sticky="w", padx=16, pady=(18, 2)
         )
         etiqueta(
-            cabecera,
-            f"{actor['full_name']} · {auth.get_role_name(db, actor)}",
-            13,
+            sidebar,
+            f"{self.actor['full_name']}\n{auth.get_role_name(self.db, self.actor)}",
+            11,
             MUTED,
-        ).grid(row=1, column=0, sticky="w")
-        boton_secundario(cabecera, "Volver a Marcación", on_cerrar).grid(
-            row=0, column=1, rowspan=2, sticky="e"
+        ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 16))
+        self.botones_seccion: List[ctk.CTkButton] = []
+        for indice, (icono, titulo) in enumerate(self.SECCIONES):
+            boton = ctk.CTkButton(
+                sidebar,
+                text=f"{icono}  {titulo}",
+                command=lambda i=indice: self._seleccionar(i),
+                fg_color="transparent",
+                hover_color=INPUT_BG,
+                text_color=MUTED,
+                font=(FONT, 13),
+                corner_radius=8,
+                height=42,
+                anchor="w",
+            )
+            boton.grid(row=2 + indice, column=0, sticky="ew", padx=10, pady=3)
+            self.botones_seccion.append(boton)
+        boton_secundario(sidebar, "Volver a Marcación", self.on_cerrar).grid(
+            row=8, column=0, sticky="ew", padx=10, pady=(16, 14)
         )
 
-        self.tabs = ctk.CTkTabview(
-            self,
-            fg_color=CARD,
-            segmented_button_fg_color=INPUT_BG,
-            segmented_button_selected_color=PRIMARY,
-            segmented_button_selected_hover_color=PRIMARY_HOVER,
-            segmented_button_unselected_color=INPUT_BG,
-            segmented_button_unselected_hover_color=INPUT_BG,
-            text_color=TEXT,
-            corner_radius=12,
+    def _construir_contenido(self) -> None:
+        contenido = ctk.CTkFrame(self, fg_color="transparent")
+        contenido.grid(row=0, column=1, sticky="nsew", padx=(12, 24), pady=24)
+        contenido.grid_columnconfigure(0, weight=1)
+        contenido.grid_rowconfigure(0, weight=1)
+
+        self.personal_tab = PersonalTab(
+            contenido, self.db, self.actor, self._refrescar_empleados
         )
-        self.tabs.grid(row=1, column=0, sticky="nsew", padx=24, pady=24)
+        self.justificaciones_tab = JustificacionesTab(contenido, self.db, self.actor)
+        self.reportes_tab = ReportesTab(contenido, self.db, self.actor)
+        self.correcciones_tab = CorreccionesTab(contenido, self.db, self.actor)
+        self.dashboard_tab = DashboardTab(contenido, self.db)
+        self.pestanas = [
+            self.personal_tab,
+            self.justificaciones_tab,
+            self.reportes_tab,
+            self.correcciones_tab,
+            self.dashboard_tab,
+        ]
+        for pestana in self.pestanas:
+            pestana.grid(row=0, column=0, sticky="nsew")
+            pestana.grid_remove()
 
-        tab_personal = self.tabs.add("Gestión de Personal")
-        tab_justificaciones = self.tabs.add("Justificaciones y Permisos")
-        tab_reportes = self.tabs.add("Centro de Reportes")
-        tab_correcciones = self.tabs.add("Solicitudes de Corrección")
-        tab_dashboard = self.tabs.add("Dashboard Analítico")
-
-        self.personal_tab = PersonalTab(tab_personal, db, actor, self._refrescar_empleados)
-        self.personal_tab.pack(fill="both", expand=True, padx=12, pady=12)
-        self.justificaciones_tab = JustificacionesTab(tab_justificaciones, db, actor)
-        self.justificaciones_tab.pack(fill="both", expand=True, padx=12, pady=12)
-        self.reportes_tab = ReportesTab(tab_reportes, db, actor)
-        self.reportes_tab.pack(fill="both", expand=True, padx=12, pady=12)
-        self.correcciones_tab = CorreccionesTab(tab_correcciones, db, actor)
-        self.correcciones_tab.pack(fill="both", expand=True, padx=12, pady=12)
-        self.dashboard_tab = DashboardTab(tab_dashboard, db)
-        self.dashboard_tab.pack(fill="both", expand=True, padx=12, pady=12)
+    def _seleccionar(self, indice: int) -> None:
+        """Cambia la sección activa y estiliza el botón del menú lateral."""
+        for posicion, pestana in enumerate(self.pestanas):
+            pestana.grid_remove()
+        self.pestanas[indice].grid(row=0, column=0, sticky="nsew")
+        for posicion, boton in enumerate(self.botones_seccion):
+            seleccionado = posicion == indice
+            boton.configure(
+                fg_color=PRIMARY if seleccionado else "transparent",
+                text_color="white" if seleccionado else MUTED,
+                hover_color=PRIMARY_HOVER if seleccionado else INPUT_BG,
+            )
 
     def _refrescar_empleados(self) -> None:
         self.justificaciones_tab.refrescar_empleados()
