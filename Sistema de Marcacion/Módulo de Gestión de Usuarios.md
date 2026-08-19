@@ -1,6 +1,6 @@
 # Módulo de Gestión de Usuarios
 
-> Diseño del módulo de usuarios sobre PostgreSQL, parte del [[Ecosistema Sistema de Marcación]]. Complementa a [[Control de Roles y Permisos RBAC]].
+> Diseño del módulo de usuarios sobre PostgreSQL, parte del [[Ecosistema Sistema de Marcación]]. Complementa a [[Control de Roles y Permisos RBAC]] y alimenta [[Panel de Reportes y Auditoría]].
 
 ## Esquema relacional en PostgreSQL
 
@@ -8,6 +8,7 @@
 erDiagram
     ROLES ||--o{ USERS : "asigna"
     USERS ||--o{ MARCAJES : "registra"
+    USERS ||--o{ LOGS : "audita"
 
     ROLES {
         serial id PK
@@ -17,7 +18,7 @@ erDiagram
     USERS {
         serial id PK
         varchar username "UNIQUE"
-        text password_hash "PBKDF2"
+        text password_hash "bcrypt"
         varchar full_name
         int role_id FK
         timestamptz created_at "DEFAULT NOW()"
@@ -29,29 +30,62 @@ erDiagram
         timestamptz hora_entrada
         timestamptz hora_salida
         boolean es_feriado "DEFAULT FALSE"
+        boolean es_tardanza "DEFAULT FALSE"
         interval horas_ordinarias
-        interval horas_extra_50 "recargo diurno 50%"
+        interval horas_extra_50 "diurno 50%"
         interval horas_extra_100 "nocturno/feriados 100%"
         timestamptz created_at "DEFAULT NOW()"
     }
+
+    LOGS_AUDITORIA {
+        serial id PK
+        int usuario_id FK
+        varchar accion "CREAR/ACTUALIZAR/ELIMINAR"
+        varchar tabla
+        int registro_id
+        jsonb valores_anteriores
+        jsonb valores_nuevos
+        timestamptz creado_en "DEFAULT NOW()"
+    }
 ```
 
-## Tabla `users`
+## Seguridad de contraseñas (bcrypt)
 
-| Campo | Tipo | Restricción | Descripción |
-| --- | --- | --- | --- |
-| `id` | SERIAL | PRIMARY KEY | Identificador único |
-| `username` | VARCHAR(100) | UNIQUE NOT NULL | Nombre de acceso |
-| `password_hash` | TEXT | NOT NULL | Hash PBKDF2 (sal + digest, formato `sal:digest`) |
-| `full_name` | VARCHAR(200) | NOT NULL | Nombre completo |
-| `role_id` | INTEGER | FK → `roles.id` | Rol asignado (Administrador / RRHH / Empleado) |
-| `created_at` | TIMESTAMPTZ | DEFAULT NOW() | Fecha de alta |
+```python
+def hash_password(password: str) -> str:
+    """Encripta la contraseña con bcrypt y retorna el hash en texto seguro."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
-## Seguridad de contraseñas
 
-- Hash PBKDF2-SHA256 con sal aleatoria de 16 bytes y 100 000 iteraciones (`src/auth.py`).
-- Las contraseñas nunca se almacenan en texto plano.
-- Verificación con comparación en tiempo constante (`hmac.compare_digest`) para evitar ataques de temporización.
+def verify_password(password: str, stored: str) -> bool:
+    """Verifica la contraseña contra un hash bcrypt almacenado."""
+    return bcrypt.checkpw(password.encode("utf-8"), stored.encode("utf-8"))
+```
+
+- bcrypt embebe la **sal aleatoria** en el propio hash; no hay que guardarla aparte.
+- Los hashes **nunca** se almacenan en texto plano en PostgreSQL.
+- Los valores sensibles se excluyen de los snapshots de auditoría.
+
+## Auditoría de operaciones
+
+Cada operación de RRHH/Administrador queda registrada en `logs_auditoria`:
+
+| Operación | Acción registrada | Valores |
+| --- | --- | --- |
+| Crear usuario | `CREAR` | nuevos |
+| Editar usuario | `ACTUALIZAR` | anterior + nuevos |
+| Eliminar usuario | `ELIMINAR` | anteriores |
+
+```python
+db.registrar_auditoria(
+    actor["id"],              # quién lo hizo
+    "ACTUALIZAR",             # qué cambió
+    "users",
+    user_id,                  # registro afectado
+    anterior=_valores_auditoria(target),   # valor previo
+    nuevos=_valores_auditoria(actualizado) # valor posterior
+)
+```
 
 ## Operaciones por rol (RBAC)
 
@@ -62,18 +96,11 @@ erDiagram
 | Eliminar usuario | `delete_user` | Administrador |
 | Asignar rol Administrador | `create_user` / `update_user` | Solo Administrador |
 
-## Flujo de creación
-
-1. `app.py` pide datos (usuario, nombre, rol, contraseña).
-2. `auth.create_user` valida el rol del actor mediante `require_role`.
-3. Verifica que el rol destino exista en `roles` y que el `username` no esté duplicado.
-4. Genera el hash PBKDF2 y ejecuta el `INSERT` contra PostgreSQL (`src/database.py`).
-
 ## Conexión
 
-Las credenciales de PostgreSQL se leen desde el archivo `.env` (`DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`), cargado automáticamente por `src/database.py` y bloqueado por `.gitignore`.
+Las credenciales se leen del archivo `.env` (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`), cargado por `src/database.py` y bloqueado por `.gitignore`. Si la base `marcacion` no existe y el usuario tiene permisos, el script la crea automáticamente.
 
 ## Notas relacionadas
 
-- [[Motor de Reglas de Horas Extra]] — cálculo del desglose horario que se persiste en `marcajes`.
-- [[Panel de Reportes y Auditoría]] — exportación mensual de los marcajes para contabilidad.
+- [[Motor de Reglas de Horas Extra]] — desglose legal que se persiste en `marcajes`.
+- [[Panel de Reportes y Auditoría]] — exportación mensual y trazabilidad.
