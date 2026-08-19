@@ -148,6 +148,9 @@ class ClockEngine:
     def clock_in(self) -> Tuple[int, datetime]:
         """Registra la entrada, marcando la tardanza según la tolerancia.
 
+        La llegada que supera la gracia de 10 minutos queda clasificada
+        como incidencia ``Llegada Tardía`` en el propio marcaje.
+
         Returns:
             Tupla con el identificador del marcaje y el instante exacto
             registrado (para el comprobante digital).
@@ -156,11 +159,18 @@ class ClockEngine:
         if open_entry:
             raise ValueError("Ya hay una entrada abierta sin salida registrada.")
         ahora = ahora_local()
-        entry_id = self.db.open_clock_in(self.user["id"], ahora, es_tardanza(ahora))
+        tardanza = es_tardanza(ahora)
+        incidencia = "Llegada Tardía" if tardanza else ""
+        entry_id = self.db.open_clock_in(self.user["id"], ahora, tardanza, incidencia)
         return entry_id, ahora
 
     def clock_out(self) -> Tuple[int, datetime]:
         """Cierra la salida calculando y persistiendo el desglose legal.
+
+        Si la jornada se interrumpe antes de completar las 8 horas legales
+        en un día laborable, el marcaje queda clasificado como ``Salida
+        Anticipada``; la incidencia convive con la de la entrada (por
+        ejemplo, ``Llegada Tardía y Salida Anticipada``).
 
         Returns:
             Tupla con el identificador del marcaje y el instante exacto
@@ -172,6 +182,9 @@ class ClockEngine:
         ahora = ahora_local()
         feriado = es_feriado_o_domingo(open_entry["hora_entrada"])
         desglose = calcular_horas_paraguay(open_entry["hora_entrada"], ahora, feriado)
+        incidencia = self._clasificar_incidencia_salida(
+            desglose, feriado, open_entry.get("tipo_incidencia") or ""
+        )
         self.db.close_clock_out(
             open_entry["id"],
             ahora,
@@ -179,8 +192,23 @@ class ClockEngine:
             desglose["horas_ordinarias"],
             desglose["horas_extra_50"],
             desglose["horas_extra_100"],
+            incidencia,
         )
         return open_entry["id"], ahora
+
+    @staticmethod
+    def _clasificar_incidencia_salida(
+        desglose: Dict[str, timedelta], feriado: bool, incidencia_entrada: str
+    ) -> str:
+        """Combina la incidencia de entrada con la de salida anticipada."""
+        trabajado = (
+            desglose["horas_ordinarias"]
+            + desglose["horas_extra_50"]
+            + desglose["horas_extra_100"]
+        )
+        if not feriado and trabajado < JORNADA_DIURNA:
+            return " y ".join(p for p in (incidencia_entrada, "Salida Anticipada") if p)
+        return incidencia_entrada
 
     def detectar_accion_hoy(self) -> str:
         """Detecta la acción automática del botón maestro consultando el día.

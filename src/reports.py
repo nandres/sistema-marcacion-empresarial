@@ -287,6 +287,111 @@ def resumen_consulta(
     }
 
 
+def resumen_historico(
+    db: Database, user: Dict[str, Any], desde: date, hasta: date
+) -> Dict[str, Any]:
+    """Compone el historial completo de un empleado dentro de un rango.
+
+    Consulta indexada sobre ``(user_id, hora_entrada)`` que devuelve el
+    detalle de cada marca, el acumulado de horas extra 50%/100% del período
+    y el aguinaldo devengado en esos meses (Ley N.º 6380/2019).
+
+    Args:
+        db: Capa de persistencia conectada.
+        user: Empleado identificado por su cédula (username).
+        desde: Primer día del período a inspeccionar.
+        hasta: Último día del período (no puede ser anterior a ``desde``).
+
+    Returns:
+        Diccionario JSON-serializable con ``marcas``, ``extras_periodo`` y
+        ``aguinaldo_periodo``.
+    """
+    if hasta < desde:
+        raise ValueError("La fecha 'hasta' no puede ser anterior a 'desde'.")
+    marcajes = db.get_marcajes_rango(user["id"], desde, hasta)
+    marcas = [
+        {
+            "id": m["id"],
+            "fecha": m["hora_entrada"].strftime("%Y-%m-%d"),
+            "entrada": m["hora_entrada"].strftime("%H:%M:%S"),
+            "salida": m["hora_salida"].strftime("%H:%M:%S") if m["hora_salida"] else None,
+            "tardanza": bool(m["es_tardanza"]),
+            "feriado": bool(m["es_feriado"]),
+            "incidencia": m.get("tipo_incidencia") or "",
+            "ordinarias": _fmt(m["horas_ordinarias"] or timedelta(0)),
+            "extra_50": _fmt(m["horas_extra_50"] or timedelta(0)),
+            "extra_100": _fmt(m["horas_extra_100"] or timedelta(0)),
+        }
+        for m in marcajes
+    ]
+    extra_50 = sum(
+        ((m["horas_extra_50"] or timedelta(0)) for m in marcajes), timedelta(0)
+    )
+    extra_100 = sum(
+        ((m["horas_extra_100"] or timedelta(0)) for m in marcajes), timedelta(0)
+    )
+    return {
+        "usuario": user["username"],
+        "nombre": user["full_name"],
+        "desde": desde.isoformat(),
+        "hasta": hasta.isoformat(),
+        "marcas": marcas,
+        "extras_periodo": {
+            "horas_50": extra_50.total_seconds() / 3600,
+            "horas_100": extra_100.total_seconds() / 3600,
+            "texto_50": _fmt(extra_50),
+            "texto_100": _fmt(extra_100),
+        },
+        "aguinaldo_periodo": aguinaldo_periodo(db, user, desde, hasta),
+    }
+
+
+def aguinaldo_periodo(
+    db: Database, user: Dict[str, Any], desde: date, hasta: date
+) -> Dict[str, Any]:
+    """Proyecta el aguinaldo devengado dentro del período consultado.
+
+    Cuenta los meses calendario completos entre ``desde`` y ``hasta``
+    (limitados por la fecha de alta del empleado) y valora las horas extra
+    del período al recargo legal para componer la doceava parte.
+
+    Returns:
+        Diccionario con ``meses_periodo``, ``valor_extras`` y ``aguinaldo``.
+    """
+    salario = float(user["salario_mensual"] or 0)
+    alta = user["created_at"].date()
+    base = max(desde.replace(day=1), alta.replace(day=1))
+    meses = 0
+    cursor = base
+    while cursor <= hasta:
+        meses += 1
+        cursor = _sumar_mes(cursor)
+    extras = db.get_marcajes_rango(user["id"], desde, hasta)
+    extra_50 = sum(
+        ((m["horas_extra_50"] or timedelta(0)) for m in extras), timedelta(0)
+    )
+    extra_100 = sum(
+        ((m["horas_extra_100"] or timedelta(0)) for m in extras), timedelta(0)
+    )
+    valor_hora = salario / HORAS_BASE_MENSUAL if salario else 0.0
+    valor_extras = valor_hora * (
+        extra_50.total_seconds() / 3600 * RECARGO_EXTRA_50
+        + extra_100.total_seconds() / 3600 * RECARGO_EXTRA_100
+    )
+    return {
+        "meses_periodo": meses,
+        "valor_extras": valor_extras,
+        "aguinaldo": (salario * meses + valor_extras) / 12,
+    }
+
+
+def _sumar_mes(fecha: date) -> date:
+    """Retorna el primer día del mes siguiente a la fecha dada."""
+    if fecha.month == 12:
+        return fecha.replace(year=fecha.year + 1, month=1)
+    return fecha.replace(month=fecha.month + 1)
+
+
 def exportar_aguinaldo(
     db: Database, actor: Dict, anio: int, ruta: Optional[str] = None
 ) -> str:

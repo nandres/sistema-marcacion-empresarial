@@ -9,11 +9,13 @@ gestión de usuarios registran automáticamente un evento en
 from __future__ import annotations
 
 import getpass
+from datetime import datetime, time
 from functools import wraps
 from typing import Any, Callable, Dict, Optional, TypeVar
 
 import bcrypt
 
+from clock_engine import calcular_horas_paraguay, es_feriado_o_domingo, es_tardanza
 from database import Database
 
 ROLE_ADMIN: str = "Administrador"
@@ -253,3 +255,151 @@ def can_register_marks(db: Database, user: Dict) -> bool:
     """Autoriza el registro de marcas a cualquier rol autenticado."""
     require_role(db, user, ROLES_MARCAJES)
     return True
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def aprobar_solicitud_correccion(
+    db: Database, actor: Dict, solicitud_id: int, aprobar: bool
+) -> str:
+    """Resuelve un reclamo de marcación fallida y aplica la corrección.
+
+    Al aprobar se materializa la marca propuesta en ``marcajes``:
+    - ``Entrada``: ajusta la hora del marcaje existente de esa fecha o lo
+      crea retroactivamente si no existe.
+    - ``Salida``: cierra el marcaje abierto de esa fecha liquidando el
+      desglose legal con ``calcular_horas_paraguay``.
+
+    Tanto la corrección del marcaje como el cambio de estado de la
+    solicitud quedan trazados en ``logs_auditoria`` (JSONB con los valores
+    anterior y nuevo) para blindar la operación frente a fraudes.
+
+    Returns:
+        El estado final de la solicitud (``Aprobado`` o ``Rechazado``).
+    """
+    solicitud = db.get_solicitud_correccion(solicitud_id)
+    if not solicitud:
+        raise ValueError("La solicitud no existe.")
+    if solicitud["estado"] != "Pendiente":
+        raise ValueError("La solicitud ya fue resuelta.")
+    estado_final = "Aprobado" if aprobar else "Rechazado"
+    if aprobar:
+        _aplicar_correccion_marcaje(db, actor, solicitud)
+    db.actualizar_estado_solicitud(solicitud_id, estado_final, actor["id"])
+    db.registrar_auditoria(
+        actor["id"],
+        "ACTUALIZAR",
+        "solicitudes_correccion",
+        solicitud_id,
+        anterior={"estado": "Pendiente", "revisado_por": None},
+        nuevos={"estado": estado_final, "revisado_por": actor["id"]},
+    )
+    return estado_final
+
+
+def _aplicar_correccion_marcaje(
+    db: Database, actor: Dict, solicitud: Dict
+) -> None:
+    """Materializa la marca aprobada en la tabla ``marcajes`` con auditoría."""
+    instante = datetime.combine(solicitud["fecha_registro"], solicitud["hora_propuesta"])
+    if solicitud["tipo_marca"] == "Entrada":
+        _corregir_entrada(db, actor, solicitud, instante)
+    else:
+        _corregir_salida(db, actor, solicitud, instante)
+
+
+def _valores_marcaje(marcaje: Dict) -> Dict[str, Any]:
+    """Serializa un marcaje para los valores anterior/nuevo de la auditoría."""
+    def formato(instante: Any) -> Optional[str]:
+        return instante.isoformat() if instante else None
+
+    return {
+        "id": marcaje["id"],
+        "user_id": marcaje["user_id"],
+        "hora_entrada": formato(marcaje["hora_entrada"]),
+        "hora_salida": formato(marcaje["hora_salida"]),
+        "es_feriado": bool(marcaje["es_feriado"]),
+        "es_tardanza": bool(marcaje["es_tardanza"]),
+        "horas_ordinarias": str(marcaje["horas_ordinarias"] or "00:00:00"),
+        "horas_extra_50": str(marcaje["horas_extra_50"] or "00:00:00"),
+        "horas_extra_100": str(marcaje["horas_extra_100"] or "00:00:00"),
+        "tipo_incidencia": marcaje.get("tipo_incidencia") or "",
+    }
+
+
+def _corregir_entrada(
+    db: Database, actor: Dict, solicitud: Dict, instante: datetime
+) -> None:
+    """Crea o ajusta la entrada de la fecha reclamada según la hora propuesta."""
+    marcajes = db.get_entries_by_date(solicitud["usuario_id"], instante.date())
+    tardanza = es_tardanza(instante)
+    incidencia = "Llegada Tardía" if tardanza else ""
+    if marcajes:
+        marcaje = marcajes[0]
+        anterior = _valores_marcaje(marcaje)
+        db.actualizar_hora_entrada(marcaje["id"], instante, tardanza, incidencia)
+        nuevos = dict(
+            anterior,
+            hora_entrada=instante.isoformat(),
+            es_tardanza=tardanza,
+            tipo_incidencia=incidencia,
+        )
+        db.registrar_auditoria(
+            actor["id"], "ACTUALIZAR", "marcajes", marcaje["id"],
+            anterior=anterior, nuevos=nuevos,
+        )
+        return
+    marcaje_id = db.insertar_marcaje_registro(
+        solicitud["usuario_id"], instante, tardanza, es_feriado_o_domingo(instante)
+    )
+    db.registrar_auditoria(
+        actor["id"],
+        "CREAR",
+        "marcajes",
+        marcaje_id,
+        nuevos={
+            "usuario_id": solicitud["usuario_id"],
+            "hora_entrada": instante.isoformat(),
+            "es_tardanza": tardanza,
+            "es_feriado": es_feriado_o_domingo(instante),
+        },
+    )
+
+
+def _corregir_salida(
+    db: Database, actor: Dict, solicitud: Dict, instante: datetime
+) -> None:
+    """Cierra el marcaje abierto de la fecha reclamada con la hora propuesta."""
+    abiertos = [
+        m
+        for m in db.get_entries_by_date(solicitud["usuario_id"], instante.date())
+        if m["hora_salida"] is None
+    ]
+    if not abiertos:
+        raise ValueError(
+            "No hay una entrada abierta en la fecha reclamada para cerrar."
+        )
+    marcaje = abiertos[0]
+    anterior = _valores_marcaje(marcaje)
+    feriado = es_feriado_o_domingo(marcaje["hora_entrada"])
+    desglose = calcular_horas_paraguay(marcaje["hora_entrada"], instante, feriado)
+    db.close_clock_out(
+        marcaje["id"],
+        instante,
+        feriado,
+        desglose["horas_ordinarias"],
+        desglose["horas_extra_50"],
+        desglose["horas_extra_100"],
+        marcaje.get("tipo_incidencia") or "",
+    )
+    nuevos = dict(
+        anterior,
+        hora_salida=instante.isoformat(),
+        es_feriado=feriado,
+        horas_ordinarias=str(desglose["horas_ordinarias"]),
+        horas_extra_50=str(desglose["horas_extra_50"]),
+        horas_extra_100=str(desglose["horas_extra_100"]),
+    )
+    db.registrar_auditoria(
+        actor["id"], "ACTUALIZAR", "marcajes", marcaje["id"],
+        anterior=anterior, nuevos=nuevos,
+    )

@@ -35,6 +35,7 @@ flowchart LR
 | `src/gui.py` | Interfaz premium en CustomTkinter: [[Diseño de Interfaz Premium UI-UX]] |
 | `src/web_server.py` | Autoservicio web FastAPI: [[Estructura Web y Conexión Biométrica]] |
 | `src/biometric_sync.py` | Sincronización TCP/IP con relojes ZKTeco (puerto 4370) |
+| `solicitudes_correccion` | Tabla de reclamos de marcación fallida (Pendiente/Aprobado/Rechazado) |
 
 ## Flujo de datos
 

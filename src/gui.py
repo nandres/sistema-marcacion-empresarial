@@ -303,17 +303,18 @@ class MarcacionApp(ctk.CTk):
 
 
 class ConsultaLocalModal(ctk.CTkToplevel):
-    """Autoservicio local: marcas del día, horas extra del mes y aguinaldo.
+    """Autoservicio local: historial por rango de fechas y aguinaldo.
 
-    El empleado digita su cédula y pulsa "Hoy" para capturar la fecha actual
-    de su equipo y ver al instante su historial diario sin salir de la PC.
+    El empleado digita su cédula y elige el período (el botón "Hoy" fija
+    ambos extremos en la fecha actual del equipo) para revisar su histórico
+    completo desde enero sin salir de la PC.
     """
 
     def __init__(self, master: MarcacionApp, db: Database) -> None:
         super().__init__(master)
         self.db = db
         self.title("Consulta Local de Marcas")
-        self.geometry("500x640")
+        self.geometry("540x680")
         self.configure(fg_color=BG)
         self.transient(master)
         self.grab_set()
@@ -328,15 +329,20 @@ class ConsultaLocalModal(ctk.CTkToplevel):
             tarjeta_consulta, "Autoservicio del empleado en esta PC", 12, MUTED
         ).pack(pady=(0, 16))
 
-        self.entrada_cedula = entrada(tarjeta_consulta, "Su cédula o usuario", ancho=380)
+        self.entrada_cedula = entrada(tarjeta_consulta, "Su cédula o usuario", ancho=420)
         self.entrada_cedula.pack(pady=5)
-        fila_fecha = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
-        fila_fecha.pack(pady=5)
-        self.entrada_fecha = entrada(fila_fecha, "AAAA-MM-DD", ancho=280)
-        self.entrada_fecha.insert(0, datetime.date.today().isoformat())
-        self.entrada_fecha.pack(side="left", padx=(0, 8))
+        fila_rango = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
+        fila_rango.pack(pady=5)
+        self.entrada_desde = entrada(fila_rango, "Desde (AAAA-MM-DD)", ancho=200)
+        self.entrada_desde.insert(0, datetime.date(datetime.date.today().year, 1, 1).isoformat())
+        self.entrada_desde.pack(side="left", padx=(0, 6))
+        self.entrada_hasta = entrada(fila_rango, "Hasta (AAAA-MM-DD)", ancho=200)
+        self.entrada_hasta.insert(0, datetime.date.today().isoformat())
+        self.entrada_hasta.pack(side="left", padx=(6, 0))
+        fila_botones = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
+        fila_botones.pack(pady=(10, 0))
         boton_hoy = ctk.CTkButton(
-            fila_fecha,
+            fila_botones,
             text="Hoy",
             command=self._hoy,
             fg_color=PRIMARY,
@@ -344,29 +350,34 @@ class ConsultaLocalModal(ctk.CTkToplevel):
             text_color="white",
             font=(FONT, 14, "bold"),
             corner_radius=10,
-            width=80,
-            height=46,
+            width=100,
+            height=44,
         )
-        boton_hoy.pack(side="left")
-        boton_primario(tarjeta_consulta, "Consultar", self._consultar).pack(pady=(16, 6))
+        boton_hoy.pack(side="left", padx=6)
+        boton_primario(fila_botones, "Consultar Historial", self._consultar).pack(
+            side="left", padx=6
+        )
         self.lbl_error = etiqueta(tarjeta_consulta, "", 12, DANGER)
-        self.lbl_error.pack(pady=(0, 6))
+        self.lbl_error.pack(pady=(8, 4))
         self.texto_resultado = ctk.CTkTextbox(
             tarjeta_consulta,
             font=(MONO, 12),
             fg_color=INPUT_BG,
             text_color=TEXT,
             corner_radius=10,
-            height=250,
+            height=280,
             wrap="word",
         )
         self.texto_resultado.pack(fill="both", expand=True, padx=20, pady=(0, 20))
         self.entrada_cedula.focus_set()
 
     def _hoy(self) -> None:
-        """Captura la fecha actual del sistema y ejecuta la consulta."""
-        self.entrada_fecha.delete(0, "end")
-        self.entrada_fecha.insert(0, datetime.date.today().isoformat())
+        """Captura la fecha actual del sistema en ambos extremos y consulta."""
+        hoy = datetime.date.today().isoformat()
+        self.entrada_desde.delete(0, "end")
+        self.entrada_desde.insert(0, hoy)
+        self.entrada_hasta.delete(0, "end")
+        self.entrada_hasta.insert(0, hoy)
         self._consultar()
 
     def _consultar(self) -> None:
@@ -379,61 +390,55 @@ class ConsultaLocalModal(ctk.CTkToplevel):
             self.lbl_error.configure(text="Empleado no encontrado. Verifique su cédula.")
             return
         try:
-            fecha = datetime.date.fromisoformat(self.entrada_fecha.get().strip())
+            desde = datetime.date.fromisoformat(self.entrada_desde.get().strip())
+            hasta = datetime.date.fromisoformat(self.entrada_hasta.get().strip())
         except ValueError:
-            self.lbl_error.configure(text="Fecha inválida. Use el formato AAAA-MM-DD.")
+            self.lbl_error.configure(text="Fechas inválidas. Use el formato AAAA-MM-DD.")
             return
-        resumen = reports.resumen_consulta(self.db, user, fecha)
+        try:
+            resumen = reports.resumen_historico(self.db, user, desde, hasta)
+        except ValueError as error:
+            self.lbl_error.configure(text=str(error))
+            return
         self.lbl_error.configure(text="")
         self.texto_resultado.delete("1.0", "end")
         self.texto_resultado.insert("1.0", self._formatear(resumen))
 
     @staticmethod
     def _formatear(resumen: Dict) -> str:
-        """Convierte el resumen JSON en el reporte legible del modal."""
+        """Convierte el histórico JSON en el reporte legible del modal."""
         def gs(valor: float) -> str:
             return f"Gs. {int(round(valor)):,}".replace(",", ".")
 
-        lineas = [f"{resumen['nombre']} · {resumen['fecha']}", "=" * 40]
-        lineas.append("MARCAS DEL DÍA")
-        if not resumen["marcas_dia"]:
-            lineas.append("  Sin marcas registradas este día.")
-        for marca in resumen["marcas_dia"]:
+        lineas = [
+            f"{resumen['nombre']} · {resumen['desde']} → {resumen['hasta']}",
+            "=" * 44,
+            "HISTORIAL DE MARCAS",
+        ]
+        if not resumen["marcas"]:
+            lineas.append("  Sin marcas registradas en el período.")
+        for marca in resumen["marcas"]:
             estado = marca["salida"] or "en curso"
-            etiquetas = []
-            if marca["tardanza"]:
-                etiquetas.append("Tardanza")
-            if marca["feriado"]:
-                etiquetas.append("Feriado")
-            sufijo = f" [{', '.join(etiquetas)}]" if etiquetas else ""
-            lineas.append(
-                f"  #{marca['id']} Entrada {marca['entrada']} → Salida {estado}{sufijo}"
-            )
+            sufijo = f" [{marca['incidencia']}]" if marca["incidencia"] else ""
+            sufijo += " [Feriado]" if marca["feriado"] else ""
+            lineas.append(f"  {marca['fecha']} {marca['entrada']} → {estado}{sufijo}")
             lineas.append(
                 f"    Ordinarias {marca['ordinarias']} | Extra 50% {marca['extra_50']} "
                 f"| Extra 100% {marca['extra_100']}"
             )
-        extras = resumen["extras_mes"]
+        extras = resumen["extras_periodo"]
+        aguinaldo = resumen["aguinaldo_periodo"]
         lineas.extend(
             [
-                "HORAS EXTRA DEL MES",
+                "HORAS EXTRA DEL PERÍODO",
                 f"  Recargo 50%: {extras['texto_50']} ({extras['horas_50']:.2f} h)",
                 f"  Recargo 100%: {extras['texto_100']} ({extras['horas_100']:.2f} h)",
-                "AGUINALDO PROPORCIONAL (Ley 6380/2019)",
+                "AGUINALDO DEVENGADO (Ley 6380/2019)",
+                f"  Meses del período: {aguinaldo['meses_periodo']}",
+                f"  Valor horas extra: {gs(aguinaldo['valor_extras'])}",
+                f"  TOTAL: {gs(aguinaldo['aguinaldo'])}",
             ]
         )
-        aguinaldo = resumen["aguinaldo"]
-        if aguinaldo is None:
-            lineas.append("  Sin proyección para este año.")
-        else:
-            lineas.extend(
-                [
-                    f"  Salario mensual: {gs(aguinaldo['salario_mensual'])}",
-                    f"  Meses trabajados: {aguinaldo['meses_trabajados']}",
-                    f"  Valor horas extra: {gs(aguinaldo['valor_extras'])}",
-                    f"  TOTAL: {gs(aguinaldo['aguinaldo'])}",
-                ]
-            )
         return "\n".join(lineas)
 
 
@@ -488,7 +493,7 @@ class LoginModal(ctk.CTkToplevel):
 
 
 class PanelGestion(ctk.CTkFrame):
-    """Panel protegido de tres pestañas para RRHH/Administrador."""
+    """Panel protegido de cuatro pestañas para RRHH/Administrador."""
 
     def __init__(
         self, master: MarcacionApp, db: Database, actor: Dict, on_cerrar: Callable
@@ -532,6 +537,7 @@ class PanelGestion(ctk.CTkFrame):
         tab_personal = self.tabs.add("Gestión de Personal")
         tab_justificaciones = self.tabs.add("Justificaciones y Permisos")
         tab_reportes = self.tabs.add("Centro de Reportes")
+        tab_correcciones = self.tabs.add("Solicitudes de Corrección")
 
         self.personal_tab = PersonalTab(tab_personal, db, actor, self._refrescar_empleados)
         self.personal_tab.pack(fill="both", expand=True, padx=12, pady=12)
@@ -539,9 +545,132 @@ class PanelGestion(ctk.CTkFrame):
         self.justificaciones_tab.pack(fill="both", expand=True, padx=12, pady=12)
         self.reportes_tab = ReportesTab(tab_reportes, db, actor)
         self.reportes_tab.pack(fill="both", expand=True, padx=12, pady=12)
+        self.correcciones_tab = CorreccionesTab(tab_correcciones, db, actor)
+        self.correcciones_tab.pack(fill="both", expand=True, padx=12, pady=12)
 
     def _refrescar_empleados(self) -> None:
         self.justificaciones_tab.refrescar_empleados()
+
+
+class CorreccionesTab(ctk.CTkFrame):
+    """Bandeja de reclamos web con aprobación/rechazo y auditoría JSONB."""
+
+    def __init__(self, master, db: Database, actor: Dict) -> None:
+        super().__init__(master, fg_color="transparent")
+        self.db = db
+        self.actor = actor
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        cabecera = tarjeta(self)
+        cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        cabecera.grid_columnconfigure(0, weight=1)
+        etiqueta(
+            cabecera,
+            "Reclamos de marcación fallida enviados desde la web",
+            15,
+            TEXT,
+            "bold",
+        ).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 4))
+        etiqueta(
+            cabecera,
+            "Al aprobar, el marcaje se corrige en PostgreSQL y queda trazado en la auditoría",
+            12,
+            MUTED,
+        ).grid(row=1, column=0, sticky="w", padx=20)
+        boton_refrescar = ctk.CTkButton(
+            cabecera,
+            text="Refrescar",
+            command=self._refrescar,
+            width=100,
+            height=32,
+            font=(FONT, 12),
+            fg_color=PRIMARY,
+            hover_color=PRIMARY_HOVER,
+            corner_radius=8,
+        )
+        boton_refrescar.grid(row=0, column=1, rowspan=2, padx=16, sticky="e")
+        self.lbl_resultado = etiqueta(cabecera, "", 12, SUCCESS)
+        self.lbl_resultado.grid(row=2, column=0, columnspan=2, sticky="w", padx=20, pady=(2, 12))
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
+        self.scroll.grid(row=1, column=0, sticky="nsew")
+        self._refrescar()
+
+    def _refrescar(self) -> None:
+        for hijo in self.scroll.winfo_children():
+            hijo.destroy()
+        solicitudes = self.db.listar_solicitudes_correccion()
+        if not solicitudes:
+            etiqueta(self.scroll, "No hay solicitudes de corrección.", 13, MUTED).pack(pady=20)
+            return
+        for solicitud in solicitudes:
+            fila = tarjeta(self.scroll)
+            fila.pack(fill="x", pady=5)
+            fila.grid_columnconfigure(0, weight=1)
+            etiqueta(
+                fila,
+                f"#{solicitud['id']} · {solicitud['full_name']} ({solicitud['username']}) "
+                f"· {solicitud['fecha_registro']}",
+                14,
+                TEXT,
+                "bold",
+            ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 2))
+            estado = solicitud["estado"]
+            if solicitud["revisor"]:
+                estado += f" · {solicitud['revisor']}"
+            etiqueta(
+                fila,
+                f"{solicitud['tipo_marca']} a las {solicitud['hora_propuesta']} · {estado}",
+                12,
+                MUTED,
+            ).grid(row=1, column=0, sticky="w", padx=14)
+            etiqueta(fila, f"Motivo: {solicitud['motivo']}", 12, TEXT).grid(
+                row=2, column=0, sticky="w", padx=14, pady=(2, 10)
+            )
+            if solicitud["estado"] == "Pendiente":
+                boton_aprobar = ctk.CTkButton(
+                    fila,
+                    text="Aprobar",
+                    width=90,
+                    height=32,
+                    font=(FONT, 12),
+                    fg_color=SUCCESS,
+                    hover_color="#3BBF6B",
+                    text_color="#0B1F14",
+                    corner_radius=8,
+                    command=partial(self._resolver, solicitud["id"], True),
+                )
+                boton_aprobar.grid(row=0, column=1, rowspan=3, padx=(0, 6), sticky="e")
+                boton_rechazar = ctk.CTkButton(
+                    fila,
+                    text="Rechazar",
+                    width=90,
+                    height=32,
+                    font=(FONT, 12),
+                    fg_color="transparent",
+                    hover_color=DANGER,
+                    border_width=1,
+                    border_color=DANGER,
+                    text_color=DANGER,
+                    corner_radius=8,
+                    command=partial(self._resolver, solicitud["id"], False),
+                )
+                boton_rechazar.grid(row=0, column=2, rowspan=3, padx=(0, 14), sticky="e")
+
+    def _resolver(self, solicitud_id: int, aprobar: bool) -> None:
+        try:
+            estado = auth.aprobar_solicitud_correccion(
+                self.db, self.actor, solicitud_id, aprobar
+            )
+        except ValueError as error:
+            self.lbl_resultado.configure(text=str(error), text_color=DANGER)
+            return
+        self.lbl_resultado.configure(
+            text=f"Solicitud #{solicitud_id} {estado.lower()} con auditoría.",
+            text_color=SUCCESS,
+        )
+        self._refrescar()
 
 
 class PersonalTab(ctk.CTkFrame):

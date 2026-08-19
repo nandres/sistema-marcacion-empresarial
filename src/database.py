@@ -13,7 +13,7 @@ Responsabilidades:
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -72,6 +72,12 @@ class Database:
         self.connection = psycopg2.connect(client_encoding="UTF8", **self.config)
         self.connection.autocommit = False
         return self.connection
+
+    def cerrar(self) -> None:
+        """Cierra la conexión activa liberando el socket de PostgreSQL."""
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
 
     def ensure_database(self) -> None:
         """Garantiza que la base de datos configurada exista.
@@ -156,6 +162,10 @@ class Database:
             "ON users (biometrico_id) WHERE biometrico_id IS NOT NULL"
         )
         cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
+            "tipo_incidencia VARCHAR(50) NOT NULL DEFAULT ''"
+        )
+        cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS marcajes (
                 id SERIAL PRIMARY KEY,
@@ -215,6 +225,29 @@ class Database:
             """
             CREATE INDEX IF NOT EXISTS idx_justificaciones_usuario_fechas
             ON justificaciones (usuario_id, fecha_inicio, fecha_fin)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS solicitudes_correccion (
+                id SERIAL PRIMARY KEY,
+                usuario_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+                fecha_registro DATE NOT NULL,
+                tipo_marca VARCHAR(20) NOT NULL
+                    CHECK (tipo_marca IN ('Entrada', 'Salida')),
+                hora_propuesta TIME NOT NULL,
+                motivo TEXT NOT NULL,
+                estado VARCHAR(20) NOT NULL DEFAULT 'Pendiente'
+                    CHECK (estado IN ('Pendiente', 'Aprobado', 'Rechazado')),
+                revisado_por INTEGER REFERENCES users (id),
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_solicitudes_estado
+            ON solicitudes_correccion (estado, fecha_registro)
             """
         )
         for nombre in ROLES_INICIALES:
@@ -378,15 +411,17 @@ class Database:
         """Lista todos los roles registrados."""
         return self._execute("SELECT * FROM roles ORDER BY id", fetch="all")
 
-    def open_clock_in(self, user_id: int, hora_entrada: datetime, es_tardanza: bool) -> int:
-        """Abre un marcaje de entrada con su estado de tardanza."""
+    def open_clock_in(
+        self, user_id: int, hora_entrada: datetime, es_tardanza: bool, tipo_incidencia: str = ""
+    ) -> int:
+        """Abre un marcaje de entrada con su estado de tardanza e incidencia."""
         cursor = self._execute(
             """
-            INSERT INTO marcajes (user_id, hora_entrada, es_tardanza)
-            VALUES (%s, %s, %s)
+            INSERT INTO marcajes (user_id, hora_entrada, es_tardanza, tipo_incidencia)
+            VALUES (%s, %s, %s, %s)
             RETURNING id
             """,
-            (user_id, hora_entrada, es_tardanza),
+            (user_id, hora_entrada, es_tardanza, tipo_incidencia),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
@@ -399,8 +434,9 @@ class Database:
         horas_ordinarias: Any,
         horas_extra_50: Any,
         horas_extra_100: Any,
+        tipo_incidencia: str = "",
     ) -> None:
-        """Cierra un marcaje persistendo el desglose horario legal."""
+        """Cierra un marcaje persistiendo el desglose horario y la incidencia."""
         self._execute(
             """
             UPDATE marcajes
@@ -408,7 +444,8 @@ class Database:
                 es_feriado = %s,
                 horas_ordinarias = %s,
                 horas_extra_50 = %s,
-                horas_extra_100 = %s
+                horas_extra_100 = %s,
+                tipo_incidencia = %s
             WHERE id = %s
             """,
             (
@@ -417,6 +454,7 @@ class Database:
                 horas_ordinarias,
                 horas_extra_50,
                 horas_extra_100,
+                tipo_incidencia,
                 entry_id,
             ),
         )
@@ -544,3 +582,110 @@ class Database:
             (inicio, fin),
             fetch="all",
         )
+
+    def get_marcajes_rango(self, user_id: int, desde: Any, hasta: Any) -> List[Dict[str, Any]]:
+        """Lista los marcajes de un empleado dentro de un rango de fechas."""
+        inicio = datetime.combine(desde, time.min)
+        fin = datetime.combine(hasta, time.max)
+        return self._execute(
+            """
+            SELECT * FROM marcajes
+            WHERE user_id = %s AND hora_entrada BETWEEN %s AND %s
+            ORDER BY hora_entrada
+            """,
+            (user_id, inicio, fin),
+            fetch="all",
+        )
+
+    def crear_solicitud_correccion(
+        self,
+        usuario_id: int,
+        fecha_registro: Any,
+        tipo_marca: str,
+        hora_propuesta: Any,
+        motivo: str,
+    ) -> int:
+        """Registra un reclamo de marcación fallida en estado Pendiente."""
+        cursor = self._execute(
+            """
+            INSERT INTO solicitudes_correccion
+                (usuario_id, fecha_registro, tipo_marca, hora_propuesta, motivo)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (usuario_id, fecha_registro, tipo_marca, hora_propuesta, motivo),
+        )
+        self.connection.commit()
+        return cursor.fetchone()["id"]
+
+    def get_solicitud_correccion(self, solicitud_id: int) -> Optional[Dict[str, Any]]:
+        """Retorna una solicitud de corrección con datos del solicitante."""
+        return self._execute(
+            """
+            SELECT s.*, u.username, u.full_name, r.username AS revisor
+            FROM solicitudes_correccion s
+            JOIN users u ON u.id = s.usuario_id
+            LEFT JOIN users r ON r.id = s.revisado_por
+            WHERE s.id = %s
+            """,
+            (solicitud_id,),
+            fetch="one",
+        )
+
+    def listar_solicitudes_correccion(self) -> List[Dict[str, Any]]:
+        """Lista los reclamos ordenados por antigüedad y estado."""
+        return self._execute(
+            """
+            SELECT s.*, u.username, u.full_name, r.username AS revisor
+            FROM solicitudes_correccion s
+            JOIN users u ON u.id = s.usuario_id
+            LEFT JOIN users r ON r.id = s.revisado_por
+            ORDER BY (s.estado = 'Pendiente') DESC, s.fecha_registro, s.id
+            """,
+            fetch="all",
+        )
+
+    def actualizar_estado_solicitud(
+        self, solicitud_id: int, estado: str, revisado_por: int
+    ) -> bool:
+        """Marca una solicitud como Aprobada o Rechazada con su revisor."""
+        cursor = self._execute(
+            """
+            UPDATE solicitudes_correccion
+            SET estado = %s, revisado_por = %s
+            WHERE id = %s
+            """,
+            (estado, revisado_por, solicitud_id),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def insertar_marcaje_registro(
+        self, user_id: int, hora_entrada: datetime, es_tardanza: bool, es_feriado: bool
+    ) -> int:
+        """Inserta un marcaje retroactivo (aprobación de reclamo de entrada)."""
+        cursor = self._execute(
+            """
+            INSERT INTO marcajes
+                (user_id, hora_entrada, es_tardanza, es_feriado)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (user_id, hora_entrada, es_tardanza, es_feriado),
+        )
+        self.connection.commit()
+        return cursor.fetchone()["id"]
+
+    def actualizar_hora_entrada(
+        self, entry_id: int, hora_entrada: datetime, es_tardanza: bool, tipo_incidencia: str = ""
+    ) -> None:
+        """Corrige la hora de entrada de un marcaje (aprobación de reclamo)."""
+        self._execute(
+            """
+            UPDATE marcajes
+            SET hora_entrada = %s, es_tardanza = %s, tipo_incidencia = %s
+            WHERE id = %s
+            """,
+            (hora_entrada, es_tardanza, tipo_incidencia, entry_id),
+        )
+        self.connection.commit()
