@@ -39,6 +39,7 @@ flowchart LR
 - [[Módulo de Gestión de Usuarios]]
 - [[Motor de Reglas de Horas Extra]]
 - [[Panel de Reportes y Auditoría]]
+- [[Módulo de Justificaciones y Aguinaldos]]
 
 ## Vinculación con el repositorio
 
