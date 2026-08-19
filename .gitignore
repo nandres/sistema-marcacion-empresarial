@@ -1,0 +1,35 @@
+# Obsidian (bóveda interna: configuración local, nunca se sube)
+.obsidian/
+.trash/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Variables de entorno (credenciales - NUNCA subir)
+.env
+.env.local
+.env.production
+.env.*
+!.env.example
+
+# Base de datos local
+*.db
+*.sqlite3
+
+# Temporales y del sistema
+*.tmp
+*.temp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.idea/
+.vscode/
