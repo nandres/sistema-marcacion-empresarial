@@ -7,3 +7,4 @@ uvicorn>=0.32.0
 pandas>=2.2.0
 PyJWT>=2.9.0
 matplotlib>=3.9.0
+gunicorn>=21.2.0

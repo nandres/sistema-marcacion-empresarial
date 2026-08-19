@@ -16,6 +16,7 @@ import os
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import unquote, urlparse
 
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor
@@ -48,9 +49,34 @@ def load_dotenv(path: str = ".env") -> None:
         os.environ.setdefault(key.strip(), value.strip())
 
 
+def _config_por_url(url: str) -> Dict[str, str]:
+    """Descompone una ``DATABASE_URL`` estándar en parámetros de conexión.
+
+    Acepta los esquemas ``postgresql://`` y ``postgres://`` usados por
+    plataformas como Render o Railway y decodifica los valores escapados
+    (por ejemplo ``%40`` en contraseñas).
+    """
+    parsed = urlparse(url)
+    return {
+        "dbname": unquote(parsed.path.lstrip("/")) or DEFAULT_CONFIG["dbname"],
+        "user": unquote(parsed.username or ""),
+        "password": unquote(parsed.password or ""),
+        "host": parsed.hostname or DEFAULT_CONFIG["host"],
+        "port": str(parsed.port or DEFAULT_CONFIG["port"]),
+    }
+
+
 def load_config() -> Dict[str, str]:
-    """Construye el diccionario de conexión a partir del entorno y del ``.env``."""
+    """Construye el diccionario de conexión a partir del entorno y del ``.env``.
+
+    Si existe ``DATABASE_URL`` (estándar de los servidores cloud) tiene
+    prioridad absoluta; de lo contrario cae a las variables por separado
+    (``DB_HOST``, ``DB_NAME``, etc.) para el desarrollo local.
+    """
     load_dotenv()
+    url = os.getenv("DATABASE_URL")
+    if url:
+        return _config_por_url(url)
     return {
         "dbname": os.getenv("DB_NAME", DEFAULT_CONFIG["dbname"]),
         "user": os.getenv("DB_USER", DEFAULT_CONFIG["user"]),

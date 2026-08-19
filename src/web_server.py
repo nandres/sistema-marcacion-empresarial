@@ -452,10 +452,21 @@ def api_reclamo(
 
 
 def main() -> None:
-    """Levanta el servidor web local de consulta y reclamos."""
+    """Levanta el servidor web local de consulta y reclamos.
+
+    Respeta ``HOST`` y ``PORT`` del entorno para adaptarse a los proxies
+    de plataformas cloud (Render, Railway) sin modificar el código.
+    """
+    import os
+
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    uvicorn.run(
+        app,
+        host=os.getenv("HOST", "127.0.0.1"),
+        port=int(os.getenv("PORT", "8000")),
+        log_level="warning",
+    )
 
 
 if __name__ == "__main__":

@@ -35,6 +35,7 @@ flowchart LR
 | `src/gui.py` | Interfaz premium en CustomTkinter: [[Diseño de Interfaz Premium UI-UX]] y [[Panel de Analítica Visual y UX Premium]] |
 | `src/web_server.py` | Autoservicio web FastAPI: [[Estructura Web y Conexión Biométrica]] |
 | `src/biometric_sync.py` | Sincronización TCP/IP con relojes ZKTeco (puerto 4370) |
+| `Dockerfile` | Contenedor de producción (gunicorn + uvicorn): [[Despliegue en la Nube e Infraestructura SaaS]] |
 | `solicitudes_correccion` | Tabla de reclamos de marcación fallida (Pendiente/Aprobado/Rechazado) |
 
 ## Flujo de datos
@@ -55,6 +56,7 @@ flowchart LR
 - [[Estructura Web y Conexión Biométrica]]
 - [[Seguridad y Cifrado de Comunicaciones]]
 - [[Panel de Analítica Visual y UX Premium]]
+- [[Despliegue en la Nube e Infraestructura SaaS]]
 
 ## Vinculación con el repositorio
 

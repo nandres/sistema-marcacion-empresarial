@@ -1,0 +1,10 @@
+.git
+.env
+__pycache__
+*.pyc
+reportes/
+Sistema de Marcacion/
+.gitignore
+README.md
+Dockerfile
+.dockerignore
