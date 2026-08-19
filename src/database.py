@@ -149,6 +149,13 @@ class Database:
             "salario_mensual NUMERIC(12,2) NOT NULL DEFAULT 0"
         )
         cursor.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS biometrico_id INTEGER"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_biometrico "
+            "ON users (biometrico_id) WHERE biometrico_id IS NOT NULL"
+        )
+        cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS marcajes (
                 id SERIAL PRIMARY KEY,
@@ -351,6 +358,14 @@ class Database:
     def delete_user(self, user_id: int) -> None:
         """Elimina un usuario; sus marcajes se borran en cascada."""
         self._execute("DELETE FROM users WHERE id = %s", (user_id,))
+        self.connection.commit()
+
+    def asignar_biometrico_id(self, user_id: int, biometrico_id: int) -> None:
+        """Asocia el identificador biométrico del reloj al usuario."""
+        self._execute(
+            "UPDATE users SET biometrico_id = %s WHERE id = %s",
+            (biometrico_id, user_id),
+        )
         self.connection.commit()
 
     def get_role_by_name(self, nombre: str) -> Optional[Dict[str, Any]]:
