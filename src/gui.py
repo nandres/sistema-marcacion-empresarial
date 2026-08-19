@@ -23,6 +23,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 import auth
+import reglamento
 import reports
 from clock_engine import ClockEngine
 from database import Database
@@ -745,9 +746,14 @@ class EmployeeDashboard(ctk.CTkFrame):
         tarjeta_vacaciones = tarjeta(self.area)
         tarjeta_vacaciones.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
         vacaciones = self.resumen["vacaciones"]
-        etiqueta(tarjeta_vacaciones, "Vacaciones · Art. 23", 13, t("MUTED"), "bold").grid(
-            row=0, column=0, padx=18, pady=(16, 2)
-        )
+        es_pasante = self.resumen["vinculo"] == "Pasante"
+        etiqueta(
+            tarjeta_vacaciones,
+            "Licencia anual · Art. 23" if es_pasante else "Vacaciones · Art. 29",
+            13,
+            t("MUTED"),
+            "bold",
+        ).grid(row=0, column=0, padx=18, pady=(16, 2))
         etiqueta(
             tarjeta_vacaciones,
             f"{vacaciones['disponibles']:.0f} días disponibles",
@@ -766,9 +772,13 @@ class EmployeeDashboard(ctk.CTkFrame):
         tarjeta_permisos.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 12))
         detalle = self.resumen["permisos_mes"]["detalle"]
         texto_detalle = " · ".join(f"{tipo}: {cantidad}" for tipo, cantidad in detalle.items())
-        etiqueta(tarjeta_permisos, "Permisos del mes · Art. 25", 13, t("MUTED"), "bold").grid(
-            row=0, column=0, padx=18, pady=(16, 2)
-        )
+        etiqueta(
+            tarjeta_permisos,
+            "Permisos del mes · Art. 25" if es_pasante else "Permisos del mes · Art. 34",
+            13,
+            t("MUTED"),
+            "bold",
+        ).grid(row=0, column=0, padx=18, pady=(16, 2))
         etiqueta(
             tarjeta_permisos,
             f"{self.resumen['permisos_mes']['total']} permisos utilizados",
@@ -829,6 +839,106 @@ class EmployeeDashboard(ctk.CTkFrame):
             etiqueta(self.area, "Sin permisos aprobados todavía", 12, t("MUTED")).grid(
                 row=2, column=0, columnspan=2, pady=(8, 4)
             )
+
+        self._construir_historial(3 + len(permisos))
+
+    def _construir_historial(self, fila_inicio: int) -> None:
+        """Tarjeta de historial de marcas desde enero de cualquier año a hoy."""
+        hoy = datetime.date.today()
+        tarjeta_historial = tarjeta(self.area)
+        tarjeta_historial.grid(
+            row=fila_inicio, column=0, columnspan=2, sticky="nsew", pady=(12, 12)
+        )
+        tarjeta_historial.grid_columnconfigure(1, weight=1)
+        etiqueta(tarjeta_historial, "Historial de marcas", 16, t("TEXT"), "bold").grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=18, pady=(14, 2)
+        )
+        etiqueta(
+            tarjeta_historial,
+            "Desde el 1 de enero de cualquier año hasta el día de hoy",
+            12,
+            t("MUTED"),
+        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 10))
+        fila_rango = ctk.CTkFrame(tarjeta_historial, fg_color="transparent")
+        fila_rango.grid(row=2, column=0, columnspan=2, sticky="w", padx=18)
+        self.ent_hist_desde = entrada(fila_rango, "Desde (AAAA-MM-DD)", ancho=170)
+        self.ent_hist_desde.insert(0, f"{hoy.year}-01-01")
+        self.ent_hist_desde.pack(side="left", padx=(0, 8))
+        self.ent_hist_hasta = entrada(fila_rango, "Hasta (AAAA-MM-DD)", ancho=170)
+        self.ent_hist_hasta.insert(0, hoy.isoformat())
+        self.ent_hist_hasta.pack(side="left", padx=(0, 8))
+        boton_primario(fila_rango, "Consultar", self._consultar_historial).pack(
+            side="left", padx=8
+        )
+        self.lbl_hist_resultado = etiqueta(tarjeta_historial, "", 12, t("SUCCESS"))
+        self.lbl_hist_resultado.grid(
+            row=3, column=0, columnspan=2, sticky="w", padx=18, pady=(10, 0)
+        )
+        self.scroll_hist = ctk.CTkScrollableFrame(
+            tarjeta_historial, fg_color=t("INPUT_BG"), corner_radius=10, height=230
+        )
+        self.scroll_hist.grid(
+            row=4, column=0, columnspan=2, sticky="ew", padx=14, pady=(8, 14)
+        )
+        etiqueta(
+            self.scroll_hist,
+            "Use 'Consultar' para cargar el historial del período elegido.",
+            12,
+            t("MUTED"),
+        ).pack(anchor="w", padx=12, pady=10)
+
+    def _consultar_historial(self) -> None:
+        """Consulta el historial de marcas del empleado en el rango indicado."""
+        try:
+            desde = datetime.date.fromisoformat(self.ent_hist_desde.get().strip())
+            hasta = datetime.date.fromisoformat(self.ent_hist_hasta.get().strip())
+            historial = reports.resumen_historico(self.db, self.user, desde, hasta)
+        except ValueError as error:
+            self.lbl_hist_resultado.configure(text=str(error), text_color=t("DANGER"))
+            return
+        for hijo in self.scroll_hist.winfo_children():
+            hijo.destroy()
+        extras = historial["extras_periodo"]
+        aguinaldo = historial["aguinaldo_periodo"]
+        self.lbl_hist_resultado.configure(
+            text=(
+                f"{len(historial['marcas'])} marcas · extra 50% {extras['texto_50']} · "
+                f"extra 100% {extras['texto_100']} · aguinaldo Gs. "
+                f"{aguinaldo['aguinaldo']:,.0f} ({aguinaldo['meses_periodo']} meses)"
+            ),
+            text_color=t("SUCCESS"),
+        )
+        if not historial["marcas"]:
+            etiqueta(
+                self.scroll_hist, "Sin marcas registradas en el período.", 12, t("MUTED")
+            ).pack(anchor="w", padx=12, pady=10)
+            return
+        for marca in historial["marcas"]:
+            fila = ctk.CTkFrame(self.scroll_hist, fg_color=t("CARD"), corner_radius=8)
+            fila.pack(fill="x", pady=3)
+            fila.grid_columnconfigure(1, weight=1)
+            etiqueta(fila, marca["fecha"], 12, t("TEXT"), "bold").grid(
+                row=0, column=0, sticky="w", padx=12, pady=8
+            )
+            etiqueta(
+                fila,
+                f"{marca['entrada']} → {marca['salida'] or '—'} · "
+                f"ordinarias {marca['ordinarias']} · extra 50% {marca['extra_50']} · "
+                f"extra 100% {marca['extra_100']}",
+                11,
+                t("MUTED"),
+            ).grid(row=0, column=1, sticky="w", padx=6, pady=8)
+            incidencias = []
+            if marca["tardanza"]:
+                incidencias.append("tardanza")
+            if marca["feriado"]:
+                incidencias.append("feriado")
+            if marca["incidencia"]:
+                incidencias.append(marca["incidencia"])
+            if incidencias:
+                etiqueta(fila, " · ".join(incidencias), 10, t("DANGER")).grid(
+                    row=0, column=2, sticky="e", padx=12, pady=8
+                )
 
     def _construir_grafico(self, master: ctk.CTkFrame) -> None:
         """Dibuja las horas ordinarias de cada marca del mes en curso."""
@@ -1659,6 +1769,7 @@ class JustificacionesTab(ctk.CTkFrame):
         self.menu_empleado = ctk.CTkOptionMenu(
             formulario,
             values=[""],
+            command=self._cambiar_empleado,
             font=(FONT, 14),
             fg_color=t("INPUT_BG"),
             button_color=t("PRIMARY"),
@@ -1672,7 +1783,8 @@ class JustificacionesTab(ctk.CTkFrame):
         self.menu_empleado.grid(row=1, column=0, pady=5)
         self.menu_tipo = ctk.CTkOptionMenu(
             formulario,
-            values=list(auth.TIPOS_PERMISO),
+            values=[""],
+            command=self._cambiar_tipo,
             font=(FONT, 14),
             fg_color=t("INPUT_BG"),
             button_color=t("PRIMARY"),
@@ -1686,13 +1798,22 @@ class JustificacionesTab(ctk.CTkFrame):
         self.menu_tipo.grid(row=2, column=0, pady=5)
         self.ent_inicio = entrada(formulario, "Fecha inicio (AAAA-MM-DD)", ancho=420)
         self.ent_inicio.grid(row=3, column=0, pady=5)
-        self.ent_fin = entrada(formulario, "Fecha fin (AAAA-MM-DD)", ancho=420)
+        self.ent_fin = entrada(formulario, "Fecha fin (AAAA-MM-DD) · máx. hoy", ancho=420)
         self.ent_fin.grid(row=4, column=0, pady=5)
+        self.ent_horas = entrada(formulario, "Horas del permiso (ej. 2.5)", ancho=420)
+        self.lbl_condiciones = etiqueta(formulario, "", 11, t("MUTED"))
         boton_primario(formulario, "Registrar Justificación", self._crear).grid(
-            row=5, column=0, pady=(16, 8)
+            row=7, column=0, pady=(16, 8)
         )
         self.lbl_resultado = etiqueta(formulario, "", 13, t("SUCCESS"))
-        self.lbl_resultado.grid(row=6, column=0, pady=(0, 18))
+        self.lbl_resultado.grid(row=8, column=0, pady=(0, 18))
+        etiqueta(formulario, "Disponibilidad por artículo", 14, t("TEXT"), "bold").grid(
+            row=9, column=0, pady=(4, 6)
+        )
+        self.scroll_disp = ctk.CTkScrollableFrame(
+            formulario, fg_color=t("INPUT_BG"), corner_radius=10, height=180
+        )
+        self.scroll_disp.grid(row=10, column=0, sticky="ew", padx=20, pady=(0, 18))
         self.refrescar_empleados()
 
         listado = tarjeta(self)
@@ -1725,8 +1846,13 @@ class JustificacionesTab(ctk.CTkFrame):
             etiqueta(
                 fila,
                 f"{justificacion['fecha_inicio'].strftime('%d/%m/%Y')} → "
-                f"{justificacion['fecha_fin'].strftime('%d/%m/%Y')} · "
-                f"Aprobado por {justificacion['aprobador']}",
+                f"{justificacion['fecha_fin'].strftime('%d/%m/%Y')}"
+                + (
+                    f" · {float(justificacion['horas_usadas'] or 0):g} h"
+                    if float(justificacion.get("horas_usadas") or 0) > 0
+                    else ""
+                )
+                + f" · Aprobado por {justificacion['aprobador']}",
                 11,
                 t("MUTED"),
             ).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
@@ -1752,21 +1878,124 @@ class JustificacionesTab(ctk.CTkFrame):
             self.menu_empleado.set(
                 f"{self.empleados[0]['username']} ({self.empleados[0]['full_name']})"
             )
+        self._poblar_tipos()
+        self._refrescar_disponibilidad()
 
-    def _crear(self) -> None:
+    def _empleado_actual(self) -> Optional[Dict]:
+        """Resuelve el empleado elegido en el menú."""
         seleccion = self.menu_empleado.get()
-        empleado = next(
+        return next(
             (e for e in self.empleados if f"{e['username']} ({e['full_name']})" == seleccion),
             None,
         )
+
+    def _articulos_actuales(self) -> List[Dict]:
+        """Artículos reglamentarios del vínculo del empleado seleccionado."""
+        empleado = self._empleado_actual()
+        if not empleado:
+            return []
+        return reglamento.articulos_aplicables(
+            empleado.get("tipo_vinculo") or "Funcionario"
+        )
+
+    def _poblar_tipos(self) -> None:
+        """Llena el menú de artículos según el vínculo del empleado elegido."""
+        articulos = self._articulos_actuales()
+        valores = [f"{a['articulo']} · {a['nombre']}" for a in articulos]
+        self.menu_tipo.configure(values=valores)
+        if valores:
+            self.menu_tipo.set(valores[0])
+        self._cambiar_tipo()
+
+    def _cambiar_empleado(self, _seleccion: str = "") -> None:
+        """Actualiza artículos y disponibilidad al cambiar de empleado."""
+        self._poblar_tipos()
+        self._refrescar_disponibilidad()
+
+    def _cambiar_tipo(self, _seleccion: str = "") -> None:
+        """Muestra las condiciones del artículo y el campo de horas si aplica."""
+        articulo = self._articulo_seleccionado()
+        if articulo is None:
+            self.lbl_condiciones.configure(text="")
+            self.ent_horas.grid_remove()
+            return
+        self.lbl_condiciones.configure(
+            text=f"{articulo['reglamento']} · {articulo['condiciones']}"
+        )
+        self.lbl_condiciones.grid(row=6, column=0, pady=(6, 0), padx=24)
+        if articulo["unidad"] == reglamento.UNIDAD_HORAS:
+            self.ent_horas.grid(row=5, column=0, pady=5)
+        else:
+            self.ent_horas.grid_remove()
+
+    def _articulo_seleccionado(self) -> Optional[Dict]:
+        """Resuelve el artículo del menú actual."""
+        seleccion = self.menu_tipo.get()
+        return next(
+            (a for a in self._articulos_actuales() if f"{a['articulo']} · {a['nombre']}" == seleccion),
+            None,
+        )
+
+    def _refrescar_disponibilidad(self) -> None:
+        """Panel usados/restantes de cada artículo del empleado seleccionado."""
+        for hijo in self.scroll_disp.winfo_children():
+            hijo.destroy()
+        empleado = self._empleado_actual()
+        if not empleado:
+            return
+        nombres_unidad = {"dias": "días", "horas": "horas", "veces": "veces"}
+        for disp in reglamento.disponibilidad_permisos(self.db, empleado):
+            fila = ctk.CTkFrame(self.scroll_disp, fg_color=t("CARD"), corner_radius=8)
+            fila.pack(fill="x", pady=3)
+            fila.grid_columnconfigure(1, weight=1)
+            unidad = nombres_unidad.get(disp["unidad"], disp["unidad"])
+            if disp["cuota"] is None:
+                texto_cuota = "Sin límite"
+            else:
+                texto_cuota = (
+                    f"{disp['usados']:g} de {disp['cuota']:g} {unidad} usados"
+                )
+            color = t("SUCCESS") if disp["disponible"] else t("DANGER")
+            etiqueta(
+                fila,
+                f"{disp['articulo']} · {disp['nombre']}",
+                12,
+                t("TEXT"),
+                "bold",
+            ).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 0))
+            etiqueta(fila, texto_cuota, 11, color).grid(
+                row=0, column=1, sticky="e", padx=12, pady=(8, 0)
+            )
+            etiqueta(
+                fila,
+                (
+                    f"Quedan {disp['restantes']:g} {unidad}"
+                    if disp["restantes"] is not None
+                    else ("Disponible" if disp["disponible"] else "No aplica")
+                ),
+                10,
+                t("MUTED"),
+            ).grid(row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
+
+    def _crear(self) -> None:
+        empleado = self._empleado_actual()
         if not empleado:
             self.lbl_resultado.configure(text="Seleccione un empleado.", text_color=t("DANGER"))
+            return
+        articulo = self._articulo_seleccionado()
+        if articulo is None:
+            self.lbl_resultado.configure(
+                text="Seleccione el artículo del permiso.", text_color=t("DANGER")
+            )
             return
         try:
             inicio = datetime.date.fromisoformat(self.ent_inicio.get().strip())
             fin = datetime.date.fromisoformat(self.ent_fin.get().strip())
+            horas = 0.0
+            if articulo["unidad"] == reglamento.UNIDAD_HORAS:
+                horas = float(self.ent_horas.get().strip().replace(",", "."))
             justificacion_id = auth.crear_justificacion(
-                self.db, self.actor, empleado["id"], self.menu_tipo.get(), inicio, fin
+                self.db, self.actor, empleado["id"], articulo["tipo"], inicio, fin, horas
             )
         except (ValueError, PermissionError) as error:
             self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
@@ -1776,6 +2005,7 @@ class JustificacionesTab(ctk.CTkFrame):
             text_color=t("SUCCESS"),
         )
         self._refrescar_lista()
+        self._refrescar_disponibilidad()
 
 
 class ReportesTab(ctk.CTkFrame):

@@ -34,6 +34,7 @@ flowchart LR
 | `src/reports.py` | Exportación mensual de asistencia (xlsx/csv), aguinaldos y PDFs oficiales CONATEL: [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] |
 | `src/gui.py` | Interfaz premium en CustomTkinter con temas Claro/Oscuro: [[Diseño de Interfaz Premium UI-UX]], [[Panel de Analítica Visual y UX Premium]] y [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] |
 | `src/web_server.py` | Autoservicio web FastAPI con tablero personal y descarga de PDFs: [[Estructura Web y Conexión Biométrica]] y [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] |
+| `src/reglamento.py` | Catálogo reglamentario de permisos y licencias (Res. 1307/2010 y 3028/2024) con cuotas y disponibilidad: [[Catálogo de Permisos y Licencias CONATEL]] |
 | `src/biometric_sync.py` | Sincronización TCP/IP con relojes ZKTeco (puerto 4370) |
 | `Dockerfile` | Contenedor de producción (gunicorn + uvicorn): [[Despliegue en la Nube e Infraestructura SaaS]] |
 | `solicitudes_correccion` | Tabla de reclamos de marcación fallida (Pendiente/Aprobado/Rechazado) |
@@ -59,6 +60,7 @@ flowchart LR
 - [[Despliegue en la Nube e Infraestructura SaaS]]
 - [[Reglamento de Asistencia y Disciplina CONATEL]]
 - [[Manual de Diseño UI-UX Simplificado y Reportes PDF]]
+- [[Catálogo de Permisos y Licencias CONATEL]]
 
 ## Vinculación con el repositorio
 

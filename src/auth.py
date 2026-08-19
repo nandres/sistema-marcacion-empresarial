@@ -20,6 +20,8 @@ import jwt
 from clock_engine import calcular_horas_paraguay, es_feriado_o_domingo, es_tardanza
 from database import Database, load_dotenv
 
+import reglamento
+
 ROLE_ADMIN: str = "Administrador"
 ROLE_RRHH: str = "Recursos Humanos"
 ROLE_EMPLEADO: str = "Empleado"
@@ -28,7 +30,7 @@ ROLES_GESTION_USUARIOS: tuple = (ROLE_ADMIN, ROLE_RRHH)
 ROLES_REPORTES: tuple = (ROLE_ADMIN, ROLE_RRHH)
 ROLES_MARCAJES: tuple = (ROLE_ADMIN, ROLE_RRHH, ROLE_EMPLEADO)
 
-TIPOS_PERMISO: tuple = ("Vacaciones", "Reposo", "Permiso", "Permiso por Examen")
+TIPOS_PERMISO: tuple = reglamento.TIPOS_PERMISO
 
 TIPOS_VINCULO: tuple = ("Pasante", "Funcionario")
 
@@ -261,8 +263,14 @@ def crear_justificacion(
     tipo_permiso: str,
     fecha_inicio: Any,
     fecha_fin: Any,
+    horas_usadas: float = 0.0,
 ) -> int:
     """Crea una justificación aprobada para un empleado (solo RRHH/Admin).
+
+    Valida el artículo reglamentario del catálogo (según el vínculo del
+    empleado), que las fechas no excedan el día de hoy, y que el empleado
+    aún tenga disponibilidad de la cuota (días, horas o veces) del artículo
+    en su período de cómputo vigente.
 
     El actor que la crea queda registrado como ``aprobado_por`` y la
     operación se audita en ``logs_auditoria``.
@@ -271,12 +279,55 @@ def crear_justificacion(
         raise ValueError(
             f"Tipo de permiso inválido. Use: {', '.join(TIPOS_PERMISO)}"
         )
+    empleado = db.get_user_by_id(empleado_id)
+    if not empleado:
+        raise ValueError("El empleado no existe.")
+    articulo = reglamento.encontrar_articulo(
+        tipo_permiso, empleado.get("tipo_vinculo") or "Funcionario"
+    )
+    if articulo is None:
+        raise ValueError(
+            f"El permiso '{tipo_permiso}' no aplica al vínculo "
+            f"'{empleado.get('tipo_vinculo') or 'Funcionario'}'."
+        )
     if fecha_fin < fecha_inicio:
         raise ValueError("La fecha de fin no puede ser anterior al inicio.")
-    if not db.get_user_by_id(empleado_id):
-        raise ValueError("El empleado no existe.")
+    hoy = datetime.now().date()
+    if fecha_fin > hoy:
+        raise ValueError(
+            f"La fecha de fin no puede superar el día de hoy ({hoy.isoformat()})."
+        )
+    if articulo["unidad"] == reglamento.UNIDAD_HORAS:
+        if horas_usadas <= 0:
+            raise ValueError("Debe indicar la cantidad de horas del permiso.")
+    elif horas_usadas:
+        raise ValueError("Este permiso no admite cantidad de horas.")
+
+    disponibilidad = reglamento.disponibilidad_permisos(db, empleado, hoy)
+    estado = next(
+        (d for d in disponibilidad if d["tipo"] == tipo_permiso), None
+    )
+    if estado is None:
+        raise ValueError("No se encontró disponibilidad para el permiso.")
+    if not estado["disponible"]:
+        raise ValueError(
+            f"Cuota agotada de '{tipo_permiso}': {estado['usados']:g} "
+            f"{estado['unidad']} usados de {estado['cuota']:g} "
+            f"({estado['periodo']})."
+        )
+    if estado["restantes"] is not None and horas_usadas > estado["restantes"]:
+        raise ValueError(
+            f"Solo quedan {estado['restantes']:g} horas disponibles de "
+            f"'{tipo_permiso}' en el mes."
+        )
+
     justificacion_id = db.crear_justificacion(
-        empleado_id, tipo_permiso, fecha_inicio, fecha_fin, actor["id"]
+        empleado_id,
+        tipo_permiso,
+        fecha_inicio,
+        fecha_fin,
+        actor["id"],
+        horas_usadas=horas_usadas,
     )
     db.registrar_auditoria(
         actor["id"],
@@ -289,6 +340,7 @@ def crear_justificacion(
             "fecha_inicio": fecha_inicio.isoformat(),
             "fecha_fin": fecha_fin.isoformat(),
             "aprobado_por": actor["id"],
+            "horas_usadas": horas_usadas,
         },
     )
     return justificacion_id

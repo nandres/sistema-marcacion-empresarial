@@ -21,6 +21,11 @@ from urllib.parse import unquote, urlparse
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 
+import reglamento
+
+# Lista SQL de tipos de permiso válidos (catálogo reglamentario + histórico)
+_TIPOS_SQL: str = ", ".join("'%s'" % t for t in reglamento.TIPOS_PERMISO_CHECK)
+
 DEFAULT_CONFIG: Dict[str, str] = {
     "dbname": "marcacion",
     "user": "postgres",
@@ -275,10 +280,11 @@ class Database:
                 id SERIAL PRIMARY KEY,
                 usuario_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
                 tipo_permiso VARCHAR(50) NOT NULL
-                    CHECK (tipo_permiso IN ('Vacaciones', 'Reposo', 'Permiso')),
+                    CHECK (tipo_permiso IN (""" + _TIPOS_SQL + """)),
                 fecha_inicio DATE NOT NULL,
                 fecha_fin DATE NOT NULL,
                 aprobado_por INTEGER NOT NULL REFERENCES users (id),
+                horas_usadas NUMERIC(4, 1) NOT NULL DEFAULT 0,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """
@@ -293,8 +299,13 @@ class Database:
             """
             ALTER TABLE justificaciones ADD CONSTRAINT
             justificaciones_tipo_permiso_check
-            CHECK (tipo_permiso IN
-                   ('Vacaciones', 'Reposo', 'Permiso', 'Permiso por Examen'))
+            CHECK (tipo_permiso IN (""" + _TIPOS_SQL + """))
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE justificaciones ADD COLUMN IF NOT EXISTS
+            horas_usadas NUMERIC(4, 1) NOT NULL DEFAULT 0
             """
         )
         cursor.execute(
@@ -671,16 +682,30 @@ class Database:
         fecha_inicio: Any,
         fecha_fin: Any,
         aprobado_por: int,
+        horas_usadas: float = 0.0,
     ) -> int:
-        """Registra una justificación aprobada por RRHH/Administrador."""
+        """Registra una justificación aprobada por RRHH/Administrador.
+
+        ``horas_usadas`` solo es significativo para permisos medidos en
+        horas (p. ej. salidas personales del Art. 18); para el resto de
+        los artículos queda en cero.
+        """
         cursor = self._execute(
             """
             INSERT INTO justificaciones
-                (usuario_id, tipo_permiso, fecha_inicio, fecha_fin, aprobado_por)
-            VALUES (%s, %s, %s, %s, %s)
+                (usuario_id, tipo_permiso, fecha_inicio, fecha_fin,
+                 aprobado_por, horas_usadas)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (usuario_id, tipo_permiso, fecha_inicio, fecha_fin, aprobado_por),
+            (
+                usuario_id,
+                tipo_permiso,
+                fecha_inicio,
+                fecha_fin,
+                aprobado_por,
+                horas_usadas,
+            ),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]

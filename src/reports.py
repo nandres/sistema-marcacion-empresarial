@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import auth
+import reglamento
 from database import Database
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -323,6 +324,11 @@ def resumen_historico(
     """
     if hasta < desde:
         raise ValueError("La fecha 'hasta' no puede ser anterior a 'desde'.")
+    hoy = datetime.now().date()
+    if hasta > hoy:
+        raise ValueError(
+            f"La fecha 'hasta' no puede superar el día de hoy ({hoy.isoformat()})."
+        )
     marcajes = db.get_marcajes_rango(user["id"], desde, hasta)
     marcas = [
         {
@@ -571,17 +577,17 @@ def obtener_proyeccion_aguinaldos_totales(
     }
 
 
-def _vacaciones_devengadas(antiguedad_anios: float) -> float:
-    """Días hábiles de vacaciones según la antigüedad (Art. 23 Res. 3028/2024).
+def _vacaciones_devengadas(antiguedad_anios: float, vinculo: str = "Funcionario") -> float:
+    """Días de vacaciones devengados según vínculo y antigüedad.
 
-    Escala progresiva institucional: 12 días hasta los 5 años de servicio,
-    20 días entre 5 y 10 años y 30 días desde los 10 años en adelante.
+    Escala progresiva de la función pública paraguaya: 12 días hasta los
+    5 años de servicio, 20 días entre 5 y 10 años y 30 días desde los
+    10 años en adelante (Art. 29 Res. 1307/2010). Los pasantes usan la
+    licencia de 10 días hábiles del Art. 23 de la Res. 3028/2024.
     """
-    if antiguedad_anios >= 10:
-        return 30.0
-    if antiguedad_anios >= 5:
-        return 20.0
-    return 12.0
+    if vinculo == "Pasante":
+        return 10.0
+    return float(reglamento._vacaciones_funcionario(antiguedad_anios))
 
 
 def resumen_empleado(
@@ -609,19 +615,22 @@ def resumen_empleado(
         ``extras_mes`` y la lista ``permisos`` para los botones de PDF.
     """
     hoy = fecha or date.today()
+    vinculo = user.get("tipo_vinculo") or "Funcionario"
     antiguedad = (hoy - user["created_at"].date()).days / 365.25
     justificaciones = [
         j for j in db.list_justificaciones() if j["usuario_id"] == user["id"]
     ]
+    tipo_vacaciones = "Vacaciones" if vinculo == "Funcionario" else "Licencia de Pasante"
     vacaciones_usadas = sum(
-        1
+        (j["fecha_fin"] - j["fecha_inicio"]).days + 1
         for j in justificaciones
-        if j["tipo_permiso"] == "Vacaciones" and j["fecha_inicio"].year == hoy.year
+        if j["tipo_permiso"] == tipo_vacaciones
+        and j["fecha_inicio"].year == hoy.year
     )
     permisos_mes = [
         j
         for j in justificaciones
-        if j["tipo_permiso"] != "Vacaciones"
+        if j["tipo_permiso"] != tipo_vacaciones
         and j["fecha_inicio"].year == hoy.year
         and j["fecha_inicio"].month == hoy.month
     ]
@@ -642,16 +651,22 @@ def resumen_empleado(
     return {
         "usuario": user["username"],
         "nombre": user["full_name"],
-        "vinculo": user.get("tipo_vinculo") or "Funcionario",
+        "vinculo": vinculo,
         "antiguedad_anios": round(antiguedad, 1),
+        "reglamento": (
+            reglamento.REGLAMENTO_PASANTIA
+            if vinculo == "Pasante"
+            else reglamento.REGLAMENTO_INTERNO
+        ),
         "vacaciones": {
-            "devengadas": _vacaciones_devengadas(antiguedad),
+            "devengadas": _vacaciones_devengadas(antiguedad, vinculo),
             "usadas": vacaciones_usadas,
             "disponibles": max(
-                0, _vacaciones_devengadas(antiguedad) - vacaciones_usadas
+                0, _vacaciones_devengadas(antiguedad, vinculo) - vacaciones_usadas
             ),
         },
         "permisos_mes": {"total": len(permisos_mes), "detalle": detalle},
+        "disponibilidad": reglamento.disponibilidad_permisos(db, user, hoy),
         "marcas_mes": {
             "dias": [m["hora_entrada"].strftime("%d") for m in marcajes],
             "ordinarias": [
