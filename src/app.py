@@ -35,12 +35,21 @@ def create_user_menu(db: Database, actor: dict) -> None:
         print(f"  - {role['nombre']}")
     role_name = input("Rol: ").strip()
     password = input("Contraseña: ")
+    salario = _prompt_salario()
     try:
-        user_id = auth.create_user(db, actor, username, password, full_name, role_name)
+        user_id = auth.create_user(
+            db, actor, username, password, full_name, role_name, salario
+        )
     except (ValueError, PermissionError) as error:
         print(error)
         return
     print(f"Usuario #{user_id} creado.")
+
+
+def _prompt_salario() -> float:
+    """Solicita el salario mensual en guaraníes (0 si se omite)."""
+    valor = input("Salario mensual (Gs., ej. 2500000) [0]: ").strip()
+    return float(valor) if valor else 0.0
 
 
 def update_user_menu(db: Database, actor: dict) -> None:
@@ -54,6 +63,9 @@ def update_user_menu(db: Database, actor: dict) -> None:
     print(f"Editando a {target['full_name']} ({target['role_name']})")
     full_name = input(f"Nuevo nombre completo [{target['full_name']}]: ").strip() or None
     password = input("Nueva contraseña (vacío para no cambiar): ").strip() or None
+    salario_actual = f"{float(target['salario_mensual'] or 0):,.0f}"
+    salario_input = input(f"Nuevo salario mensual (Gs.) [{salario_actual}]: ").strip()
+    salario = float(salario_input) if salario_input else None
     print("Roles disponibles:")
     for role in db.list_roles():
         print(f"  - {role['nombre']}")
@@ -66,6 +78,7 @@ def update_user_menu(db: Database, actor: dict) -> None:
             full_name=full_name,
             password=password,
             role_name=role_input,
+            salario_mensual=salario,
         )
     except (ValueError, PermissionError) as error:
         print(error)
@@ -97,6 +110,42 @@ def export_monthly_menu(db: Database, actor: dict) -> None:
         print(error)
         return
     print(f"Reporte exportado: {ruta}")
+
+
+def crear_justificacion_menu(db: Database, actor: dict) -> None:
+    """Asiste la creación de una justificación aprobada."""
+    from datetime import date
+
+    print("\n=== Crear justificación ===")
+    username = input("Empleado (nombre de usuario): ").strip()
+    empleado = db.get_user_by_username(username)
+    if not empleado:
+        print("Empleado no encontrado.")
+        return
+    print(f"Tipos de permiso: {', '.join(auth.TIPOS_PERMISO)}")
+    tipo = input("Tipo de permiso: ").strip()
+    try:
+        fecha_inicio = date.fromisoformat(input("Fecha inicio (AAAA-MM-DD): ").strip())
+        fecha_fin = date.fromisoformat(input("Fecha fin (AAAA-MM-DD): ").strip())
+        justificacion_id = auth.crear_justificacion(
+            db, actor, empleado["id"], tipo, fecha_inicio, fecha_fin
+        )
+    except (ValueError, PermissionError) as error:
+        print(error)
+        return
+    print(f"Justificación #{justificacion_id} creada y aprobada.")
+
+
+def export_aguinaldo_menu(db: Database, actor: dict) -> None:
+    """Asiste la exportación de la proyección de aguinaldo."""
+    print("\n=== Exportar aguinaldo proporcional ===")
+    try:
+        anio = int(input("Año (ej. 2026): ").strip())
+        ruta = reports.exportar_aguinaldo(db, actor, anio)
+    except (ValueError, PermissionError) as error:
+        print(error)
+        return
+    print(f"Aguinaldo exportado: {ruta}")
 
 
 def prompt_first_admin(db: Database) -> None:
@@ -142,8 +191,10 @@ def main() -> None:
             print("5. Listar usuarios")
             print("6. Crear usuario")
             print("7. Editar usuario")
+            print("10. Crear justificación")
         if role in auth.ROLES_REPORTES:
             print("9. Exportar reporte mensual")
+            print("11. Exportar aguinaldo proporcional")
         if role == auth.ROLE_ADMIN:
             print("8. Eliminar usuario")
         print("0. Salir")
@@ -152,15 +203,17 @@ def main() -> None:
         if option == "1":
             try:
                 auth.can_register_marks(db, user)
-                engine.clock_in()
+                entry_id, momento = engine.clock_in()
                 print("Entrada registrada correctamente.")
+                print(reports.comprobante_marcacion(entry_id, momento, "ENTRADA"))
             except (ValueError, PermissionError) as error:
                 print(error)
         elif option == "2":
             try:
                 auth.can_register_marks(db, user)
-                engine.clock_out()
+                entry_id, momento = engine.clock_out()
                 print("Salida registrada correctamente.")
+                print(reports.comprobante_marcacion(entry_id, momento, "SALIDA"))
             except (ValueError, PermissionError) as error:
                 print(error)
         elif option == "3":
@@ -176,6 +229,10 @@ def main() -> None:
             update_user_menu(db, user)
         elif option == "9" and role in auth.ROLES_REPORTES:
             export_monthly_menu(db, user)
+        elif option == "10" and role in auth.ROLES_GESTION_USUARIOS:
+            crear_justificacion_menu(db, user)
+        elif option == "11" and role in auth.ROLES_REPORTES:
+            export_aguinaldo_menu(db, user)
         elif option == "8" and role == auth.ROLE_ADMIN:
             delete_user_menu(db, user)
         elif option == "0":
