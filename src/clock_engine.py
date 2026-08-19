@@ -182,6 +182,45 @@ class ClockEngine:
         )
         return open_entry["id"], ahora
 
+    def detectar_accion_hoy(self) -> str:
+        """Detecta la acción automática del botón maestro consultando el día.
+
+        Reglas de auto-detección basadas en PostgreSQL:
+        - Sin marcajes hoy: corresponde registrar la ``ENTRADA``.
+        - Con entrada abierta (hora_salida vacía): corresponde la ``SALIDA``,
+          que liquida los recargos de la Ley N.º 213.
+        - Jornada completa: se rechaza con error para evitar duplicados.
+
+        Returns:
+            ``ENTRADA`` o ``SALIDA`` según el estado actual del empleado.
+        """
+        hoy = ahora_local().date()
+        registros = self.db.get_entries_by_date(self.user["id"], hoy)
+        if not registros:
+            return "ENTRADA"
+        abierto = next((r for r in registros if r["hora_salida"] is None), None)
+        if abierto is not None:
+            return "SALIDA"
+        raise ValueError("Ya registró su entrada y su salida de hoy.")
+
+    def registrar_asistencia(self) -> Tuple[int, datetime, str]:
+        """Botón maestro: registra entrada o salida según el estado del día.
+
+        Una sola acción para el kiosco de recepción: consulta internamente
+        PostgreSQL y decide si corresponde abrir la jornada o cerrarla con
+        el desglose legal de horas extraordinarias.
+
+        Returns:
+            Tupla con el identificador del marcaje, el instante registrado
+            y el tipo ejecutado (``ENTRADA`` o ``SALIDA``).
+        """
+        accion = self.detectar_accion_hoy()
+        if accion == "SALIDA":
+            entry_id, momento = self.clock_out()
+            return entry_id, momento, "SALIDA"
+        entry_id, momento = self.clock_in()
+        return entry_id, momento, "ENTRADA"
+
     def justificacion_para(self, fecha: date) -> Optional[Dict]:
         """Retorna la justificación aprobada que cubre la fecha, si existe."""
         return self.db.get_justificacion_por_fecha(self.user["id"], fecha)

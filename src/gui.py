@@ -201,17 +201,18 @@ class MarcacionApp(ctk.CTk):
         )
         self.entrada_id = entrada(tarjeta_marcacion, "Ej. 1234567 o juan")
         self.entrada_id.grid(row=1, column=0, pady=(0, 16))
-        self.entrada_id.bind("<Return>", lambda _e: self._marcar("ENTRADA"))
-        fila_botones = ctk.CTkFrame(tarjeta_marcacion, fg_color="transparent")
-        fila_botones.grid(row=2, column=0, pady=(0, 22))
-        boton_primario(fila_botones, "Registrar Entrada", partial(self._marcar, "ENTRADA")).pack(
-            side="left", padx=8
+        self.entrada_id.bind("<Return>", lambda _e: self._marcar())
+        boton_primario(tarjeta_marcacion, "REGISTRAR ASISTENCIA", self._marcar).grid(
+            row=2, column=0, pady=(0, 6)
         )
-        boton_secundario(fila_botones, "Registrar Salida", partial(self._marcar, "SALIDA")).pack(
-            side="left", padx=8
-        )
+        etiqueta(
+            tarjeta_marcacion,
+            "El sistema detecta automáticamente si corresponde Entrada o Salida",
+            12,
+            MUTED,
+        ).grid(row=3, column=0, pady=(0, 14))
         self.lbl_estado = etiqueta(tarjeta_marcacion, "", 14, SUCCESS)
-        self.lbl_estado.grid(row=3, column=0, pady=(0, 18))
+        self.lbl_estado.grid(row=4, column=0, pady=(0, 18))
 
     def _construir_tarjeta_ticket(self, master: ctk.CTkFrame) -> None:
         tarjeta_ticket = tarjeta(master)
@@ -239,7 +240,7 @@ class MarcacionApp(ctk.CTk):
         )
         self.after(1000, self._actualizar_reloj)
 
-    def _marcar(self, tipo: str) -> None:
+    def _marcar(self) -> None:
         username = self.entrada_id.get().strip()
         if not username:
             self._mostrar_estado("Ingrese su cédula o usuario.", DANGER)
@@ -250,7 +251,7 @@ class MarcacionApp(ctk.CTk):
             return
         engine = ClockEngine(self.db, user)
         try:
-            entry_id, momento = engine.clock_in() if tipo == "ENTRADA" else engine.clock_out()
+            entry_id, momento, tipo = engine.registrar_asistencia()
         except ValueError as error:
             self._mostrar_estado(str(error), DANGER)
             return
