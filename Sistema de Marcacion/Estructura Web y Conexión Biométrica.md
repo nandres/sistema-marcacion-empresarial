@@ -78,6 +78,7 @@ flowchart LR
 ## Vinculación
 
 - [[Ecosistema Sistema de Marcación]]
+- [[Seguridad y Cifrado de Comunicaciones]]
 - [[Diseño de Interfaz Premium UI-UX]]
 - [[Panel de Reportes y Auditoría]]
 - [[Módulo de Gestión de Usuarios]]

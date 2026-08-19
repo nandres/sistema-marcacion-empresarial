@@ -28,7 +28,7 @@ flowchart LR
 | Archivo | Responsabilidad |
 | --- | --- |
 | `src/app.py` | Punto de entrada: menú interactivo adaptado al rol, flujo de sesión y orquestación |
-| `src/auth.py` | Autenticación (bcrypt) y control de accesos RBAC: [[Control de Roles y Permisos RBAC]] |
+| `src/auth.py` | Autenticación (bcrypt) y control de accesos RBAC: [[Control de Roles y Permisos RBAC]] y [[Seguridad y Cifrado de Comunicaciones]] |
 | `src/database.py` | Conexión PostgreSQL (psycopg2), esquema de roles, usuarios, marcajes y `logs_auditoria` |
 | `src/clock_engine.py` | Reglas de negocio (Ley 213): entrada/salida, tardanzas y horas extra |
 | `src/reports.py` | Exportación mensual de asistencia (xlsx/csv) y aguinaldos para contabilidad |
@@ -53,6 +53,7 @@ flowchart LR
 - [[Módulo de Justificaciones y Aguinaldos]]
 - [[Diseño de Interfaz Premium UI-UX]]
 - [[Estructura Web y Conexión Biométrica]]
+- [[Seguridad y Cifrado de Comunicaciones]]
 
 ## Vinculación con el repositorio
 

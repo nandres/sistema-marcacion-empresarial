@@ -1,15 +1,15 @@
-"""Servidor web local de consulta histórica y reclamos para empleados.
+"""Servidor web de consulta histórica y reclamos con autenticación JWT.
 
 FastAPI con Modo Oscuro Premium (#121214) y diseño responsivo: el empleado
-ingresa su cédula y elige un rango de fechas (el botón "Hoy" captura la
-fecha actual de su equipo) para revisar de golpe su historial completo de
-marcas, las horas extra 50%/100% acumuladas y el aguinaldo devengado en el
-período (Ley N.º 6380/2019). También puede enviar una Solicitud de
-Corrección a Recursos Humanos si olvidó marcar o el sensor biométrico falló.
+inicia sesión con su cédula y contraseña (bcrypt), recibe un token JWT con
+vigencia de 8 horas y a partir de allí consulta su historial completo de
+marcas, horas extra 50%/100% y aguinaldo devengado en el período elegido
+(Ley N.º 6380/2019). También puede enviar Solicitudes de Corrección a
+Recursos Humanos si olvidó marcar o el sensor biométrico falló.
 
-Las consultas son de solo lectura; los reclamos se crean en estado
-Pendiente y solo RRHH/Administrador pueden resolverlos desde el panel de
-gestión del escritorio.
+La identidad del empleado se resuelve exclusivamente desde el token; la
+cédula nunca viaja en el formulario ni en la URL. Las consultas son de solo
+lectura y cada petición abre y cierra su propia conexión a PostgreSQL.
 
 Ejecución:
     python src/web_server.py          # http://127.0.0.1:8000
@@ -18,19 +18,21 @@ Ejecución:
 from __future__ import annotations
 
 import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+import jwt
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+import auth
 import database
 import reports
 
 app = FastAPI(
     title="Consulta de Marcas · Sistema de Marcación",
     description="Historial de marcas, horas extra y reclamos de corrección.",
-    version="2.0.0",
+    version="3.0.0",
 )
 
 BG = "#121214"
@@ -59,6 +61,11 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
   }}
   h1 {{ font-size:1.35rem; text-align:center; }}
   .subtitulo {{ color:{MUTED}; font-size:.85rem; text-align:center; margin-top:6px; }}
+  .cabecera {{
+    width:100%; max-width:560px; display:flex; justify-content:space-between;
+    align-items:center; margin-bottom:12px;
+  }}
+  .cabecera b {{ font-size:.95rem; }}
   label {{ display:block; font-size:.85rem; color:{MUTED}; margin:16px 0 6px; }}
   input, select, textarea {{
     width:100%; padding:12px 14px; border-radius:10px; border:1px solid #34343B;
@@ -76,6 +83,10 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
     width:100%; margin-top:18px; transition:background .15s;
   }}
   button:hover {{ background:#2E66E8; }}
+  .btn-secundario {{
+    background:transparent; border:1px solid {MUTED}; color:{MUTED};
+    width:auto; padding:10px 16px; margin:0; font-size:.85rem;
+  }}
   .btn-hoy {{ width:auto; margin:0; padding:13px 18px; white-space:nowrap; }}
   .oculto {{ display:none; }}
   #resultado {{ margin-top:22px; }}
@@ -106,11 +117,25 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
 </style>
 </head>
 <body>
-  <div class="tarjeta">
+  <div class="cabecera" id="cabecera" style="display:none">
+    <b id="usuario_nombre">Sesión activa</b>
+    <button class="btn-secundario" onclick="cerrarSesion()">Cerrar sesión</button>
+  </div>
+
+  <div class="tarjeta" id="vista_login">
     <h1>Sistema de Marcación</h1>
-    <p class="subtitulo">Consulta transparente de tu historial · Paraguay</p>
-    <label for="cedula">Tu cédula o usuario</label>
-    <input id="cedula" placeholder="Ej. 1234567 o juan" autocomplete="off">
+    <p class="subtitulo">Acceso seguro de empleados · tokens con vigencia de 8 horas</p>
+    <label for="cedula_login">Tu cédula o usuario</label>
+    <input id="cedula_login" placeholder="Ej. 1234567 o juan" autocomplete="username">
+    <label for="password_login">Contraseña</label>
+    <input id="password_login" type="password" placeholder="••••••••" autocomplete="current-password">
+    <button onclick="iniciarSesion()">INGRESAR</button>
+    <p id="login_error" class="error"></p>
+  </div>
+
+  <div class="tarjeta oculto" id="vista_consulta">
+    <h1>Consulta de Historial</h1>
+    <p class="subtitulo">Rango de fechas · el botón Hoy captura la fecha actual</p>
     <label for="desde">Fecha desde</label>
     <div class="fila">
       <div><input id="desde" type="date"></div>
@@ -123,7 +148,8 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
     <div id="resultado" class="oculto"></div>
     <p id="error" class="error"></p>
   </div>
-  <div class="tarjeta">
+
+  <div class="tarjeta oculto" id="vista_reclamo">
     <h1 style="font-size:1.1rem">Solicitud de Corrección</h1>
     <p class="subtitulo">¿Olvidaste marcar o falló el sensor biométrico?</p>
     <label for="tipo_marca">Marca a corregir</label>
@@ -140,6 +166,7 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
     <button onclick="enviarReclamo()">ENVIAR A RECURSOS HUMANOS</button>
     <p id="reclamo_respuesta" class="exito"></p>
   </div>
+
   <p class="pie">Las correcciones quedan sujetas a aprobación de Recursos Humanos</p>
 <script>
   function isoHoy() {{
@@ -148,16 +175,69 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
       String(hoy.getMonth() + 1).padStart(2, '0') + '-' +
       String(hoy.getDate()).padStart(2, '0');
   }}
+  document.getElementById('fecha_reclamo').value = isoHoy();
+  document.getElementById('desde').value = new Date().getFullYear() + '-01-01';
+  document.getElementById('hasta').value = isoHoy();
+
+  function obtenerToken() {{ return localStorage.getItem('marcacion_jwt'); }}
+  function mostrarLogin(mensaje) {{
+    document.getElementById('vista_login').classList.remove('oculto');
+    document.getElementById('vista_consulta').classList.add('oculto');
+    document.getElementById('vista_reclamo').classList.add('oculto');
+    document.getElementById('cabecera').style.display = 'none';
+    if (mensaje) document.getElementById('login_error').textContent = mensaje;
+  }}
+  function mostrarApp() {{
+    document.getElementById('vista_login').classList.add('oculto');
+    document.getElementById('vista_consulta').classList.remove('oculto');
+    document.getElementById('vista_reclamo').classList.remove('oculto');
+    document.getElementById('cabecera').style.display = 'flex';
+  }}
+  function cerrarSesion() {{
+    localStorage.removeItem('marcacion_jwt');
+    mostrarLogin('');
+  }}
+  async function iniciarSesion() {{
+    const cedula = document.getElementById('cedula_login').value.trim();
+    const password = document.getElementById('password_login').value;
+    document.getElementById('login_error').textContent = '';
+    const resp = await fetch('/api/login', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ cedula: cedula, password: password }})
+    }});
+    const dato = await resp.json();
+    if (!resp.ok) {{
+      document.getElementById('login_error').textContent = dato.detail || 'Error de autenticación.';
+      return;
+    }}
+    localStorage.setItem('marcacion_jwt', dato.token);
+    document.getElementById('usuario_nombre').textContent = dato.nombre + ' · ' + dato.rol;
+    mostrarApp();
+  }}
+  async function peticionAutenticada(ruta, cuerpo) {{
+    const resp = await fetch(ruta, {{
+      method: 'POST',
+      headers: {{
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + obtenerToken()
+      }},
+      body: JSON.stringify(cuerpo)
+    }});
+    if (resp.status === 401) {{
+      cerrarSesion();
+      document.getElementById('login_error').textContent = 'Sesión expirada. Ingrese nuevamente.';
+      return null;
+    }}
+    return resp;
+  }}
+  function gs(n) {{ return Math.round(n).toString().replace(/\\B(?=(\\d{{3}})+(?!\\d))/g, '.'); }}
   function capturarHoy() {{
     const hoy = isoHoy();
     document.getElementById('desde').value = hoy;
     document.getElementById('hasta').value = hoy;
     consultar();
   }}
-  document.getElementById('fecha_reclamo').value = isoHoy();
-  document.getElementById('desde').value = new Date().getFullYear() + '-01-01';
-  document.getElementById('hasta').value = isoHoy();
-  function gs(n) {{ return Math.round(n).toString().replace(/\\B(?=(\\d{{3}})+(?!\\d))/g, '.'); }}
   function renderHistorico(d) {{
     const r = document.getElementById('resultado');
     let html = '<div class="bloque"><h3>' + d.nombre + ' · ' + d.desde + ' → ' + d.hasta + '</h3>';
@@ -190,19 +270,11 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
     r.classList.remove('oculto');
   }}
   async function consultar() {{
-    const cedula = document.getElementById('cedula').value.trim();
     const desde = document.getElementById('desde').value;
     const hasta = document.getElementById('hasta').value;
     document.getElementById('error').textContent = '';
-    if (!cedula || !desde || !hasta) {{
-      document.getElementById('error').textContent = 'Ingrese su cédula y el rango de fechas.';
-      return;
-    }}
-    const resp = await fetch('/api/consulta', {{
-      method: 'POST',
-      headers: {{ 'Content-Type': 'application/json' }},
-      body: JSON.stringify({{ cedula: cedula, desde: desde, hasta: hasta }})
-    }});
+    const resp = await peticionAutenticada('/api/consulta', {{ desde: desde, hasta: hasta }});
+    if (!resp) return;
     const dato = await resp.json();
     if (!resp.ok) {{
       document.getElementById('error').textContent = dato.detail || 'Error de consulta.';
@@ -211,24 +283,15 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
     renderHistorico(dato);
   }}
   async function enviarReclamo() {{
-    const cedula = document.getElementById('cedula').value.trim();
     const respuesta = document.getElementById('reclamo_respuesta');
     respuesta.textContent = '';
-    if (!cedula) {{
-      document.getElementById('error').textContent = 'Ingrese su cédula antes de reclamar.';
-      return;
-    }}
-    const resp = await fetch('/api/reclamo', {{
-      method: 'POST',
-      headers: {{ 'Content-Type': 'application/json' }},
-      body: JSON.stringify({{
-        cedula: cedula,
-        tipo_marca: document.getElementById('tipo_marca').value,
-        fecha: document.getElementById('fecha_reclamo').value,
-        hora_propuesta: document.getElementById('hora_propuesta').value,
-        motivo: document.getElementById('motivo').value
-      }})
+    const resp = await peticionAutenticada('/api/reclamo', {{
+      tipo_marca: document.getElementById('tipo_marca').value,
+      fecha: document.getElementById('fecha_reclamo').value,
+      hora_propuesta: document.getElementById('hora_propuesta').value,
+      motivo: document.getElementById('motivo').value
     }});
+    if (!resp) return;
     const dato = await resp.json();
     if (!resp.ok) {{
       document.getElementById('error').textContent = dato.detail || 'Error al enviar el reclamo.';
@@ -237,24 +300,30 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
     respuesta.textContent = dato.mensaje;
     document.getElementById('motivo').value = '';
   }}
+  if (obtenerToken()) {{ mostrarApp(); }} else {{ mostrarLogin(''); }}
 </script>
 </body>
 </html>"""
 
 
-class ConsultaRequest(BaseModel):
-    """Cuerpo de la consulta: cédula y rango de fechas en formato ISO."""
+class LoginRequest(BaseModel):
+    """Credenciales del empleado para emitir el token de acceso."""
 
     cedula: str
+    password: str
+
+
+class ConsultaRequest(BaseModel):
+    """Rango de fechas de la consulta; la identidad viaja en el token."""
+
     desde: str = ""
     hasta: str = ""
     fecha: str = ""
 
 
 class ReclamoRequest(BaseModel):
-    """Cuerpo del reclamo: cédula, marca a corregir y datos propuestos."""
+    """Datos de la corrección solicitada; la identidad viaja en el token."""
 
-    cedula: str
     tipo_marca: str
     fecha: str
     hora_propuesta: str
@@ -268,33 +337,80 @@ def _cliente() -> database.Database:
     return db
 
 
+def _usuario_autenticado(
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Extrae y valida el Bearer Token, devolviendo el usuario autenticado."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Se requiere un token de acceso.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = authorization.split(" ", 1)[1].strip()
+    db = _cliente()
+    try:
+        claims = auth.verificar_token_acceso(token)
+        usuario = db.get_user_by_id(int(claims["sub"]))
+        if not usuario:
+            raise ValueError("Usuario del token inexistente.")
+        return usuario
+    except (jwt.InvalidTokenError, ValueError, KeyError):
+        raise HTTPException(
+            status_code=401,
+            detail="Sesión inválida o expirada.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    finally:
+        db.cerrar()
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     """Página principal del autoservicio del empleado."""
     return PAGINA_HTML
 
 
-@app.post("/api/consulta")
-def api_consulta(payload: ConsultaRequest) -> Dict[str, Any]:
-    """Historial del empleado: rango completo o consulta puntual de un día."""
+@app.post("/api/login")
+def api_login(payload: LoginRequest) -> Dict[str, Any]:
+    """Valida credenciales con bcrypt y emite el JWT de acceso."""
     db = _cliente()
     try:
-        user = db.get_user_by_username(payload.cedula.strip())
+        user = auth.authenticate(db, payload.cedula.strip(), payload.password)
         if not user:
-            raise HTTPException(status_code=404, detail="Empleado no encontrado.")
+            raise HTTPException(status_code=401, detail="Cédula o contraseña incorrectas.")
+        rol = auth.get_role_name(db, user)
+        token = auth.crear_token_acceso(user["id"], rol)
+        return {
+            "token": token,
+            "rol": rol,
+            "nombre": user["full_name"],
+            "vigencia_horas": auth.JWT_EXPIRACION_HORAS,
+        }
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/consulta")
+def api_consulta(
+    payload: ConsultaRequest, usuario: Dict[str, Any] = Depends(_usuario_autenticado)
+) -> Dict[str, Any]:
+    """Historial del empleado autenticado: rango completo o un día puntual."""
+    db = _cliente()
+    try:
         if payload.fecha:
             try:
                 puntual = datetime.date.fromisoformat(payload.fecha.strip())
             except ValueError:
                 raise HTTPException(status_code=422, detail="Fecha inválida. Use AAAA-MM-DD.")
-            return reports.resumen_consulta(db, user, puntual)
+            return reports.resumen_consulta(db, usuario, puntual)
         try:
             desde = datetime.date.fromisoformat(payload.desde.strip())
             hasta = datetime.date.fromisoformat(payload.hasta.strip())
         except ValueError:
             raise HTTPException(status_code=422, detail="Rango inválido. Use AAAA-MM-DD.")
         try:
-            return reports.resumen_historico(db, user, desde, hasta)
+            return reports.resumen_historico(db, usuario, desde, hasta)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error))
     finally:
@@ -302,13 +418,12 @@ def api_consulta(payload: ConsultaRequest) -> Dict[str, Any]:
 
 
 @app.post("/api/reclamo")
-def api_reclamo(payload: ReclamoRequest) -> Dict[str, Any]:
+def api_reclamo(
+    payload: ReclamoRequest, usuario: Dict[str, Any] = Depends(_usuario_autenticado)
+) -> Dict[str, Any]:
     """Registra una solicitud de corrección en estado Pendiente."""
     db = _cliente()
     try:
-        user = db.get_user_by_username(payload.cedula.strip())
-        if not user:
-            raise HTTPException(status_code=404, detail="Empleado no encontrado.")
         if payload.tipo_marca not in ("Entrada", "Salida"):
             raise HTTPException(status_code=422, detail="Tipo de marca inválido.")
         try:
@@ -325,7 +440,7 @@ def api_reclamo(payload: ReclamoRequest) -> Dict[str, Any]:
                 status_code=422, detail="Explique el motivo (mínimo 10 caracteres)."
             )
         solicitud_id = db.crear_solicitud_correccion(
-            user["id"], fecha, payload.tipo_marca, hora, motivo
+            usuario["id"], fecha, payload.tipo_marca, hora, motivo
         )
         return {
             "id": solicitud_id,

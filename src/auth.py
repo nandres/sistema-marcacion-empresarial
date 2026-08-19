@@ -9,14 +9,16 @@ gestión de usuarios registran automáticamente un evento en
 from __future__ import annotations
 
 import getpass
-from datetime import datetime, time
+import os
+from datetime import datetime, time, timedelta, timezone
 from functools import wraps
 from typing import Any, Callable, Dict, Optional, TypeVar
 
 import bcrypt
+import jwt
 
 from clock_engine import calcular_horas_paraguay, es_feriado_o_domingo, es_tardanza
-from database import Database
+from database import Database, load_dotenv
 
 ROLE_ADMIN: str = "Administrador"
 ROLE_RRHH: str = "Recursos Humanos"
@@ -27,6 +29,41 @@ ROLES_REPORTES: tuple = (ROLE_ADMIN, ROLE_RRHH)
 ROLES_MARCAJES: tuple = (ROLE_ADMIN, ROLE_RRHH, ROLE_EMPLEADO)
 
 TIPOS_PERMISO: tuple = ("Vacaciones", "Reposo", "Permiso")
+
+JWT_EXPIRACION_HORAS: int = 8
+JWT_ALGORITMO: str = "HS256"
+
+
+def _jwt_secret() -> str:
+    """Clave de firma de tokens leída de ``JWT_SECRET_KEY`` en el ``.env``."""
+    load_dotenv()
+    return os.getenv("JWT_SECRET_KEY", "clave-de-desarrollo-no-usar-en-produccion")
+
+
+def crear_token_acceso(usuario_id: int, rol: str) -> str:
+    """Genera un token JWT firmado con vigencia de 8 horas.
+
+    El token transporta el identificador del usuario y su rol como claims
+    verificables; expira automáticamente y debe enviarse en cada petición
+    protegida dentro de la cabecera de autorización ``Bearer``.
+    """
+    ahora = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(usuario_id),
+        "rol": rol,
+        "iat": ahora,
+        "exp": ahora + timedelta(hours=JWT_EXPIRACION_HORAS),
+    }
+    return jwt.encode(payload, _jwt_secret(), algorithm=JWT_ALGORITMO)
+
+
+def verificar_token_acceso(token: str) -> Dict[str, Any]:
+    """Valida la firma y vigencia de un token y retorna sus claims.
+
+    Eleva ``jwt.InvalidTokenError`` si el token está manipulado, vencido o
+    firmado con otra clave; el llamador decide cómo traducirlo en un 401.
+    """
+    return jwt.decode(token, _jwt_secret(), algorithms=[JWT_ALGORITMO])
 
 F = TypeVar("F", bound=Callable[..., Any])
 
