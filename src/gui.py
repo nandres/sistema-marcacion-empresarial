@@ -30,18 +30,43 @@ from database import Database
 FONT = "Segoe UI"
 MONO = "Consolas"
 
-BG = "#0B0B0C"
-CARD = "#15151A"
-CARD_BORDER = "#1E1E24"
-INPUT_BG = "#191920"
-INPUT_BORDER = "#26262C"
-PRIMARY = "#1A56DB"
-PRIMARY_HOVER = "#2E66E8"
-TEXT = "#F2F2EE"
-MUTED = "#8E8E96"
-SUCCESS = "#4ADE80"
-DANGER = "#F0544F"
-ACCENTO = "#F5C26B"
+TEMA_OSCURO: Dict[str, str] = {
+    "BG": "#0B0B0C",
+    "CARD": "#1E1E24",
+    "CARD_BORDER": "#2A2A32",
+    "INPUT_BG": "#191920",
+    "INPUT_BORDER": "#26262C",
+    "PRIMARY": "#1A56DB",
+    "PRIMARY_HOVER": "#2E66E8",
+    "TEXT": "#F2F2EE",
+    "MUTED": "#8E8E96",
+    "SUCCESS": "#4ADE80",
+    "DANGER": "#F0544F",
+    "ACCENTO": "#F5C26B",
+}
+
+TEMA_CLARO: Dict[str, str] = {
+    "BG": "#F8F9FA",
+    "CARD": "#FFFFFF",
+    "CARD_BORDER": "#E4E7EB",
+    "INPUT_BG": "#FFFFFF",
+    "INPUT_BORDER": "#D8DCE1",
+    "PRIMARY": "#1A56DB",
+    "PRIMARY_HOVER": "#2E66E8",
+    "TEXT": "#1A1A1E",
+    "MUTED": "#6B7280",
+    "SUCCESS": "#16A34A",
+    "DANGER": "#DC2626",
+    "ACCENTO": "#B45309",
+}
+
+TEMAS: Dict[str, Dict[str, str]] = {"oscuro": TEMA_OSCURO, "claro": TEMA_CLARO}
+TEMA_ACTIVO: str = "oscuro"
+
+
+def t(clave: str) -> str:
+    """Resuelve un token de color del tema vigente en tiempo de ejecución."""
+    return TEMAS[TEMA_ACTIVO][clave]
 
 DIAS = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
 MESES = (
@@ -52,68 +77,229 @@ MESES = (
 
 def tarjeta(master: ctk.CTkFrame, **kwargs) -> ctk.CTkFrame:
     """Crea una tarjeta flotante con la identidad visual del sistema."""
-    return ctk.CTkFrame(
+    tarjeta_widget = ctk.CTkFrame(
         master,
-        fg_color=CARD,
+        fg_color=t("CARD"),
         corner_radius=16,
         border_width=1,
-        border_color=CARD_BORDER,
+        border_color=t("CARD_BORDER"),
         **kwargs,
     )
+    tarjeta_widget._rol = "tarjeta"
+    return tarjeta_widget
 
 
 def boton_primario(master, texto: str, comando: Callable) -> ctk.CTkButton:
     """Botón de acción principal en azul eléctrico con transición al hover."""
-    return ctk.CTkButton(
+    boton = ctk.CTkButton(
         master,
         text=texto,
         command=comando,
-        fg_color=PRIMARY,
-        hover_color=PRIMARY_HOVER,
+        fg_color=t("PRIMARY"),
+        hover_color=t("PRIMARY_HOVER"),
         text_color="white",
         font=(FONT, 15, "bold"),
         corner_radius=8,
         height=44,
     )
+    boton._rol = "primario"
+    return boton
 
 
 def boton_secundario(master, texto: str, comando: Callable) -> ctk.CTkButton:
     """Botón de contorno en azul para acciones secundarias."""
-    return ctk.CTkButton(
+    boton = ctk.CTkButton(
         master,
         text=texto,
         command=comando,
         fg_color="transparent",
-        hover_color=PRIMARY_HOVER,
+        hover_color=t("PRIMARY_HOVER"),
         border_width=2,
-        border_color=PRIMARY,
-        text_color=PRIMARY,
+        border_color=t("PRIMARY"),
+        text_color=t("PRIMARY"),
         font=(FONT, 15, "bold"),
         corner_radius=8,
         height=44,
     )
+    boton._rol = "secundario"
+    return boton
 
 
 def entrada(master, placeholder: str, ancho: int = 320) -> ctk.CTkEntry:
     """Campo de texto estilizado de la interfaz."""
-    return ctk.CTkEntry(
+    campo = ctk.CTkEntry(
         master,
         placeholder_text=placeholder,
         font=(FONT, 16),
-        fg_color=INPUT_BG,
-        border_color=INPUT_BORDER,
-        text_color=TEXT,
+        fg_color=t("INPUT_BG"),
+        border_color=t("INPUT_BORDER"),
+        text_color=t("TEXT"),
         corner_radius=10,
         height=46,
         width=ancho,
     )
+    campo._rol = "entrada"
+    return campo
 
 
-def etiqueta(master, texto: str, tamano: int = 14, color: str = TEXT, peso: str = "normal") -> ctk.CTkLabel:
+def etiqueta(master, texto: str, tamano: int = 14, color: str = t("TEXT"), peso: str = "normal") -> ctk.CTkLabel:
     """Etiqueta tipográfica limpia del sistema."""
     return ctk.CTkLabel(
         master, text=texto, font=(FONT, tamano, peso), text_color=color
     )
+
+
+def _normalizar_color(valor: Any) -> str:
+    """CustomTkinter devuelve a veces tuplas de color; usa siempre el primero."""
+    return valor[0] if isinstance(valor, tuple) else valor
+
+
+def _recolorear(widget, anterior: Dict[str, str], nuevo: Dict[str, str]) -> None:
+    """Reaplica los tokens del nuevo tema sobre la jerarquía de widgets.
+
+    Los widgets creados por los helpers llevan una etiqueta ``_rol`` con su
+    función visual; el resto se clasifica comparando sus colores actuales
+    contra el tema anterior para conservar su intención de diseño.
+    """
+    rol = getattr(widget, "_rol", None)
+    if rol == "tarjeta":
+        widget.configure(
+            fg_color=nuevo["CARD"], border_color=nuevo["CARD_BORDER"]
+        )
+    elif rol == "entrada":
+        widget.configure(
+            fg_color=nuevo["INPUT_BG"],
+            border_color=nuevo["INPUT_BORDER"],
+            text_color=nuevo["TEXT"],
+            placeholder_text_color=nuevo["MUTED"],
+        )
+    elif rol == "primario":
+        widget.configure(
+            fg_color=nuevo["PRIMARY"],
+            hover_color=nuevo["PRIMARY_HOVER"],
+            text_color="#FFFFFF",
+        )
+    elif rol == "secundario":
+        widget.configure(
+            fg_color="transparent",
+            hover_color=nuevo["PRIMARY_HOVER"],
+            border_color=nuevo["PRIMARY"],
+            text_color=nuevo["PRIMARY"],
+        )
+    elif isinstance(widget, ctk.CTkLabel):
+        color = _normalizar_color(widget.cget("text_color"))
+        for clave in ("MUTED", "TEXT", "SUCCESS", "DANGER", "ACCENTO", "PRIMARY"):
+            if color == anterior.get(clave):
+                widget.configure(text_color=nuevo[clave])
+                break
+    elif isinstance(widget, ctk.CTkFrame):
+        color = _normalizar_color(widget.cget("fg_color"))
+        if color == "transparent":
+            pass
+        elif color == anterior.get("INPUT_BG"):
+            widget.configure(fg_color=nuevo["INPUT_BG"])
+        elif color == anterior.get("BG"):
+            widget.configure(fg_color=nuevo["BG"])
+        else:
+            widget.configure(fg_color=nuevo["CARD"])
+    elif isinstance(widget, ctk.CTkEntry):
+        widget.configure(
+            fg_color=nuevo["INPUT_BG"],
+            border_color=nuevo["INPUT_BORDER"],
+            text_color=nuevo["TEXT"],
+            placeholder_text_color=nuevo["MUTED"],
+        )
+    elif isinstance(widget, ctk.CTkButton):
+        color = _normalizar_color(widget.cget("fg_color"))
+        borde = _normalizar_color(widget.cget("border_color"))
+        if color == anterior.get("PRIMARY"):
+            widget.configure(
+                fg_color=nuevo["PRIMARY"],
+                hover_color=nuevo["PRIMARY_HOVER"],
+                text_color="#FFFFFF",
+            )
+        elif color == anterior.get("SUCCESS"):
+            widget.configure(
+                fg_color=nuevo["SUCCESS"], hover_color=nuevo["SUCCESS"]
+            )
+        elif color == anterior.get("INPUT_BG"):
+            widget.configure(
+                fg_color=nuevo["INPUT_BG"],
+                hover_color=nuevo["PRIMARY_HOVER"],
+                text_color=nuevo["MUTED"],
+            )
+        elif color == "transparent":
+            if (
+                borde == anterior.get("DANGER")
+                or _normalizar_color(widget.cget("text_color")) == anterior.get("DANGER")
+            ):
+                widget.configure(
+                    hover_color=nuevo["DANGER"],
+                    border_color=nuevo["DANGER"],
+                    text_color=nuevo["DANGER"],
+                )
+            elif borde == anterior.get("PRIMARY"):
+                widget.configure(
+                    hover_color=nuevo["PRIMARY_HOVER"],
+                    border_color=nuevo["PRIMARY"],
+                    text_color=nuevo["PRIMARY"],
+                )
+            else:
+                widget.configure(text_color=nuevo["MUTED"])
+    elif isinstance(widget, ctk.CTkOptionMenu):
+        widget.configure(
+            fg_color=nuevo["INPUT_BG"],
+            button_color=nuevo["PRIMARY"],
+            button_hover_color=nuevo["PRIMARY_HOVER"],
+            text_color=nuevo["TEXT"],
+            dropdown_fg_color=nuevo["INPUT_BG"],
+            dropdown_hover_color=nuevo["PRIMARY"],
+        )
+    elif isinstance(widget, ctk.CTkSwitch):
+        widget.configure(
+            fg_color=nuevo["INPUT_BG"],
+            progress_color=nuevo["PRIMARY"],
+            text_color=nuevo["MUTED"],
+        )
+    elif isinstance(widget, ctk.CTkTextbox):
+        color = _normalizar_color(widget.cget("text_color"))
+        widget.configure(fg_color=nuevo["INPUT_BG"])
+        if color == anterior.get("MUTED"):
+            widget.configure(text_color=nuevo["MUTED"])
+        else:
+            widget.configure(text_color=nuevo["TEXT"])
+    elif isinstance(widget, ctk.CTkScrollableFrame):
+        color = _normalizar_color(widget.cget("fg_color"))
+        if color != "transparent":
+            widget.configure(fg_color=nuevo["CARD"])
+    for hijo in widget.winfo_children():
+        _recolorear(hijo, anterior, nuevo)
+
+
+def interruptor_tema(master, app: "MarcacionApp") -> ctk.CTkSwitch:
+    """Switch superior que alterna el modo claro y el modo oscuro al instante."""
+    interruptor = ctk.CTkSwitch(
+        master,
+        text="Modo Oscuro" if TEMA_ACTIVO == "oscuro" else "Modo Claro",
+        variable=app.variable_tema,
+        command=app._cambiar_tema,
+        font=(FONT, 12),
+        text_color=t("MUTED"),
+        progress_color=t("PRIMARY"),
+        fg_color=t("INPUT_BG"),
+    )
+    interruptor._rol = "switch_tema"
+    return interruptor
+
+
+def _buscar_switches_tema(raiz) -> List[ctk.CTkSwitch]:
+    """Recolecta los interruptores de tema para sincronizar su etiqueta."""
+    resultado: List[ctk.CTkSwitch] = []
+    if getattr(raiz, "_rol", None) == "switch_tema":
+        resultado.append(raiz)
+    for hijo in raiz.winfo_children():
+        resultado.extend(_buscar_switches_tema(hijo))
+    return resultado
 
 
 class MarcacionApp(ctk.CTk):
@@ -125,6 +311,8 @@ class MarcacionApp(ctk.CTk):
         self.db.initialize()
         self.actor: Optional[Dict] = None
         self.panel_gestion: Optional[ctk.CTkFrame] = None
+        self.variable_tema = ctk.BooleanVar(value=False)
+        self._refrescos_tema: List[Callable] = []
         self._configurar_ventana()
         self._construir_vista_publica()
         self._mostrar_dos_puntos = True
@@ -133,11 +321,39 @@ class MarcacionApp(ctk.CTk):
 
     def _configurar_ventana(self) -> None:
         self.title("Sistema de Marcación · Paraguay")
-        self.geometry("1080x760")
-        self.minsize(960, 680)
-        self.configure(fg_color=BG)
+        self.geometry("1180x780")
+        self.minsize(1024, 700)
+        self.configure(fg_color=t("BG"))
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
+
+    def registrar_refresco_tema(self, refresco: Callable) -> None:
+        """Suscribe un panel para que redibuje sus gráficos al cambiar de tema."""
+        if refresco not in self._refrescos_tema:
+            self._refrescos_tema.append(refresco)
+
+    def quitar_refresco_tema(self, refresco: Callable) -> None:
+        """Retira la suscripción de un panel destruido."""
+        if refresco in self._refrescos_tema:
+            self._refrescos_tema.remove(refresco)
+
+    def _cambiar_tema(self) -> None:
+        """Aplica el tema elegido a toda la jerarquía visual al instante."""
+        global TEMA_ACTIVO
+        TEMA_ACTIVO = "claro" if self.variable_tema.get() else "oscuro"
+        ctk.set_appearance_mode("light" if TEMA_ACTIVO == "claro" else "dark")
+        anterior = TEMAS["claro" if TEMA_ACTIVO == "oscuro" else "oscuro"]
+        self.configure(fg_color=t("BG"))
+        _recolorear(self, anterior, TEMAS[TEMA_ACTIVO])
+        for refresco in list(self._refrescos_tema):
+            try:
+                refresco()
+            except Exception:
+                continue
+        for interruptor in _buscar_switches_tema(self):
+            interruptor.configure(
+                text="Modo Oscuro" if TEMA_ACTIVO == "oscuro" else "Modo Claro"
+            )
 
     # ------------------------------------------------------------------
     # Modo Recepción (pantalla pública)
@@ -151,67 +367,146 @@ class MarcacionApp(ctk.CTk):
         cabecera = ctk.CTkFrame(self.frame_publico, fg_color="transparent")
         cabecera.grid(row=0, column=0, sticky="ew", padx=24, pady=(24, 0))
         cabecera.grid_columnconfigure(0, weight=1)
-        etiqueta(cabecera, "Sistema de Marcación", 22, TEXT, "bold").grid(
+        etiqueta(cabecera, "Sistema de Marcación", 22, t("TEXT"), "bold").grid(
             row=0, column=0, sticky="w"
         )
         etiqueta(
-            cabecera, "Cumplimiento Ley N.º 213/93 · Paraguay", 13, MUTED
+            cabecera, "Cumplimiento Ley N.º 213/93 · Res. 3028/2024 CONATEL", 13, t("MUTED")
         ).grid(row=1, column=0, sticky="w")
+        interruptor_tema(cabecera, self).grid(row=0, column=1, rowspan=2, sticky="e")
 
         contenido = ctk.CTkFrame(self.frame_publico, fg_color="transparent")
         contenido.grid(row=1, column=0, sticky="nsew", padx=24, pady=24)
-        contenido.grid_columnconfigure(0, weight=1)
+        contenido.grid_columnconfigure(0, weight=3)
+        contenido.grid_columnconfigure(1, weight=2)
         contenido.grid_rowconfigure(0, weight=1)
 
-        self._construir_tarjeta_reloj(contenido)
-        self._construir_tarjeta_marcacion(contenido)
-        self._construir_tarjeta_ticket(contenido)
+        columna_kiosco = ctk.CTkFrame(contenido, fg_color="transparent")
+        columna_kiosco.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        columna_kiosco.grid_columnconfigure(0, weight=1)
+        self._construir_tarjeta_reloj(columna_kiosco)
+        self._construir_tarjeta_marcacion(columna_kiosco)
+        self._construir_tarjeta_ticket(columna_kiosco)
+
+        self.zona_empleado = ctk.CTkFrame(contenido, fg_color="transparent")
+        self.zona_empleado.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        self.zona_empleado.grid_columnconfigure(0, weight=1)
+        self.zona_empleado.grid_rowconfigure(0, weight=1)
+        self._mostrar_portal()
 
         self.pie = ctk.CTkFrame(self.frame_publico, fg_color="transparent")
         self.pie.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 16))
         self.pie.grid_columnconfigure(0, weight=1)
-        boton_consulta = ctk.CTkButton(
+        etiqueta(
             self.pie,
-            text="Consultar mis Marcas Localmente",
-            command=self._abrir_consulta_local,
-            fg_color="transparent",
-            hover_color=INPUT_BG,
-            text_color=MUTED,
-            font=(FONT, 12),
-            corner_radius=8,
-            width=200,
-            height=32,
-        )
-        boton_consulta.grid(row=0, column=0, sticky="w")
+            "El Portal del Empleado no requiere clave · la gestión sí",
+            12,
+            t("MUTED"),
+        ).grid(row=0, column=0, sticky="w")
         boton_acceso = ctk.CTkButton(
             self.pie,
             text="Acceso de Gestión",
-            command=self._abrir_login,
+            command=self._mostrar_login,
             fg_color="transparent",
-            hover_color=INPUT_BG,
-            text_color=MUTED,
+            hover_color=t("INPUT_BG"),
+            text_color=t("MUTED"),
             font=(FONT, 12),
             corner_radius=8,
             width=140,
             height=32,
         )
+        boton_acceso._rol = "plano"
         boton_acceso.grid(row=0, column=1, sticky="e")
+
+    def _mostrar_portal(self) -> None:
+        """Pantalla de acceso rápido: solo la cédula abre el tablero personal."""
+        for hijo in self.zona_empleado.winfo_children():
+            hijo.destroy()
+        tarjeta_portal = tarjeta(self.zona_empleado)
+        tarjeta_portal.grid(row=0, column=0, sticky="nsew")
+        tarjeta_portal.grid_columnconfigure(0, weight=1)
+        etiqueta(tarjeta_portal, "Portal del Empleado", 20, t("TEXT"), "bold").grid(
+            row=0, column=0, pady=(30, 4)
+        )
+        etiqueta(
+            tarjeta_portal,
+            "Ingrese su cédula o usuario para ver su resumen personal",
+            13,
+            t("MUTED"),
+        ).grid(row=1, column=0)
+        self.entrada_cedula = entrada(tarjeta_portal, "Ej. 1234567 o juan", ancho=360)
+        self.entrada_cedula.grid(row=2, column=0, pady=(26, 16))
+        self.entrada_cedula.bind("<Return>", lambda _e: self._abrir_dashboard())
+        boton_primario(tarjeta_portal, "Ver mi Resumen", self._abrir_dashboard).grid(
+            row=3, column=0, pady=(0, 10)
+        )
+        self.lbl_portal = etiqueta(tarjeta_portal, "", 12, t("DANGER"))
+        self.lbl_portal.grid(row=4, column=0, pady=(0, 30))
+        self.entrada_cedula.focus_set()
+
+    def _mostrar_login(self) -> None:
+        """Formulario de credenciales embebido, sin ventanas emergentes."""
+        for hijo in self.zona_empleado.winfo_children():
+            hijo.destroy()
+        tarjeta_login = tarjeta(self.zona_empleado)
+        tarjeta_login.grid(row=0, column=0, sticky="nsew")
+        tarjeta_login.grid_columnconfigure(0, weight=1)
+        etiqueta(tarjeta_login, "Acceso de Gestión", 20, t("TEXT"), "bold").grid(
+            row=0, column=0, pady=(30, 4)
+        )
+        etiqueta(
+            tarjeta_login, "Solo Recursos Humanos o Administrador", 13, t("MUTED")
+        ).grid(row=1, column=0, pady=(0, 24))
+        self.entrada_usuario = entrada(tarjeta_login, "Usuario", ancho=360)
+        self.entrada_usuario.grid(row=2, column=0, pady=6)
+        self.entrada_clave = entrada(tarjeta_login, "Contraseña", ancho=360)
+        self.entrada_clave.configure(show="•")
+        self.entrada_clave.grid(row=3, column=0, pady=6)
+        self.entrada_clave.bind("<Return>", lambda _e: self._ingresar_gestion())
+        boton_primario(tarjeta_login, "Ingresar", self._ingresar_gestion).grid(
+            row=4, column=0, pady=(18, 8)
+        )
+        self.lbl_login = etiqueta(tarjeta_login, "", 12, t("DANGER"))
+        self.lbl_login.grid(row=5, column=0, pady=(0, 12))
+        boton_secundario(tarjeta_login, "Volver al Portal", self._mostrar_portal).grid(
+            row=6, column=0, pady=(0, 24)
+        )
+        self.entrada_usuario.focus_set()
+
+    def _abrir_dashboard(self) -> None:
+        """Valida la cédula y despliega el tablero personal del empleado."""
+        cedula = self.entrada_cedula.get().strip()
+        if not cedula:
+            self.lbl_portal.configure(text="Ingrese su cédula o usuario.")
+            return
+        user = self.db.get_user_by_username(cedula)
+        if not user:
+            self.lbl_portal.configure(
+                text="Empleado no encontrado. Verifique su cédula."
+            )
+            return
+        for hijo in self.zona_empleado.winfo_children():
+            hijo.destroy()
+        self.dashboard_empleado = EmployeeDashboard(
+            self.zona_empleado, self.db, user, self._mostrar_portal
+        )
+        self.dashboard_empleado.grid(row=0, column=0, sticky="nsew")
 
     def _construir_tarjeta_reloj(self, master: ctk.CTkFrame) -> None:
         tarjeta_reloj = tarjeta(master)
         tarjeta_reloj.grid(row=0, column=0, sticky="ew", pady=(0, 24))
         tarjeta_reloj.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_reloj, "Recepción · Marque su asistencia", 13, MUTED).grid(
+        etiqueta(tarjeta_reloj, "Recepción · Marque su asistencia", 13, t("MUTED")).grid(
             row=0, column=0, pady=(18, 0)
         )
         self.lbl_hora = ctk.CTkLabel(
             tarjeta_reloj,
             text="--:--:--",
             font=(MONO, 76, "bold"),
-            text_color=TEXT,
+            text_color=t("TEXT"),
         )
         self.lbl_hora.grid(row=1, column=0, pady=(4, 0))
-        self.lbl_fecha = etiqueta(tarjeta_reloj, "", 16, MUTED)
+        self.lbl_fecha = etiqueta(tarjeta_reloj, "", 16, t("MUTED"))
         self.lbl_fecha.grid(row=2, column=0, pady=(0, 18))
 
     def _construir_tarjeta_marcacion(self, master: ctk.CTkFrame) -> None:
@@ -219,7 +514,7 @@ class MarcacionApp(ctk.CTk):
         self.tarjeta_marcacion.grid(row=1, column=0, sticky="ew", pady=(0, 24))
         self.tarjeta_marcacion.grid_columnconfigure(0, weight=1)
         etiqueta(
-            self.tarjeta_marcacion, "Ingrese su cédula o nombre de usuario", 16, TEXT
+            self.tarjeta_marcacion, "Ingrese su cédula o nombre de usuario", 16, t("TEXT")
         ).grid(row=0, column=0, pady=(22, 12))
         self.entrada_id = entrada(self.tarjeta_marcacion, "Ej. 1234567 o juan")
         self.entrada_id.grid(row=1, column=0, pady=(0, 16))
@@ -235,31 +530,31 @@ class MarcacionApp(ctk.CTk):
             text="Día de Lluvia Intensa · tolerancia climática 30 min (Res. 3028/2024)",
             variable=self.dia_lluvioso,
             font=(FONT, 12),
-            text_color=MUTED,
-            progress_color=PRIMARY,
-            fg_color=INPUT_BG,
+            text_color=t("MUTED"),
+            progress_color=t("PRIMARY"),
+            fg_color=t("INPUT_BG"),
         ).pack(side="left")
         etiqueta(
             self.tarjeta_marcacion,
             "El sistema detecta automáticamente si corresponde Entrada o Salida",
             12,
-            MUTED,
+            t("MUTED"),
         ).grid(row=4, column=0, pady=(0, 14))
-        self.lbl_estado = etiqueta(self.tarjeta_marcacion, "", 14, SUCCESS)
+        self.lbl_estado = etiqueta(self.tarjeta_marcacion, "", 14, t("SUCCESS"))
         self.lbl_estado.grid(row=5, column=0, pady=(0, 18))
 
     def _construir_tarjeta_ticket(self, master: ctk.CTkFrame) -> None:
         self.tarjeta_ticket = tarjeta(master)
         self.tarjeta_ticket.grid(row=2, column=0, sticky="ew")
         self.tarjeta_ticket.grid_columnconfigure(0, weight=1)
-        etiqueta(self.tarjeta_ticket, "Último comprobante criptográfico", 13, MUTED).grid(
+        etiqueta(self.tarjeta_ticket, "Último comprobante criptográfico", 13, t("MUTED")).grid(
             row=0, column=0, sticky="w", padx=20, pady=(16, 10)
         )
         self.ticket_box = ctk.CTkTextbox(
             self.tarjeta_ticket,
             font=(MONO, 12),
-            fg_color=INPUT_BG,
-            text_color=TEXT,
+            fg_color=t("INPUT_BG"),
+            text_color=t("TEXT"),
             corner_radius=12,
             height=150,
             wrap="word",
@@ -291,11 +586,11 @@ class MarcacionApp(ctk.CTk):
     def _marcar(self) -> None:
         username = self.entrada_id.get().strip()
         if not username:
-            self._mostrar_estado("Ingrese su cédula o usuario.", DANGER)
+            self._mostrar_estado("Ingrese su cédula o usuario.", t("DANGER"))
             return
         user = self.db.get_user_by_username(username)
         if not user:
-            self._mostrar_estado("Empleado no encontrado. Verifique su cédula.", DANGER)
+            self._mostrar_estado("Empleado no encontrado. Verifique su cédula.", t("DANGER"))
             return
         engine = ClockEngine(self.db, user)
         try:
@@ -303,14 +598,14 @@ class MarcacionApp(ctk.CTk):
                 es_dia_lluvioso=self.dia_lluvioso.get()
             )
         except ValueError as error:
-            self._mostrar_estado(str(error), DANGER)
+            self._mostrar_estado(str(error), t("DANGER"))
             return
         ticket = reports.comprobante_marcacion(entry_id, momento, tipo)
         self.ticket_box.delete("1.0", "end")
         self.ticket_box.insert("1.0", ticket)
         self.entrada_id.delete(0, "end")
         self._mostrar_estado(
-            f"{user['full_name']}: {tipo.lower()} registrada correctamente.", SUCCESS
+            f"{user['full_name']}: {tipo.lower()} registrada correctamente.", t("SUCCESS")
         )
         self._mostrar_panel_exito(tipo, ticket)
 
@@ -325,20 +620,20 @@ class MarcacionApp(ctk.CTk):
         self.panel_exito.grid(row=1, column=0, rowspan=2, sticky="nsew", padx=24, pady=(0, 24))
         self.panel_exito.grid_columnconfigure(0, weight=1)
         self.panel_exito.grid_rowconfigure(1, weight=1)
-        etiqueta(self.panel_exito, "✓", 54, SUCCESS, "bold").grid(
+        etiqueta(self.panel_exito, "✓", 54, t("SUCCESS"), "bold").grid(
             row=0, column=0, pady=(34, 0)
         )
-        etiqueta(self.panel_exito, f"¡{tipo} Registrada!", 24, TEXT, "bold").grid(
+        etiqueta(self.panel_exito, f"¡{tipo} Registrada!", 24, t("TEXT"), "bold").grid(
             row=1, column=0, pady=(6, 0)
         )
         etiqueta(
-            self.panel_exito, "Comprobante criptográfico · SHA-256", 12, MUTED
+            self.panel_exito, "Comprobante criptográfico · SHA-256", 12, t("MUTED")
         ).grid(row=2, column=0, pady=(2, 10))
         caja_ticket = ctk.CTkTextbox(
             self.panel_exito,
             font=(MONO, 11),
-            fg_color=INPUT_BG,
-            text_color=MUTED,
+            fg_color=t("INPUT_BG"),
+            text_color=t("MUTED"),
             corner_radius=12,
             height=110,
             wrap="word",
@@ -347,7 +642,7 @@ class MarcacionApp(ctk.CTk):
         caja_ticket.insert("1.0", ticket)
         caja_ticket.configure(state="disabled")
         etiqueta(
-            self.panel_exito, "Volviendo a recepción…", 11, MUTED
+            self.panel_exito, "Volviendo a recepción…", 11, t("MUTED")
         ).grid(row=4, column=0, pady=(0, 26))
         self.tarjeta_marcacion.grid_remove()
         self.tarjeta_ticket.grid_remove()
@@ -368,16 +663,22 @@ class MarcacionApp(ctk.CTk):
     # ------------------------------------------------------------------
     # Modo Gestión (RRHH/Administrador)
     # ------------------------------------------------------------------
-    def _abrir_login(self) -> None:
-        LoginModal(self, self.db, self._ingresar_gestion)
-
-    def _abrir_consulta_local(self) -> None:
-        ConsultaLocalModal(self, self.db)
-
-    def _ingresar_gestion(self, actor: Dict) -> None:
-        self.actor = actor
+    def _ingresar_gestion(self) -> None:
+        usuario = self.entrada_usuario.get().strip()
+        clave = self.entrada_clave.get()
+        user = auth.authenticate(self.db, usuario, clave)
+        if not user:
+            self.lbl_login.configure(text="Credenciales incorrectas.")
+            return
+        rol = auth.get_role_name(self.db, user)
+        if rol not in auth.ROLES_GESTION_USUARIOS:
+            self.lbl_login.configure(
+                text="Solo RRHH o Administrador pueden gestionar."
+            )
+            return
+        self.actor = user
         self.frame_publico.grid_forget()
-        self.panel_gestion = PanelGestion(self, self.db, actor, self._volver_publico)
+        self.panel_gestion = PanelGestion(self, self.db, user, self._volver_publico)
         self.panel_gestion.grid(row=0, column=0, sticky="nsew")
 
     def _volver_publico(self) -> None:
@@ -386,276 +687,204 @@ class MarcacionApp(ctk.CTk):
             self.panel_gestion = None
         self.actor = None
         self.frame_publico.grid(row=0, column=0, sticky="nsew")
+        self._mostrar_portal()
 
 
-class ConsultaLocalModal(ctk.CTkToplevel):
-    """Autoservicio local: historial por rango de fechas y aguinaldo.
+class EmployeeDashboard(ctk.CTkFrame):
+    """Tablero personal del empleado con tarjetas y gráfico mensual.
 
-    El empleado digita su cédula y elige el período con accesos rápidos
-    (Mes Actual, Últimos 3 Meses, Desde Enero) o los selectores manuales;
-    el botón "Hoy" fija ambos extremos en la fecha actual del equipo.
+    Muestra en un solo vistazo las vacaciones disponibles y usufructuadas
+    (Art. 23 Res. 3028/2024), el contador de permisos del mes (Art. 25),
+    las horas extra acumuladas y un gráfico de barras con las horas
+    ordinarias de cada marca del mes en curso.
     """
 
-    def __init__(self, master: MarcacionApp, db: Database) -> None:
-        super().__init__(master)
+    def __init__(
+        self,
+        master: ctk.CTkFrame,
+        db: Database,
+        user: Dict,
+        on_volver: Callable,
+    ) -> None:
+        super().__init__(master, fg_color="transparent")
         self.db = db
-        self.title("Consulta Local de Marcas")
-        self.geometry("600x740")
-        self.configure(fg_color=BG)
-        self.transient(master)
-        self.grab_set()
-        self.resizable(False, False)
+        self.user = user
+        self.on_volver = on_volver
+        self.resumen: Dict = {}
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
-        tarjeta_consulta = tarjeta(self)
-        tarjeta_consulta.pack(fill="both", expand=True, padx=20, pady=20)
-        etiqueta(tarjeta_consulta, "Consulta Local de Marcas", 20, TEXT, "bold").pack(
-            pady=(20, 4)
+        cabecera = tarjeta(self)
+        cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        cabecera.grid_columnconfigure(0, weight=1)
+        etiqueta(cabecera, f"Resumen de {user['full_name']}", 17, t("TEXT"), "bold").grid(
+            row=0, column=0, sticky="w", padx=20, pady=(14, 2)
         )
         etiqueta(
-            tarjeta_consulta, "Autoservicio del empleado en esta PC", 12, MUTED
-        ).pack(pady=(0, 16))
-
-        self.entrada_cedula = entrada(tarjeta_consulta, "Su cédula o usuario", ancho=420)
-        self.entrada_cedula.pack(pady=5)
-        fila_rango = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
-        fila_rango.pack(pady=5)
-        self.entrada_desde = entrada(fila_rango, "Desde · 1 de enero", ancho=200)
-        self.entrada_desde.insert(0, datetime.date(datetime.date.today().year, 1, 1).isoformat())
-        self.entrada_desde.pack(side="left", padx=(0, 6))
-        self.entrada_hasta = entrada(fila_rango, "Hasta · hoy", ancho=200)
-        self.entrada_hasta.insert(0, datetime.date.today().isoformat())
-        self.entrada_hasta.pack(side="left", padx=(6, 0))
-        fila_accesos = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
-        fila_accesos.pack(pady=(10, 0))
-        for texto, comando in (
-            ("Mes Actual", self._mes_actual),
-            ("Últimos 3 Meses", self._ultimos_3_meses),
-            ("Desde Enero", self._desde_enero),
-        ):
-            ctk.CTkButton(
-                fila_accesos,
-                text=texto,
-                command=comando,
-                fg_color=INPUT_BG,
-                hover_color=PRIMARY_HOVER,
-                text_color=MUTED,
-                font=(FONT, 12),
-                corner_radius=8,
-                width=130,
-                height=36,
-            ).pack(side="left", padx=4)
-        fila_botones = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
-        fila_botones.pack(pady=(10, 0))
-        boton_hoy = ctk.CTkButton(
-            fila_botones,
-            text="Hoy",
-            command=self._hoy,
-            fg_color=PRIMARY,
-            hover_color=PRIMARY_HOVER,
-            text_color="white",
-            font=(FONT, 14, "bold"),
-            corner_radius=10,
-            width=100,
-            height=44,
+            cabecera,
+            f"{user['username']} · {user.get('tipo_vinculo') or 'Funcionario'}",
+            12,
+            t("MUTED"),
+        ).grid(row=1, column=0, sticky="w", padx=20, pady=(0, 14))
+        boton_secundario(cabecera, "Volver", self.on_volver).grid(
+            row=0, column=1, rowspan=2, padx=16, sticky="e"
         )
-        boton_hoy.pack(side="left", padx=6)
-        boton_primario(fila_botones, "Consultar Historial", self._consultar).pack(
-            side="left", padx=6
+
+        self.area = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
+        self.area.grid(row=1, column=0, sticky="nsew")
+        self.area.grid_columnconfigure(0, weight=1)
+        self.area.grid_columnconfigure(1, weight=1)
+        self._refrescar()
+
+    def _refrescar(self) -> None:
+        """Recarga el resumen del empleado y reconstruye tarjetas y gráfico."""
+        for hijo in self.area.winfo_children():
+            hijo.destroy()
+        self.resumen = reports.resumen_empleado(self.db, self.user)
+
+        tarjeta_vacaciones = tarjeta(self.area)
+        tarjeta_vacaciones.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
+        vacaciones = self.resumen["vacaciones"]
+        etiqueta(tarjeta_vacaciones, "Vacaciones · Art. 23", 13, t("MUTED"), "bold").grid(
+            row=0, column=0, padx=18, pady=(16, 2)
         )
-        self.lbl_error = etiqueta(tarjeta_consulta, "", 12, DANGER)
-        self.lbl_error.pack(pady=(8, 4))
-        self.texto_resultado = ctk.CTkTextbox(
-            tarjeta_consulta,
-            font=(MONO, 12),
-            fg_color=INPUT_BG,
-            text_color=TEXT,
-            corner_radius=10,
-            height=280,
-            wrap="word",
+        etiqueta(
+            tarjeta_vacaciones,
+            f"{vacaciones['disponibles']:.0f} días disponibles",
+            22,
+            t("TEXT"),
+            "bold",
+        ).grid(row=1, column=0, padx=18, sticky="w")
+        etiqueta(
+            tarjeta_vacaciones,
+            f"Usufructuados {vacaciones['usadas']:.0f} de {vacaciones['devengadas']:.0f} devengados",
+            12,
+            t("MUTED"),
+        ).grid(row=2, column=0, padx=18, sticky="w", pady=(0, 16))
+
+        tarjeta_permisos = tarjeta(self.area)
+        tarjeta_permisos.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 12))
+        detalle = self.resumen["permisos_mes"]["detalle"]
+        texto_detalle = " · ".join(f"{tipo}: {cantidad}" for tipo, cantidad in detalle.items())
+        etiqueta(tarjeta_permisos, "Permisos del mes · Art. 25", 13, t("MUTED"), "bold").grid(
+            row=0, column=0, padx=18, pady=(16, 2)
         )
-        self.texto_resultado.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-        self.entrada_cedula.focus_set()
-        self.attributes("-alpha", 0.0)
-        self.after(10, lambda: self._desvanecer(0))
+        etiqueta(
+            tarjeta_permisos,
+            f"{self.resumen['permisos_mes']['total']} permisos utilizados",
+            22,
+            t("TEXT"),
+            "bold",
+        ).grid(row=1, column=0, padx=18, sticky="w")
+        etiqueta(
+            tarjeta_permisos,
+            texto_detalle or "Sin permisos en el mes en curso",
+            12,
+            t("MUTED"),
+        ).grid(row=2, column=0, padx=18, sticky="w", pady=(0, 16))
 
-    def _desvanecer(self, paso: int) -> None:
-        """Anima la entrada del modal con una transición suave de opacidad."""
-        self.attributes("-alpha", min(1.0, 0.3 + paso * 0.14))
-        if paso < 5:
-            self.after(22, lambda: self._desvanecer(paso + 1))
+        tarjeta_extras = tarjeta(self.area)
+        tarjeta_extras.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(0, 12))
+        extras = self.resumen["extras_mes"]
+        etiqueta(
+            tarjeta_extras,
+            f"Horas extra del mes · Ley 213: 50% {extras['horas_50']} h · "
+            f"100% {extras['horas_100']} h · {len(self.resumen['marcas_mes']['dias'])} marcas",
+            13,
+            t("TEXT"),
+            "bold",
+        ).grid(row=0, column=0, padx=18, pady=(14, 4))
 
-    def _hoy(self) -> None:
-        """Captura la fecha actual del sistema en ambos extremos y consulta."""
-        hoy = datetime.date.today().isoformat()
-        self.entrada_desde.delete(0, "end")
-        self.entrada_desde.insert(0, hoy)
-        self.entrada_hasta.delete(0, "end")
-        self.entrada_hasta.insert(0, hoy)
-        self._consultar()
+        self._construir_grafico(tarjeta_extras)
 
-    def _aplicar_rango(self, desde: datetime.date) -> None:
-        """Autocompleta el rango hasta hoy y refresca la consulta al instante."""
-        self.entrada_desde.delete(0, "end")
-        self.entrada_desde.insert(0, desde.isoformat())
-        self.entrada_hasta.delete(0, "end")
-        self.entrada_hasta.insert(0, datetime.date.today().isoformat())
-        self._consultar()
+        permisos = self.resumen["permisos"]
+        if permisos:
+            etiqueta(self.area, "Permisos aprobados · descargue el PDF oficial", 13, t("MUTED")).grid(
+                row=2, column=0, columnspan=2, sticky="w", pady=(4, 6)
+            )
+            for permiso in permisos:
+                fila = ctk.CTkFrame(self.area, fg_color=t("INPUT_BG"), corner_radius=10)
+                fila.grid(row=3, column=0, columnspan=2, sticky="ew", pady=3)
+                fila.grid_columnconfigure(0, weight=1)
+                etiqueta(
+                    fila,
+                    f"#{permiso['id']} · {permiso['tipo']} · "
+                    f"{permiso['inicio']} al {permiso['fin']} · aprobó {permiso['aprobador']}",
+                    12,
+                ).grid(row=0, column=0, sticky="w", padx=14, pady=10)
+                boton_pdf = ctk.CTkButton(
+                    fila,
+                    text="Descargar PDF",
+                    width=120,
+                    height=32,
+                    font=(FONT, 12),
+                    fg_color=t("PRIMARY"),
+                    hover_color=t("PRIMARY_HOVER"),
+                    corner_radius=8,
+                    command=partial(self._descargar_pdf, permiso["id"]),
+                )
+                boton_pdf._rol = "primario"
+                boton_pdf.grid(row=0, column=1, padx=(0, 10))
+        else:
+            etiqueta(self.area, "Sin permisos aprobados todavía", 12, t("MUTED")).grid(
+                row=2, column=0, columnspan=2, pady=(8, 4)
+            )
 
-    def _mes_actual(self) -> None:
-        """Rango del primer día del mes en curso hasta hoy."""
-        hoy = datetime.date.today()
-        self._aplicar_rango(datetime.date(hoy.year, hoy.month, 1))
-
-    def _ultimos_3_meses(self) -> None:
-        """Rango de los últimos tres meses (recortado a enero si cruza el año)."""
-        hoy = datetime.date.today()
-        mes_inicio = hoy.month - 2
-        anio_inicio = hoy.year
-        if mes_inicio < 1:
-            mes_inicio += 12
-            anio_inicio -= 1
-        if anio_inicio < hoy.year:
-            self._aplicar_rango(datetime.date(hoy.year, 1, 1))
-            return
-        self._aplicar_rango(datetime.date(anio_inicio, mes_inicio, 1))
-
-    def _desde_enero(self) -> None:
-        """Rango desde el 1 de enero del año en curso hasta hoy."""
-        hoy = datetime.date.today()
-        self._aplicar_rango(datetime.date(hoy.year, 1, 1))
-
-    def _consultar(self) -> None:
-        cedula = self.entrada_cedula.get().strip()
-        if not cedula:
-            self.lbl_error.configure(text="Ingrese su cédula o usuario.")
-            return
-        user = self.db.get_user_by_username(cedula)
-        if not user:
-            self.lbl_error.configure(text="Empleado no encontrado. Verifique su cédula.")
-            return
-        try:
-            desde = datetime.date.fromisoformat(self.entrada_desde.get().strip())
-            hasta = datetime.date.fromisoformat(self.entrada_hasta.get().strip())
-        except ValueError:
-            self.lbl_error.configure(text="Fechas inválidas. Use el formato AAAA-MM-DD.")
-            return
-        hoy = datetime.date.today()
-        inicio_anio = datetime.date(hoy.year, 1, 1)
-        if desde < inicio_anio:
-            self.lbl_error.configure(text="El rango inicia en enero del año en curso.")
-            return
-        if hasta > hoy:
-            self.lbl_error.configure(text="La fecha hasta no puede superar el día de hoy.")
-            return
-        if hasta < desde:
-            self.lbl_error.configure(text="La fecha hasta no puede ser anterior a la de desde.")
-            return
-        try:
-            resumen = reports.resumen_historico(self.db, user, desde, hasta)
-        except ValueError as error:
-            self.lbl_error.configure(text=str(error))
-            return
-        self.lbl_error.configure(text="")
-        self.texto_resultado.delete("1.0", "end")
-        self.texto_resultado.insert("1.0", self._formatear(resumen))
+    def _construir_grafico(self, master: ctk.CTkFrame) -> None:
+        """Dibuja las horas ordinarias de cada marca del mes en curso."""
+        figura = Figure(figsize=(5.8, 2.4), facecolor=t("CARD"))
+        figura.subplots_adjust(left=0.06, right=0.97, top=0.9, bottom=0.28)
+        eje = figura.add_subplot(111)
+        eje.set_facecolor(t("CARD"))
+        eje.grid(True, color=t("CARD_BORDER"), alpha=0.5, linestyle="--", linewidth=0.8)
+        for borde in ("top", "right"):
+            eje.spines[borde].set_visible(False)
+        for borde in ("left", "bottom"):
+            eje.spines[borde].set_color(t("CARD_BORDER"))
+        dias = self.resumen["marcas_mes"]["dias"]
+        horas = self.resumen["marcas_mes"]["ordinarias"]
+        if not horas:
+            eje.text(
+                0.5, 0.5, "Sin marcas en el mes en curso",
+                ha="center", va="center", color=t("MUTED"), fontsize=11,
+                transform=eje.transAxes,
+            )
+        else:
+            eje.bar(dias, horas, color=t("PRIMARY"), width=0.6, edgecolor=t("CARD_BORDER"))
+            eje.set_xticks(dias)
+            eje.set_xticklabels(dias, fontsize=8)
+            eje.tick_params(colors=t("MUTED"), labelsize=8)
+            eje.set_ylabel("Horas", fontsize=9, color=t("MUTED"))
+        lienzo = FigureCanvasTkAgg(figura, master=master)
+        lienzo.draw()
+        lienzo.get_tk_widget().grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 12))
 
     @staticmethod
-    def _formatear(resumen: Dict) -> str:
-        """Convierte el histórico JSON en el reporte legible del modal."""
-        def gs(valor: float) -> str:
-            return f"Gs. {int(round(valor)):,}".replace(",", ".")
-
-        lineas = [
-            f"{resumen['nombre']} · {resumen['desde']} → {resumen['hasta']}",
-            "=" * 44,
-            "HISTORIAL DE MARCAS",
-        ]
-        if not resumen["marcas"]:
-            lineas.append("  Sin marcas registradas en el período.")
-        for marca in resumen["marcas"]:
-            estado = marca["salida"] or "en curso"
-            sufijo = f" [{marca['incidencia']}]" if marca["incidencia"] else ""
-            sufijo += " [Feriado]" if marca["feriado"] else ""
-            lineas.append(f"  {marca['fecha']} {marca['entrada']} → {estado}{sufijo}")
-            lineas.append(
-                f"    Ordinarias {marca['ordinarias']} | Extra 50% {marca['extra_50']} "
-                f"| Extra 100% {marca['extra_100']}"
-            )
-        extras = resumen["extras_periodo"]
-        aguinaldo = resumen["aguinaldo_periodo"]
-        lineas.extend(
-            [
-                "HORAS EXTRA DEL PERÍODO",
-                f"  Recargo 50%: {extras['texto_50']} ({extras['horas_50']:.2f} h)",
-                f"  Recargo 100%: {extras['texto_100']} ({extras['horas_100']:.2f} h)",
-                "AGUINALDO DEVENGADO (Ley 6380/2019)",
-                f"  Meses del período: {aguinaldo['meses_periodo']}",
-                f"  Valor horas extra: {gs(aguinaldo['valor_extras'])}",
-                f"  TOTAL: {gs(aguinaldo['aguinaldo'])}",
-            ]
-        )
-        return "\n".join(lineas)
-
-
-class LoginModal(ctk.CTkToplevel):
-    """Modal flotante de credenciales para el acceso de gestión."""
-
-    def __init__(
-        self, master: MarcacionApp, db: Database, on_success: Callable[[Dict], None]
-    ) -> None:
-        super().__init__(master)
-        self.db = db
-        self.on_success = on_success
-        self.title("Acceso de Gestión")
-        self.geometry("420x380")
-        self.configure(fg_color=BG)
-        self.transient(master)
-        self.grab_set()
-        self.resizable(False, False)
-
-        tarjeta_login = tarjeta(self)
-        tarjeta_login.pack(fill="both", expand=True, padx=24, pady=24)
-        etiqueta(tarjeta_login, "Acceso de Gestión", 22, TEXT, "bold").pack(
-            pady=(26, 4)
-        )
-        etiqueta(tarjeta_login, "Solo Recursos Humanos o Administrador", 13, MUTED).pack(
-            pady=(0, 22)
-        )
-        self.entrada_usuario = entrada(tarjeta_login, "Usuario")
-        self.entrada_usuario.pack(pady=6)
-        self.entrada_clave = entrada(tarjeta_login, "Contraseña")
-        self.entrada_clave.configure(show="•")
-        self.entrada_clave.pack(pady=6)
-        boton_primario(tarjeta_login, "Ingresar", self._ingresar).pack(pady=(18, 8))
-        self.lbl_error = etiqueta(tarjeta_login, "", 13, DANGER)
-        self.lbl_error.pack(pady=(0, 20))
-        self.bind("<Return>", lambda _e: self._ingresar())
-        self.entrada_usuario.focus_set()
-
-    def _ingresar(self) -> None:
-        usuario = self.entrada_usuario.get().strip()
-        clave = self.entrada_clave.get()
-        user = auth.authenticate(self.db, usuario, clave)
-        if not user:
-            self.lbl_error.configure(text="Credenciales incorrectas.")
+    def _descargar_pdf(solicitud_id: int) -> None:
+        """Genera el PDF oficial del permiso y lo abre para su impresión."""
+        import os
+        try:
+            ruta = reports.generar_pdf_permiso(solicitud_id)
+        except ValueError as error:
+            print(f"PDF no disponible: {error}")
             return
-        rol = auth.get_role_name(self.db, user)
-        if rol not in auth.ROLES_GESTION_USUARIOS:
-            self.lbl_error.configure(text="Solo RRHH o Administrador pueden gestionar.")
-            return
-        self.destroy()
-        self.on_success(user)
-
+        os.startfile(ruta)
 
 class PanelGestion(ctk.CTkFrame):
-    """Panel protegido de RRHH/Administrador con navegación lateral minimalista."""
+    """Entorno administrativo de dos columnas con accesos directos grandes.
+
+    La columna izquierda concentra los botones de navegación de acceso
+    rápido; la derecha despliega el panel elegido en línea, sin ventanas
+    emergentes. La sección de Auditoría expone el log JSONB completo.
+    """
 
     SECCIONES: List[tuple] = [
-        ("▦  Personal", "Gestión de Personal"),
-        ("✦  Justificaciones", "Justificaciones y Permisos"),
-        ("▤  Reportes", "Centro de Reportes"),
-        ("✎  Correcciones", "Solicitudes de Corrección"),
-        ("◉  Analítica", "Dashboard Analítico"),
+        ("▦", "Personal", "Gestión de Personal"),
+        ("✦", "Justificaciones", "Permisos y PDFs"),
+        ("▤", "Reportes", "Centro de Reportes"),
+        ("✎", "Correcciones", "Solicitudes de Corrección"),
+        ("◉", "Analítica", "Dashboard Analítico"),
+        ("◈", "Auditoría", "Log JSONB de Auditoría"),
     ]
 
     def __init__(
@@ -670,39 +899,43 @@ class PanelGestion(ctk.CTkFrame):
 
         self._construir_sidebar()
         self._construir_contenido()
+        master.registrar_refresco_tema(self.dashboard_tab._refrescar)
+        master.registrar_refresco_tema(self.auditoria_tab._refrescar)
         self._seleccionar(0)
 
     def _construir_sidebar(self) -> None:
         sidebar = tarjeta(self)
         sidebar.grid(row=0, column=0, sticky="nsew", padx=(24, 12), pady=24)
         sidebar.grid_columnconfigure(0, weight=1)
-        etiqueta(sidebar, "Panel de Gestión", 17, TEXT, "bold").grid(
+        etiqueta(sidebar, "Panel de Gestión", 18, t("TEXT"), "bold").grid(
             row=0, column=0, sticky="w", padx=16, pady=(18, 2)
         )
         etiqueta(
             sidebar,
             f"{self.actor['full_name']}\n{auth.get_role_name(self.db, self.actor)}",
             11,
-            MUTED,
-        ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 16))
+            t("MUTED"),
+        ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 14))
+        interruptor_tema(sidebar, self.master).grid(row=2, column=0, sticky="w", padx=16)
         self.botones_seccion: List[ctk.CTkButton] = []
-        for indice, (icono, titulo) in enumerate(self.SECCIONES):
+        for indice, (icono, titulo, detalle) in enumerate(self.SECCIONES):
             boton = ctk.CTkButton(
                 sidebar,
-                text=f"{icono}  {titulo}",
+                text=f"{icono}   {titulo}",
                 command=lambda i=indice: self._seleccionar(i),
                 fg_color="transparent",
-                hover_color=INPUT_BG,
-                text_color=MUTED,
-                font=(FONT, 13),
-                corner_radius=8,
-                height=42,
+                hover_color=t("INPUT_BG"),
+                text_color=t("MUTED"),
+                font=(FONT, 14, "bold"),
+                corner_radius=12,
+                height=54,
                 anchor="w",
             )
-            boton.grid(row=2 + indice, column=0, sticky="ew", padx=10, pady=3)
+            boton.grid(row=3 + indice, column=0, sticky="ew", padx=10, pady=3)
+            boton._rol = "plano"
             self.botones_seccion.append(boton)
         boton_secundario(sidebar, "Volver a Marcación", self.on_cerrar).grid(
-            row=8, column=0, sticky="ew", padx=10, pady=(16, 14)
+            row=10, column=0, sticky="ew", padx=10, pady=(18, 14)
         )
 
     def _construir_contenido(self) -> None:
@@ -718,12 +951,14 @@ class PanelGestion(ctk.CTkFrame):
         self.reportes_tab = ReportesTab(contenido, self.db, self.actor)
         self.correcciones_tab = CorreccionesTab(contenido, self.db, self.actor)
         self.dashboard_tab = DashboardTab(contenido, self.db)
+        self.auditoria_tab = AuditoriaTab(contenido, self.db)
         self.pestanas = [
             self.personal_tab,
             self.justificaciones_tab,
             self.reportes_tab,
             self.correcciones_tab,
             self.dashboard_tab,
+            self.auditoria_tab,
         ]
         for pestana in self.pestanas:
             pestana.grid(row=0, column=0, sticky="nsew")
@@ -737,13 +972,68 @@ class PanelGestion(ctk.CTkFrame):
         for posicion, boton in enumerate(self.botones_seccion):
             seleccionado = posicion == indice
             boton.configure(
-                fg_color=PRIMARY if seleccionado else "transparent",
-                text_color="white" if seleccionado else MUTED,
-                hover_color=PRIMARY_HOVER if seleccionado else INPUT_BG,
+                fg_color=t("PRIMARY") if seleccionado else "transparent",
+                text_color="white" if seleccionado else t("MUTED"),
+                hover_color=t("PRIMARY_HOVER") if seleccionado else t("INPUT_BG"),
             )
 
     def _refrescar_empleados(self) -> None:
         self.justificaciones_tab.refrescar_empleados()
+
+
+class AuditoriaTab(ctk.CTkFrame):
+    """Bitácora de auditoría JSONB con los snapshots anterior y nuevo."""
+
+    def __init__(self, master, db: Database) -> None:
+        super().__init__(master, fg_color="transparent")
+        self.db = db
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        cabecera = tarjeta(self)
+        cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        cabecera.grid_columnconfigure(0, weight=1)
+        etiqueta(cabecera, "Log de Auditoría · JSONB", 16, t("TEXT"), "bold").grid(
+            row=0, column=0, sticky="w", padx=20, pady=(14, 2)
+        )
+        etiqueta(
+            cabecera,
+            "Eventos de RRHH/Admin con los valores anteriores y posteriores",
+            12,
+            t("MUTED"),
+        ).grid(row=1, column=0, sticky="w", padx=20, pady=(0, 14))
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
+        self.scroll.grid(row=1, column=0, sticky="nsew")
+        self._refrescar()
+
+    def _refrescar(self) -> None:
+        """Reconstruye la bitácora con los últimos 60 eventos registrados."""
+        for hijo in self.scroll.winfo_children():
+            hijo.destroy()
+        eventos = self.db.listar_auditoria()
+        if not eventos:
+            etiqueta(self.scroll, "Sin eventos de auditoría todavía.", 13, t("MUTED")).pack(pady=20)
+            return
+        for evento in eventos:
+            fila = tarjeta(self.scroll)
+            fila.pack(fill="x", pady=5)
+            fila.grid_columnconfigure(0, weight=1)
+            etiqueta(
+                fila,
+                f"{evento['creado_en'].strftime('%d/%m/%Y %H:%M')} · {evento['accion']} · "
+                f"tabla {evento['tabla']} #{evento['registro_id']} · {evento['full_name']}",
+                13,
+                t("TEXT"),
+                "bold",
+            ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 2))
+            detalle = (
+                f"Anterior: {evento['valores_anteriores']} | "
+                f"Nuevo: {evento['valores_nuevos']}"
+            )
+            etiqueta(fila, detalle, 11, t("MUTED")).grid(
+                row=1, column=0, sticky="w", padx=14, pady=(0, 10)
+            )
 
 
 class CorreccionesTab(ctk.CTkFrame):
@@ -763,14 +1053,14 @@ class CorreccionesTab(ctk.CTkFrame):
             cabecera,
             "Reclamos de marcación fallida enviados desde la web",
             15,
-            TEXT,
+            t("TEXT"),
             "bold",
         ).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 4))
         etiqueta(
             cabecera,
             "Al aprobar, el marcaje se corrige en PostgreSQL y queda trazado en la auditoría",
             12,
-            MUTED,
+            t("MUTED"),
         ).grid(row=1, column=0, sticky="w", padx=20)
         boton_refrescar = ctk.CTkButton(
             cabecera,
@@ -779,12 +1069,12 @@ class CorreccionesTab(ctk.CTkFrame):
             width=100,
             height=32,
             font=(FONT, 12),
-            fg_color=PRIMARY,
-            hover_color=PRIMARY_HOVER,
+            fg_color=t("PRIMARY"),
+            hover_color=t("PRIMARY_HOVER"),
             corner_radius=8,
         )
         boton_refrescar.grid(row=0, column=1, rowspan=2, padx=16, sticky="e")
-        self.lbl_resultado = etiqueta(cabecera, "", 12, SUCCESS)
+        self.lbl_resultado = etiqueta(cabecera, "", 12, t("SUCCESS"))
         self.lbl_resultado.grid(row=2, column=0, columnspan=2, sticky="w", padx=20, pady=(2, 12))
 
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
@@ -796,7 +1086,7 @@ class CorreccionesTab(ctk.CTkFrame):
             hijo.destroy()
         solicitudes = self.db.listar_solicitudes_correccion()
         if not solicitudes:
-            etiqueta(self.scroll, "No hay solicitudes de corrección.", 13, MUTED).pack(pady=20)
+            etiqueta(self.scroll, "No hay solicitudes de corrección.", 13, t("MUTED")).pack(pady=20)
             return
         for solicitud in solicitudes:
             fila = tarjeta(self.scroll)
@@ -807,7 +1097,7 @@ class CorreccionesTab(ctk.CTkFrame):
                 f"#{solicitud['id']} · {solicitud['full_name']} ({solicitud['username']}) "
                 f"· {solicitud['fecha_registro']}",
                 14,
-                TEXT,
+                t("TEXT"),
                 "bold",
             ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 2))
             estado = solicitud["estado"]
@@ -817,9 +1107,9 @@ class CorreccionesTab(ctk.CTkFrame):
                 fila,
                 f"{solicitud['tipo_marca']} a las {solicitud['hora_propuesta']} · {estado}",
                 12,
-                MUTED,
+                t("MUTED"),
             ).grid(row=1, column=0, sticky="w", padx=14)
-            etiqueta(fila, f"Motivo: {solicitud['motivo']}", 12, TEXT).grid(
+            etiqueta(fila, f"Motivo: {solicitud['motivo']}", 12, t("TEXT")).grid(
                 row=2, column=0, sticky="w", padx=14, pady=(2, 10)
             )
             if solicitud["estado"] == "Pendiente":
@@ -829,7 +1119,7 @@ class CorreccionesTab(ctk.CTkFrame):
                     width=90,
                     height=32,
                     font=(FONT, 12),
-                    fg_color=SUCCESS,
+                    fg_color=t("SUCCESS"),
                     hover_color="#3BBF6B",
                     text_color="#0B1F14",
                     corner_radius=8,
@@ -843,10 +1133,10 @@ class CorreccionesTab(ctk.CTkFrame):
                     height=32,
                     font=(FONT, 12),
                     fg_color="transparent",
-                    hover_color=DANGER,
+                    hover_color=t("DANGER"),
                     border_width=1,
-                    border_color=DANGER,
-                    text_color=DANGER,
+                    border_color=t("DANGER"),
+                    text_color=t("DANGER"),
                     corner_radius=8,
                     command=partial(self._resolver, solicitud["id"], False),
                 )
@@ -858,11 +1148,11 @@ class CorreccionesTab(ctk.CTkFrame):
                 self.db, self.actor, solicitud_id, aprobar
             )
         except ValueError as error:
-            self.lbl_resultado.configure(text=str(error), text_color=DANGER)
+            self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
             return
         self.lbl_resultado.configure(
             text=f"Solicitud #{solicitud_id} {estado.lower()} con auditoría.",
-            text_color=SUCCESS,
+            text_color=t("SUCCESS"),
         )
         self._refrescar()
 
@@ -881,10 +1171,10 @@ class DashboardTab(ctk.CTkFrame):
         cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         cabecera.grid_columnconfigure(0, weight=1)
         etiqueta(
-            cabecera, "Dashboard Analítico de Recursos Humanos", 16, TEXT, "bold"
+            cabecera, "Dashboard Analítico de Recursos Humanos", 16, t("TEXT"), "bold"
         ).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 2))
         self.lbl_actualizado = etiqueta(
-            cabecera, "Cargando métricas…", 12, MUTED
+            cabecera, "Cargando métricas…", 12, t("MUTED")
         )
         self.lbl_actualizado.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 14))
         ctk.CTkButton(
@@ -894,8 +1184,8 @@ class DashboardTab(ctk.CTkFrame):
             width=110,
             height=34,
             font=(FONT, 12),
-            fg_color=PRIMARY,
-            hover_color=PRIMARY_HOVER,
+            fg_color=t("PRIMARY"),
+            hover_color=t("PRIMARY_HOVER"),
             corner_radius=8,
         ).grid(row=0, column=1, rowspan=2, padx=16, sticky="e")
 
@@ -929,7 +1219,7 @@ class DashboardTab(ctk.CTkFrame):
             tarjeta_aguinaldo,
             "AGUINALDO PROPORCIONAL ESTIMADO · LEY N.º 6380/2019",
             13,
-            MUTED,
+            t("MUTED"),
             "bold",
         ).grid(row=0, column=0, sticky="w", padx=24, pady=(18, 2))
         total = self.aguinaldo["total_acumulado_g"]
@@ -938,7 +1228,7 @@ class DashboardTab(ctk.CTkFrame):
             tarjeta_aguinaldo,
             f"Gs. {total:,}".replace(",", "."),
             38,
-            TEXT,
+            t("TEXT"),
             "bold",
         ).grid(row=1, column=0, sticky="w", padx=24, pady=(2, 0))
         etiqueta(
@@ -953,7 +1243,7 @@ class DashboardTab(ctk.CTkFrame):
             f"{self.aguinaldo['meses_transcurridos']} meses devengados · "
             f"Proyección anual Gs. {self.aguinaldo['total_anual_g']:,}".replace(",", ".")
         )
-        etiqueta(tarjeta_aguinaldo, resumen, 13, MUTED).grid(
+        etiqueta(tarjeta_aguinaldo, resumen, 13, t("MUTED")).grid(
             row=3, column=0, sticky="w", padx=24, pady=(0, 6)
         )
         partes = [
@@ -961,18 +1251,18 @@ class DashboardTab(ctk.CTkFrame):
             for dep, datos in self.aguinaldo["por_departamento"].items()
         ]
         if partes:
-            etiqueta(tarjeta_aguinaldo, " · ".join(partes), 12, MUTED).grid(
+            etiqueta(tarjeta_aguinaldo, " · ".join(partes), 12, t("MUTED")).grid(
                 row=4, column=0, sticky="w", padx=24, pady=(0, 18)
             )
 
     def _crear_figura(self, ancho: float, alto: float) -> Figure:
-        return Figure(figsize=(ancho, alto), facecolor=BG)
+        return Figure(figsize=(ancho, alto), facecolor=t("BG"))
 
     def _ajustar_figura(self, figura: Figure) -> None:
         figura.subplots_adjust(left=0.14, right=0.96, top=0.9, bottom=0.16)
 
     def _estilizar_ejes(self, eje) -> None:
-        eje.set_facecolor(BG)
+        eje.set_facecolor(t("BG"))
         eje.grid(True, color="#34343B", alpha=0.35, linestyle="--", linewidth=0.8)
         for borde in ("top", "right"):
             eje.spines[borde].set_visible(False)
@@ -988,7 +1278,7 @@ class DashboardTab(ctk.CTkFrame):
             tarjeta_grafico,
             "Llegadas Tardías por Día · Mes en Curso",
             14,
-            TEXT,
+            t("TEXT"),
             "bold",
         ).pack(anchor="w", padx=16, pady=(14, 0))
         figura = self._crear_figura(5.4, 3.2)
@@ -1000,23 +1290,23 @@ class DashboardTab(ctk.CTkFrame):
         if not cantidades or max(cantidades) == 0:
             eje.text(
                 0.5, 0.5, "Sin llegadas tardías registradas en el mes",
-                ha="center", va="center", color=MUTED, fontsize=12,
+                ha="center", va="center", color=t("MUTED"), fontsize=12,
                 transform=eje.transAxes,
             )
         else:
             eje.plot(
-                dias, cantidades, color=PRIMARY, linewidth=2.5,
-                marker="o", markersize=5, markerfacecolor=TEXT,
+                dias, cantidades, color=t("PRIMARY"), linewidth=2.5,
+                marker="o", markersize=5, markerfacecolor=t("TEXT"),
             )
-            eje.fill_between(dias, cantidades, color=PRIMARY, alpha=0.12)
+            eje.fill_between(dias, cantidades, color=t("PRIMARY"), alpha=0.12)
             pico = max(cantidades)
             if pico > 0:
                 dia_pico = dias[cantidades.index(pico)]
-                eje.scatter([dia_pico], [pico], s=90, color=DANGER, zorder=5)
+                eje.scatter([dia_pico], [pico], s=90, color=t("DANGER"), zorder=5)
                 eje.annotate(
                     f"Pico: {pico}",
                     xy=(dia_pico, pico), xytext=(6, 12),
-                    textcoords="offset points", color=DANGER, fontsize=10, fontweight="bold",
+                    textcoords="offset points", color=t("DANGER"), fontsize=10, fontweight="bold",
                 )
             eje.set_xlabel("Día del mes", fontsize=10)
             eje.set_ylabel("Cantidad de tardanzas", fontsize=10)
@@ -1035,7 +1325,7 @@ class DashboardTab(ctk.CTkFrame):
             tarjeta_grafico,
             "Horas Extra 50% vs 100% por Departamento",
             14,
-            TEXT,
+            t("TEXT"),
             "bold",
         ).pack(anchor="w", padx=16, pady=(14, 0))
         figura = self._crear_figura(5.4, 3.2)
@@ -1046,7 +1336,7 @@ class DashboardTab(ctk.CTkFrame):
         if not departamentos:
             eje.text(
                 0.5, 0.5, "Sin horas extra acumuladas todavía",
-                ha="center", va="center", color=MUTED, fontsize=12,
+                ha="center", va="center", color=t("MUTED"), fontsize=12,
                 transform=eje.transAxes,
             )
         else:
@@ -1055,7 +1345,7 @@ class DashboardTab(ctk.CTkFrame):
             eje.bar(
                 [p - ancho_barra / 2 for p in posiciones],
                 [e["horas_50"] for e in self.extras],
-                width=ancho_barra, color=PRIMARY, label="Recargo 50%",
+                width=ancho_barra, color=t("PRIMARY"), label="Recargo 50%",
                 edgecolor="#26262C",
             )
             eje.bar(
@@ -1068,12 +1358,12 @@ class DashboardTab(ctk.CTkFrame):
                 eje.text(
                     indice - ancho_barra / 2, extra["horas_50"] + 0.3,
                     f"{extra['horas_50']:.1f}", ha="center", va="bottom",
-                    color=TEXT, fontsize=9,
+                    color=t("TEXT"), fontsize=9,
                 )
                 eje.text(
                     indice + ancho_barra / 2, extra["horas_100"] + 0.3,
                     f"{extra['horas_100']:.1f}", ha="center", va="bottom",
-                    color=TEXT, fontsize=9,
+                    color=t("TEXT"), fontsize=9,
                 )
             eje.set_xticks(list(posiciones))
             eje.set_xticklabels(departamentos, fontsize=8)
@@ -1086,7 +1376,7 @@ class DashboardTab(ctk.CTkFrame):
 
 
 class PersonalTab(ctk.CTkFrame):
-    """Formulario de alta de personal y listado con edición/eliminación."""
+    """Alta de personal y listado con edición inline (sin ventanas emergentes)."""
 
     def __init__(
         self, master, db: Database, actor: Dict, on_cambio: Callable
@@ -1095,6 +1385,7 @@ class PersonalTab(ctk.CTkFrame):
         self.db = db
         self.actor = actor
         self.on_cambio = on_cambio
+        self.editando: Optional[Dict] = None
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=2)
         self.grid_rowconfigure(0, weight=1)
@@ -1105,7 +1396,7 @@ class PersonalTab(ctk.CTkFrame):
     def _construir_formulario(self) -> None:
         formulario = tarjeta(self)
         formulario.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        etiqueta(formulario, "Agregar empleado", 17, TEXT, "bold").pack(
+        etiqueta(formulario, "Agregar empleado", 17, t("TEXT"), "bold").pack(
             anchor="w", padx=20, pady=(18, 14)
         )
         self.ent_usuario = entrada(formulario, "Usuario / cédula", ancho=280)
@@ -1116,12 +1407,12 @@ class PersonalTab(ctk.CTkFrame):
             formulario,
             values=[r["nombre"] for r in self.db.list_roles()],
             font=(FONT, 14),
-            fg_color=INPUT_BG,
-            button_color=PRIMARY,
-            button_hover_color=PRIMARY_HOVER,
-            text_color=TEXT,
-            dropdown_fg_color=INPUT_BG,
-            dropdown_hover_color=PRIMARY,
+            fg_color=t("INPUT_BG"),
+            button_color=t("PRIMARY"),
+            button_hover_color=t("PRIMARY_HOVER"),
+            text_color=t("TEXT"),
+            dropdown_fg_color=t("INPUT_BG"),
+            dropdown_hover_color=t("PRIMARY"),
             width=280,
             height=40,
         )
@@ -1130,12 +1421,12 @@ class PersonalTab(ctk.CTkFrame):
             formulario,
             values=list(auth.TIPOS_VINCULO),
             font=(FONT, 14),
-            fg_color=INPUT_BG,
-            button_color=PRIMARY,
-            button_hover_color=PRIMARY_HOVER,
-            text_color=TEXT,
-            dropdown_fg_color=INPUT_BG,
-            dropdown_hover_color=PRIMARY,
+            fg_color=t("INPUT_BG"),
+            button_color=t("PRIMARY"),
+            button_hover_color=t("PRIMARY_HOVER"),
+            text_color=t("TEXT"),
+            dropdown_fg_color=t("INPUT_BG"),
+            dropdown_hover_color=t("PRIMARY"),
             width=280,
             height=40,
         )
@@ -1149,7 +1440,7 @@ class PersonalTab(ctk.CTkFrame):
         boton_primario(formulario, "Agregar Empleado", self._agregar).pack(
             pady=(16, 6)
         )
-        self.lbl_resultado = etiqueta(formulario, "", 12, SUCCESS)
+        self.lbl_resultado = etiqueta(formulario, "", 12, t("SUCCESS"))
         self.lbl_resultado.pack(pady=(0, 16))
 
     def _construir_listado(self) -> None:
@@ -1157,7 +1448,7 @@ class PersonalTab(ctk.CTkFrame):
         listado.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
         listado.grid_columnconfigure(0, weight=1)
         listado.grid_rowconfigure(1, weight=1)
-        etiqueta(listado, "Personal registrado", 17, TEXT, "bold").grid(
+        etiqueta(listado, "Personal registrado", 17, t("TEXT"), "bold").grid(
             row=0, column=0, sticky="w", padx=20, pady=(18, 12)
         )
         self.scroll = ctk.CTkScrollableFrame(
@@ -1171,7 +1462,7 @@ class PersonalTab(ctk.CTkFrame):
             hijo.destroy()
         for usuario in self.db.list_users():
             vinculo = usuario.get("tipo_vinculo") or "Funcionario"
-            fila = ctk.CTkFrame(self.scroll, fg_color=INPUT_BG, corner_radius=10)
+            fila = ctk.CTkFrame(self.scroll, fg_color=t("INPUT_BG"), corner_radius=10)
             fila.pack(fill="x", pady=4)
             fila.grid_columnconfigure(0, weight=1)
             etiqueta(
@@ -1184,7 +1475,7 @@ class PersonalTab(ctk.CTkFrame):
                 fila,
                 f"Vínculo: {vinculo}",
                 11,
-                ACCENTO if vinculo == "Pasante" else MUTED,
+                t("ACCENTO") if vinculo == "Pasante" else t("MUTED"),
             ).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
             boton_editar = ctk.CTkButton(
                 fila,
@@ -1192,8 +1483,8 @@ class PersonalTab(ctk.CTkFrame):
                 width=70,
                 height=30,
                 font=(FONT, 12),
-                fg_color=PRIMARY,
-                hover_color=PRIMARY_HOVER,
+                fg_color=t("PRIMARY"),
+                hover_color=t("PRIMARY_HOVER"),
                 corner_radius=8,
                 command=partial(self._editar, usuario),
             )
@@ -1205,14 +1496,75 @@ class PersonalTab(ctk.CTkFrame):
                 height=30,
                 font=(FONT, 12),
                 fg_color="transparent",
-                hover_color=DANGER,
+                hover_color=t("DANGER"),
                 border_width=1,
-                border_color=DANGER,
-                text_color=DANGER,
+                border_color=t("DANGER"),
+                text_color=t("DANGER"),
                 corner_radius=8,
                 command=partial(self._eliminar, usuario),
             )
             boton_eliminar.grid(row=0, column=2, padx=(0, 10))
+            if self.editando and self.editando["id"] == usuario["id"]:
+                self._construir_editor_inline(self.scroll)
+
+    def _construir_editor_inline(self, master) -> None:
+        """Renderiza el editor embebido con salario, rol, vínculo y clave."""
+        editor = tarjeta(master)
+        editor.pack(fill="x", pady=(0, 8))
+        editor.grid_columnconfigure(0, weight=1)
+        editor.grid_columnconfigure(1, weight=1)
+        fila_1 = ctk.CTkFrame(editor, fg_color="transparent")
+        fila_1.grid(row=0, column=0, columnspan=2, sticky="ew", padx=14, pady=(12, 0))
+        fila_1.grid_columnconfigure(0, weight=1)
+        fila_1.grid_columnconfigure(1, weight=1)
+        self.ent_ed_salario = entrada(fila_1, "Salario mensual (Gs.)", ancho=230)
+        self.ent_ed_salario.insert(
+            0, f"{float(self.editando['salario_mensual'] or 0):,.0f}"
+        )
+        self.ent_ed_salario.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.ent_ed_clave = entrada(fila_1, "Nueva contraseña (opcional)", ancho=230)
+        self.ent_ed_clave.configure(show="•")
+        self.ent_ed_clave.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        fila_2 = ctk.CTkFrame(editor, fg_color="transparent")
+        fila_2.grid(row=1, column=0, columnspan=2, sticky="ew", padx=14, pady=(8, 0))
+        fila_2.grid_columnconfigure(0, weight=1)
+        fila_2.grid_columnconfigure(1, weight=1)
+        self.menu_ed_rol = ctk.CTkOptionMenu(
+            fila_2,
+            values=[r["nombre"] for r in self.db.list_roles()],
+            font=(FONT, 13),
+            fg_color=t("INPUT_BG"),
+            button_color=t("PRIMARY"),
+            button_hover_color=t("PRIMARY_HOVER"),
+            text_color=t("TEXT"),
+            dropdown_fg_color=t("INPUT_BG"),
+            dropdown_hover_color=t("PRIMARY"),
+            height=36,
+        )
+        self.menu_ed_rol.set(self.editando["role_name"])
+        self.menu_ed_rol.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.menu_ed_vinculo = ctk.CTkOptionMenu(
+            fila_2,
+            values=list(auth.TIPOS_VINCULO),
+            font=(FONT, 13),
+            fg_color=t("INPUT_BG"),
+            button_color=t("PRIMARY"),
+            button_hover_color=t("PRIMARY_HOVER"),
+            text_color=t("TEXT"),
+            dropdown_fg_color=t("INPUT_BG"),
+            dropdown_hover_color=t("PRIMARY"),
+            height=36,
+        )
+        self.menu_ed_vinculo.set(self.editando.get("tipo_vinculo") or "Funcionario")
+        self.menu_ed_vinculo.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        fila_3 = ctk.CTkFrame(editor, fg_color="transparent")
+        fila_3.grid(row=2, column=0, columnspan=2, pady=(10, 12))
+        boton_primario(fila_3, "Guardar cambios", self._guardar_edicion).pack(
+            side="left", padx=6
+        )
+        boton_secundario(fila_3, "Cancelar", self._cancelar_edicion).pack(
+            side="left", padx=6
+        )
 
     def _agregar(self) -> None:
         try:
@@ -1231,121 +1583,60 @@ class PersonalTab(ctk.CTkFrame):
                 self.menu_vinculo.get(),
             )
         except (ValueError, PermissionError) as error:
-            self.lbl_resultado.configure(text=str(error), text_color=DANGER)
+            self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
             return
-        self.lbl_resultado.configure(text="Empleado agregado correctamente.", text_color=SUCCESS)
+        self.lbl_resultado.configure(text="Empleado agregado correctamente.", text_color=t("SUCCESS"))
         for campo in (self.ent_usuario, self.ent_nombre, self.ent_salario, self.ent_clave):
             campo.delete(0, "end")
         self._refrescar()
         self.on_cambio()
 
     def _editar(self, usuario: Dict) -> None:
-        EditEmployeeModal(self, self.db, self.actor, usuario, self._refrescar, self.on_cambio)
+        """Despliega el editor inline debajo de la fila del empleado."""
+        if self.editando and self.editando["id"] == usuario["id"]:
+            self.editando = None
+        else:
+            self.editando = usuario
+        self._refrescar()
+
+    def _guardar_edicion(self) -> None:
+        salario_raw = self.ent_ed_salario.get().replace(",", "").strip()
+        try:
+            salario = float(salario_raw) if salario_raw else None
+        except ValueError:
+            salario = None
+        clave = self.ent_ed_clave.get() or None
+        try:
+            auth.update_user(
+                self.db,
+                self.actor,
+                self.editando["id"],
+                password=clave,
+                role_name=self.menu_ed_rol.get(),
+                salario_mensual=salario,
+                tipo_vinculo=self.menu_ed_vinculo.get(),
+            )
+        except (ValueError, PermissionError) as error:
+            self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
+            return
+        self.editando = None
+        self._refrescar()
+        self.on_cambio()
+
+    def _cancelar_edicion(self) -> None:
+        self.editando = None
+        self._refrescar()
 
     def _eliminar(self, usuario: Dict) -> None:
         try:
             auth.delete_user(self.db, self.actor, usuario["id"])
         except (ValueError, PermissionError) as error:
-            self.lbl_resultado.configure(text=str(error), text_color=DANGER)
+            self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
             return
-        self.lbl_resultado.configure(text="Empleado eliminado.", text_color=SUCCESS)
+        self.lbl_resultado.configure(text="Empleado eliminado.", text_color=t("SUCCESS"))
         self._refrescar()
         self.on_cambio()
 
-
-class EditEmployeeModal(ctk.CTkToplevel):
-    """Modal para editar rol, salario o contraseña de un empleado."""
-
-    def __init__(
-        self,
-        master: ctk.CTkFrame,
-        db: Database,
-        actor: Dict,
-        usuario: Dict,
-        on_guardar: Callable,
-        on_cambio: Callable,
-    ) -> None:
-        super().__init__(master)
-        self.db = db
-        self.actor = actor
-        self.usuario = usuario
-        self.on_guardar = on_guardar
-        self.on_cambio = on_cambio
-        self.title(f"Editar: {usuario['username']}")
-        self.geometry("380x460")
-        self.configure(fg_color=BG)
-        self.transient(master.winfo_toplevel())
-        self.grab_set()
-        self.resizable(False, False)
-
-        formulario = tarjeta(self)
-        formulario.pack(fill="both", expand=True, padx=20, pady=20)
-        etiqueta(formulario, f"Editando a {usuario['full_name']}", 17, TEXT, "bold").pack(
-            pady=(18, 14)
-        )
-        self.ent_salario = entrada(formulario, "Salario mensual (Gs.)", ancho=300)
-        self.ent_salario.insert(0, f"{float(usuario['salario_mensual'] or 0):,.0f}")
-        self.ent_salario.pack(pady=5)
-        self.menu_rol = ctk.CTkOptionMenu(
-            formulario,
-            values=[r["nombre"] for r in self.db.list_roles()],
-            font=(FONT, 14),
-            fg_color=INPUT_BG,
-            button_color=PRIMARY,
-            button_hover_color=PRIMARY_HOVER,
-            text_color=TEXT,
-            dropdown_fg_color=INPUT_BG,
-            dropdown_hover_color=PRIMARY,
-            width=300,
-            height=40,
-        )
-        self.menu_rol.set(usuario["role_name"])
-        self.menu_rol.pack(pady=5)
-        self.menu_vinculo = ctk.CTkOptionMenu(
-            formulario,
-            values=list(auth.TIPOS_VINCULO),
-            font=(FONT, 14),
-            fg_color=INPUT_BG,
-            button_color=PRIMARY,
-            button_hover_color=PRIMARY_HOVER,
-            text_color=TEXT,
-            dropdown_fg_color=INPUT_BG,
-            dropdown_hover_color=PRIMARY,
-            width=300,
-            height=40,
-        )
-        self.menu_vinculo.set(usuario.get("tipo_vinculo") or "Funcionario")
-        self.menu_vinculo.pack(pady=5)
-        self.ent_clave = entrada(formulario, "Nueva contraseña (opcional)", ancho=300)
-        self.ent_clave.configure(show="•")
-        self.ent_clave.pack(pady=5)
-        boton_primario(formulario, "Guardar cambios", self._guardar).pack(pady=(18, 6))
-        self.lbl_error = etiqueta(formulario, "", 12, DANGER)
-        self.lbl_error.pack(pady=(0, 16))
-
-    def _guardar(self) -> None:
-        salario_raw = self.ent_salario.get().replace(",", "").strip()
-        try:
-            salario = float(salario_raw) if salario_raw else None
-        except ValueError:
-            salario = None
-        clave = self.ent_clave.get() or None
-        try:
-            auth.update_user(
-                self.db,
-                self.actor,
-                self.usuario["id"],
-                password=clave,
-                role_name=self.menu_rol.get(),
-                salario_mensual=salario,
-                tipo_vinculo=self.menu_vinculo.get(),
-            )
-        except (ValueError, PermissionError) as error:
-            self.lbl_error.configure(text=str(error))
-            return
-        self.on_guardar()
-        self.on_cambio()
-        self.destroy()
 
 
 class JustificacionesTab(ctk.CTkFrame):
@@ -1357,23 +1648,24 @@ class JustificacionesTab(ctk.CTkFrame):
         self.actor = actor
         self.empleados: List[Dict] = []
         self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
         formulario = tarjeta(self)
         formulario.grid(row=0, column=0, sticky="ew")
         formulario.grid_columnconfigure(0, weight=1)
-        etiqueta(formulario, "Registrar justificación aprobada", 17, TEXT, "bold").grid(
+        etiqueta(formulario, "Registrar justificación aprobada", 17, t("TEXT"), "bold").grid(
             row=0, column=0, pady=(18, 14)
         )
         self.menu_empleado = ctk.CTkOptionMenu(
             formulario,
             values=[""],
             font=(FONT, 14),
-            fg_color=INPUT_BG,
-            button_color=PRIMARY,
-            button_hover_color=PRIMARY_HOVER,
-            text_color=TEXT,
-            dropdown_fg_color=INPUT_BG,
-            dropdown_hover_color=PRIMARY,
+            fg_color=t("INPUT_BG"),
+            button_color=t("PRIMARY"),
+            button_hover_color=t("PRIMARY_HOVER"),
+            text_color=t("TEXT"),
+            dropdown_fg_color=t("INPUT_BG"),
+            dropdown_hover_color=t("PRIMARY"),
             width=420,
             height=40,
         )
@@ -1382,12 +1674,12 @@ class JustificacionesTab(ctk.CTkFrame):
             formulario,
             values=list(auth.TIPOS_PERMISO),
             font=(FONT, 14),
-            fg_color=INPUT_BG,
-            button_color=PRIMARY,
-            button_hover_color=PRIMARY_HOVER,
-            text_color=TEXT,
-            dropdown_fg_color=INPUT_BG,
-            dropdown_hover_color=PRIMARY,
+            fg_color=t("INPUT_BG"),
+            button_color=t("PRIMARY"),
+            button_hover_color=t("PRIMARY_HOVER"),
+            text_color=t("TEXT"),
+            dropdown_fg_color=t("INPUT_BG"),
+            dropdown_hover_color=t("PRIMARY"),
             width=420,
             height=40,
         )
@@ -1399,9 +1691,57 @@ class JustificacionesTab(ctk.CTkFrame):
         boton_primario(formulario, "Registrar Justificación", self._crear).grid(
             row=5, column=0, pady=(16, 8)
         )
-        self.lbl_resultado = etiqueta(formulario, "", 13, SUCCESS)
+        self.lbl_resultado = etiqueta(formulario, "", 13, t("SUCCESS"))
         self.lbl_resultado.grid(row=6, column=0, pady=(0, 18))
         self.refrescar_empleados()
+
+        listado = tarjeta(self)
+        listado.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
+        listado.grid_columnconfigure(0, weight=1)
+        listado.grid_rowconfigure(1, weight=1)
+        etiqueta(listado, "Justificaciones emitidas", 16, t("TEXT"), "bold").grid(
+            row=0, column=0, sticky="w", padx=20, pady=(16, 8)
+        )
+        self.scroll_just = ctk.CTkScrollableFrame(
+            listado, fg_color="transparent", corner_radius=0
+        )
+        self.scroll_just.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 14))
+        self._refrescar_lista()
+
+    def _refrescar_lista(self) -> None:
+        """Lista las justificaciones con su botón de descarga del PDF legal."""
+        for hijo in self.scroll_just.winfo_children():
+            hijo.destroy()
+        for justificacion in self.db.list_justificaciones():
+            fila = ctk.CTkFrame(self.scroll_just, fg_color=t("INPUT_BG"), corner_radius=10)
+            fila.pack(fill="x", pady=4)
+            fila.grid_columnconfigure(0, weight=1)
+            etiqueta(
+                fila,
+                f"#{justificacion['id']:03d} · {justificacion['tipo_permiso']} · "
+                f"{justificacion['full_name']} ({justificacion['username']})",
+                13,
+            ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+            etiqueta(
+                fila,
+                f"{justificacion['fecha_inicio'].strftime('%d/%m/%Y')} → "
+                f"{justificacion['fecha_fin'].strftime('%d/%m/%Y')} · "
+                f"Aprobado por {justificacion['aprobador']}",
+                11,
+                t("MUTED"),
+            ).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
+            if justificacion.get("hash_legal"):
+                etiqueta(
+                    fila,
+                    f"SHA-256 {justificacion['hash_legal'][:16]}…",
+                    9,
+                    t("SUCCESS"),
+                ).grid(row=2, column=0, sticky="w", padx=14, pady=(0, 10))
+            boton_primario(
+                fila,
+                "Descargar PDF",
+                partial(EmployeeDashboard._descargar_pdf, justificacion["id"]),
+            ).grid(row=0, column=1, rowspan=2, padx=(0, 12))
 
     def refrescar_empleados(self) -> None:
         self.empleados = self.db.list_users()
@@ -1420,7 +1760,7 @@ class JustificacionesTab(ctk.CTkFrame):
             None,
         )
         if not empleado:
-            self.lbl_resultado.configure(text="Seleccione un empleado.", text_color=DANGER)
+            self.lbl_resultado.configure(text="Seleccione un empleado.", text_color=t("DANGER"))
             return
         try:
             inicio = datetime.date.fromisoformat(self.ent_inicio.get().strip())
@@ -1429,12 +1769,13 @@ class JustificacionesTab(ctk.CTkFrame):
                 self.db, self.actor, empleado["id"], self.menu_tipo.get(), inicio, fin
             )
         except (ValueError, PermissionError) as error:
-            self.lbl_resultado.configure(text=str(error), text_color=DANGER)
+            self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
             return
         self.lbl_resultado.configure(
             text=f"Justificación #{justificacion_id} aprobada para {empleado['full_name']}.",
-            text_color=SUCCESS,
+            text_color=t("SUCCESS"),
         )
+        self._refrescar_lista()
 
 
 class ReportesTab(ctk.CTkFrame):
@@ -1449,14 +1790,14 @@ class ReportesTab(ctk.CTkFrame):
         tarjeta_asistencia = tarjeta(self)
         tarjeta_asistencia.grid(row=0, column=0, sticky="ew", pady=(0, 20))
         tarjeta_asistencia.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_asistencia, "Reporte Mensual de Asistencia", 17, TEXT, "bold").grid(
+        etiqueta(tarjeta_asistencia, "Reporte Mensual de Asistencia", 17, t("TEXT"), "bold").grid(
             row=0, column=0, pady=(20, 4)
         )
         etiqueta(
             tarjeta_asistencia,
             "Desglose de horas ordinarias, extra 50% y extra 100% para contabilidad",
             13,
-            MUTED,
+            t("MUTED"),
         ).grid(row=1, column=0)
         fila_periodo = ctk.CTkFrame(tarjeta_asistencia, fg_color="transparent")
         fila_periodo.grid(row=2, column=0, pady=16)
@@ -1471,14 +1812,14 @@ class ReportesTab(ctk.CTkFrame):
         tarjeta_aguinaldo = tarjeta(self)
         tarjeta_aguinaldo.grid(row=1, column=0, sticky="ew")
         tarjeta_aguinaldo.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_aguinaldo, "Proyección de Aguinaldos", 17, TEXT, "bold").grid(
+        etiqueta(tarjeta_aguinaldo, "Proyección de Aguinaldos", 17, t("TEXT"), "bold").grid(
             row=0, column=0, pady=(20, 4)
         )
         etiqueta(
             tarjeta_aguinaldo,
             "Aguinaldo proporcional (13.º salario, Ley 6380/2019)",
             13,
-            MUTED,
+            t("MUTED"),
         ).grid(row=1, column=0)
         self.ent_anio_agui = entrada(tarjeta_aguinaldo, "Año (2026)", ancho=140)
         self.ent_anio_agui.grid(row=2, column=0, pady=16)
@@ -1486,7 +1827,7 @@ class ReportesTab(ctk.CTkFrame):
             tarjeta_aguinaldo, "Proyectar Aguinaldos (Excel)", self._exportar_aguinaldo
         ).grid(row=3, column=0, pady=(0, 8))
 
-        self.lbl_resultado = etiqueta(self, "", 13, SUCCESS)
+        self.lbl_resultado = etiqueta(self, "", 13, t("SUCCESS"))
         self.lbl_resultado.grid(row=2, column=0, pady=(18, 6))
 
     def _periodo(self, entrada_anio: ctk.CTkEntry, entrada_mes: Optional[ctk.CTkEntry]) -> tuple:
@@ -1501,18 +1842,18 @@ class ReportesTab(ctk.CTkFrame):
             anio, mes = self._periodo(self.ent_anio, self.ent_mes)
             ruta = reports.exportar_asistencia_mensual(self.db, self.actor, anio, mes)
         except (ValueError, PermissionError) as error:
-            self.lbl_resultado.configure(text=str(error), text_color=DANGER)
+            self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
             return
-        self.lbl_resultado.configure(text=f"Reporte exportado: {ruta}", text_color=SUCCESS)
+        self.lbl_resultado.configure(text=f"Reporte exportado: {ruta}", text_color=t("SUCCESS"))
 
     def _exportar_aguinaldo(self) -> None:
         try:
             anio = self._periodo(self.ent_anio_agui, None)[0]
             ruta = reports.exportar_aguinaldo(self.db, self.actor, anio)
         except (ValueError, PermissionError) as error:
-            self.lbl_resultado.configure(text=str(error), text_color=DANGER)
+            self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
             return
-        self.lbl_resultado.configure(text=f"Aguinaldo exportado: {ruta}", text_color=SUCCESS)
+        self.lbl_resultado.configure(text=f"Aguinaldo exportado: {ruta}", text_color=t("SUCCESS"))
 
 
 def main() -> None:

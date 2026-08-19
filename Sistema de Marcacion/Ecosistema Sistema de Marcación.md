@@ -31,9 +31,9 @@ flowchart LR
 | `src/auth.py` | Autenticación (bcrypt) y control de accesos RBAC: [[Control de Roles y Permisos RBAC]] y [[Seguridad y Cifrado de Comunicaciones]] |
 | `src/database.py` | Conexión PostgreSQL (psycopg2), esquema de roles, usuarios, marcajes y `logs_auditoria` |
 | `src/clock_engine.py` | Reglas de negocio (Ley 213): entrada/salida, tardanzas y horas extra; cumplimiento CONATEL Res. 3028/2024: [[Reglamento de Asistencia y Disciplina CONATEL]] |
-| `src/reports.py` | Exportación mensual de asistencia (xlsx/csv) y aguinaldos para contabilidad |
-| `src/gui.py` | Interfaz premium en CustomTkinter: [[Diseño de Interfaz Premium UI-UX]] y [[Panel de Analítica Visual y UX Premium]] |
-| `src/web_server.py` | Autoservicio web FastAPI: [[Estructura Web y Conexión Biométrica]] |
+| `src/reports.py` | Exportación mensual de asistencia (xlsx/csv), aguinaldos y PDFs oficiales CONATEL: [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] |
+| `src/gui.py` | Interfaz premium en CustomTkinter con temas Claro/Oscuro: [[Diseño de Interfaz Premium UI-UX]], [[Panel de Analítica Visual y UX Premium]] y [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] |
+| `src/web_server.py` | Autoservicio web FastAPI con tablero personal y descarga de PDFs: [[Estructura Web y Conexión Biométrica]] y [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] |
 | `src/biometric_sync.py` | Sincronización TCP/IP con relojes ZKTeco (puerto 4370) |
 | `Dockerfile` | Contenedor de producción (gunicorn + uvicorn): [[Despliegue en la Nube e Infraestructura SaaS]] |
 | `solicitudes_correccion` | Tabla de reclamos de marcación fallida (Pendiente/Aprobado/Rechazado) |
@@ -58,6 +58,7 @@ flowchart LR
 - [[Panel de Analítica Visual y UX Premium]]
 - [[Despliegue en la Nube e Infraestructura SaaS]]
 - [[Reglamento de Asistencia y Disciplina CONATEL]]
+- [[Manual de Diseño UI-UX Simplificado y Reportes PDF]]
 
 ## Vinculación con el repositorio
 

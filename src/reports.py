@@ -20,6 +20,18 @@ from typing import Any, Dict, List, Optional
 
 import auth
 from database import Database
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 HORAS_BASE_MENSUAL: float = 160.0
 RECARGO_EXTRA_50: float = 1.5
@@ -557,3 +569,257 @@ def obtener_proyeccion_aguinaldos_totales(
             for departamento, resumen in por_departamento.items()
         },
     }
+
+
+def _vacaciones_devengadas(antiguedad_anios: float) -> float:
+    """Días hábiles de vacaciones según la antigüedad (Art. 23 Res. 3028/2024).
+
+    Escala progresiva institucional: 12 días hasta los 5 años de servicio,
+    20 días entre 5 y 10 años y 30 días desde los 10 años en adelante.
+    """
+    if antiguedad_anios >= 10:
+        return 30.0
+    if antiguedad_anios >= 5:
+        return 20.0
+    return 12.0
+
+
+def resumen_empleado(
+    db: Database, user: Dict[str, Any], fecha: Optional[date] = None
+) -> Dict[str, Any]:
+    """Compone el tablero personal del Portal del Empleado.
+
+    Reúne en un solo diccionario JSON-serializable los tres bloques que
+    alimentan las tarjetas informativas del empleado:
+
+    - Vacaciones devengadas, usufructuadas y disponibles en el año en curso
+      (Art. 23 de la Res. 3028/2024 de CONATEL).
+    - Contador de permisos del mes en curso, discriminado por tipo
+      (salud, exámenes, lactancia, etc. — Art. 25).
+    - Marcas mensuales con horas ordinarias por día y el acumulado de horas
+      extra al 50% y 100% (Ley N.º 213).
+
+    Args:
+        db: Capa de persistencia conectada.
+        user: Empleado autenticado (dict de ``users``).
+        fecha: Día de referencia; por defecto la fecha actual del servidor.
+
+    Returns:
+        Diccionario con ``vacaciones``, ``permisos_mes``, ``marcas_mes``,
+        ``extras_mes`` y la lista ``permisos`` para los botones de PDF.
+    """
+    hoy = fecha or date.today()
+    antiguedad = (hoy - user["created_at"].date()).days / 365.25
+    justificaciones = [
+        j for j in db.list_justificaciones() if j["usuario_id"] == user["id"]
+    ]
+    vacaciones_usadas = sum(
+        1
+        for j in justificaciones
+        if j["tipo_permiso"] == "Vacaciones" and j["fecha_inicio"].year == hoy.year
+    )
+    permisos_mes = [
+        j
+        for j in justificaciones
+        if j["tipo_permiso"] != "Vacaciones"
+        and j["fecha_inicio"].year == hoy.year
+        and j["fecha_inicio"].month == hoy.month
+    ]
+    detalle: Dict[str, int] = {}
+    for j in permisos_mes:
+        detalle[j["tipo_permiso"]] = detalle.get(j["tipo_permiso"], 0) + 1
+    marcajes = [
+        m
+        for m in db.get_marcajes_month(hoy.year, hoy.month)
+        if m["user_id"] == user["id"]
+    ]
+    extra_50 = sum(
+        ((m["horas_extra_50"] or timedelta(0)) for m in marcajes), timedelta(0)
+    )
+    extra_100 = sum(
+        ((m["horas_extra_100"] or timedelta(0)) for m in marcajes), timedelta(0)
+    )
+    return {
+        "usuario": user["username"],
+        "nombre": user["full_name"],
+        "vinculo": user.get("tipo_vinculo") or "Funcionario",
+        "antiguedad_anios": round(antiguedad, 1),
+        "vacaciones": {
+            "devengadas": _vacaciones_devengadas(antiguedad),
+            "usadas": vacaciones_usadas,
+            "disponibles": max(
+                0, _vacaciones_devengadas(antiguedad) - vacaciones_usadas
+            ),
+        },
+        "permisos_mes": {"total": len(permisos_mes), "detalle": detalle},
+        "marcas_mes": {
+            "dias": [m["hora_entrada"].strftime("%d") for m in marcajes],
+            "ordinarias": [
+                round((m["horas_ordinarias"] or timedelta(0)).total_seconds() / 3600, 2)
+                for m in marcajes
+            ],
+        },
+        "extras_mes": {
+            "horas_50": round(extra_50.total_seconds() / 3600, 2),
+            "horas_100": round(extra_100.total_seconds() / 3600, 2),
+        },
+        "permisos": [
+            {
+                "id": j["id"],
+                "tipo": j["tipo_permiso"],
+                "inicio": j["fecha_inicio"].isoformat(),
+                "fin": j["fecha_fin"].isoformat(),
+                "aprobador": j["aprobador"],
+            }
+            for j in justificaciones
+        ],
+    }
+
+
+def _canonico_permiso(justificacion: Dict[str, Any]) -> str:
+    """Serie canónica de bytes que el PDF autentica con SHA-256."""
+    return (
+        f"CONATEL|3028/2024|{justificacion['id']}|{justificacion['username']}|"
+        f"{justificacion['tipo_permiso']}|{justificacion['fecha_inicio'].isoformat()}|"
+        f"{justificacion['fecha_fin'].isoformat()}|{justificacion['aprobador']}"
+    )
+
+
+def generar_pdf_permiso(solicitud_id: int) -> str:
+    """Genera el PDF oficial de un permiso aprobado (Res. 3028/2024).
+
+    Documento formal con membrete institucional simulado de la CONATEL,
+    los datos del pasante o funcionario, el período del permiso, las
+    firmas electrónicas del tutor y el hash SHA-256 de validación legal,
+    que queda persistido en ``justificaciones.hash_legal``.
+
+    Args:
+        solicitud_id: Identificador de la justificación aprobada.
+
+    Returns:
+        Ruta absoluta del PDF generado dentro de ``reportes/``.
+
+    Raises:
+        ValueError: Si el permiso no existe o no puede componerse.
+    """
+    db = Database()
+    db.ensure_database()
+    db.connect()
+    try:
+        justificacion = next(
+            (j for j in db.list_justificaciones() if j["id"] == solicitud_id),
+            None,
+        )
+        if not justificacion:
+            raise ValueError(f"El permiso #{solicitud_id} no existe.")
+        empleado = db.get_user_by_id(justificacion["usuario_id"])
+        tutor = db.get_user_by_id(justificacion["aprobado_por"])
+        if not empleado or not tutor:
+            raise ValueError("Datos del empleado o tutor incompletos.")
+        hash_legal = hashlib.sha256(
+            _canonico_permiso(justificacion).encode("utf-8")
+        ).hexdigest()
+        db.actualizar_hash_justificacion(solicitud_id, hash_legal)
+    finally:
+        db.cerrar()
+
+    carpeta = Path("reportes")
+    carpeta.mkdir(parents=True, exist_ok=True)
+    ruta = carpeta / f"permiso_{solicitud_id:04d}_CONATEL.pdf"
+
+    estilos = getSampleStyleSheet()
+    normal = ParagraphStyle(
+        "Normal", parent=estilos["Normal"], fontSize=9.5, leading=13
+    )
+    institucion = ParagraphStyle(
+        "Institucion",
+        parent=estilos["Title"],
+        fontSize=17,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#1A56DB"),
+        spaceAfter=2,
+    )
+    subtitulo = ParagraphStyle(
+        "Subtitulo",
+        parent=normal,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#6B7280"),
+        spaceAfter=10,
+    )
+    titulo_documento = ParagraphStyle(
+        "TituloDocumento",
+        parent=normal,
+        fontSize=13,
+        alignment=TA_CENTER,
+        fontName="Helvetica-Bold",
+        spaceBefore=8,
+        spaceAfter=16,
+    )
+    pie = ParagraphStyle(
+        "Pie", parent=normal, fontSize=8, alignment=TA_CENTER, textColor=colors.HexColor("#6B7280")
+    )
+
+    dias = (justificacion["fecha_fin"] - justificacion["fecha_inicio"]).days + 1
+    filas: List[List[Any]] = [
+        ["Empleado", empleado["full_name"]],
+        ["Cédula / Usuario", empleado["username"]],
+        ["Vínculo laboral", empleado.get("tipo_vinculo") or "Funcionario"],
+        ["Dependencia", empleado.get("departamento") or "General"],
+        ["Tipo de permiso", justificacion["tipo_permiso"]],
+        ["Período", f"{justificacion['fecha_inicio']} al {justificacion['fecha_fin']}"],
+        ["Días hábiles", str(dias)],
+        ["Aprobado por (tutor)", tutor["full_name"]],
+        ["Fecha de emisión", date.today().isoformat()],
+    ]
+    tabla = Table(filas, colWidths=[45 * mm, 115 * mm])
+    tabla.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+                ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#6B7280")),
+                ("TEXTCOLOR", (1, 0), (1, -1), colors.black),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F3F4F6")),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#E4E7EB")),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    documento = SimpleDocTemplate(
+        str(ruta), pagesize=A4, topMargin=20 * mm, bottomMargin=16 * mm
+    )
+    elemento = [
+        Paragraph("CONATEL · Comisión Nacional de Telecomunicaciones", institucion),
+        Paragraph("Dirección de Talento Humano", subtitulo),
+        Paragraph(
+            "Permiso aprobado en el marco de la Resolución de Directorio "
+            "N.º 3028/2024 · Artículos 23 y 25",
+            subtitulo,
+        ),
+        Paragraph(
+            f"CERTIFICADO DE PERMISO OFICIAL N.º 3028-2024/{solicitud_id:04d}",
+            titulo_documento,
+        ),
+        tabla,
+        Spacer(1, 14 * mm),
+        Paragraph(
+            "____________________________________", ParagraphStyle("Firma", parent=normal, alignment=TA_CENTER)
+        ),
+        Paragraph(f"Firma electrónica del tutor · {tutor['full_name']}", normal),
+        Spacer(1, 6 * mm),
+        Paragraph("____________________________________", ParagraphStyle("Firma2", parent=normal, alignment=TA_CENTER)),
+        Paragraph("Sello institucional · Dirección de Talento Humano", normal),
+        Spacer(1, 12 * mm),
+        Paragraph(
+            f"Hash SHA-256 de validación legal: {hash_legal}", ParagraphStyle("Hash", parent=normal, fontSize=8)
+        ),
+        Paragraph(
+            "Documento generado electrónicamente por el Sistema de Marcación. "
+            "Cualquier alteración invalida el hash de autenticidad.",
+            pie,
+        ),
+    ]
+    documento.build(elemento)
+    return str(ruta.absolute())

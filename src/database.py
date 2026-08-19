@@ -285,6 +285,26 @@ class Database:
         )
         cursor.execute(
             """
+            ALTER TABLE justificaciones DROP CONSTRAINT IF EXISTS
+            justificaciones_tipo_permiso_check
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE justificaciones ADD CONSTRAINT
+            justificaciones_tipo_permiso_check
+            CHECK (tipo_permiso IN
+                   ('Vacaciones', 'Reposo', 'Permiso', 'Permiso por Examen'))
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE justificaciones ADD COLUMN IF NOT EXISTS
+            hash_legal VARCHAR(64) NOT NULL DEFAULT ''
+            """
+        )
+        cursor.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_justificaciones_usuario_fechas
             ON justificaciones (usuario_id, fecha_inicio, fecha_fin)
             """
@@ -363,6 +383,36 @@ class Database:
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
+
+    def listar_auditoria(self, limite: int = 60) -> List[Dict[str, Any]]:
+        """Devuelve los eventos más recientes del registro de auditoría.
+
+        Incluye el nombre del actor y los snapshots JSONB anterior/nuevo
+        para la revisión de trazabilidad de Recursos Humanos.
+        """
+        return self._execute(
+            """
+            SELECT a.id, a.accion, a.tabla, a.registro_id,
+                   a.valores_anteriores, a.valores_nuevos, a.creado_en,
+                   u.username, u.full_name
+            FROM logs_auditoria a
+            JOIN users u ON u.id = a.usuario_id
+            ORDER BY a.creado_en DESC
+            LIMIT %s
+            """,
+            (limite,),
+            fetch="all",
+        )
+
+    def actualizar_hash_justificacion(
+        self, justificacion_id: int, hash_legal: str
+    ) -> None:
+        """Persiste el hash SHA-256 del permiso para su validación legal."""
+        self._execute(
+            "UPDATE justificaciones SET hash_legal = %s WHERE id = %s",
+            (hash_legal, justificacion_id),
+        )
+        self.connection.commit()
 
     def create_user(
         self,
