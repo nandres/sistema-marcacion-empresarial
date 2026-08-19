@@ -161,6 +161,19 @@ class MarcacionApp(ctk.CTk):
         pie = ctk.CTkFrame(self.frame_publico, fg_color="transparent")
         pie.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 16))
         pie.grid_columnconfigure(0, weight=1)
+        boton_consulta = ctk.CTkButton(
+            pie,
+            text="Consultar mis Marcas Localmente",
+            command=self._abrir_consulta_local,
+            fg_color="transparent",
+            hover_color=INPUT_BG,
+            text_color=MUTED,
+            font=(FONT, 12),
+            corner_radius=8,
+            width=200,
+            height=32,
+        )
+        boton_consulta.grid(row=0, column=0, sticky="w")
         boton_acceso = ctk.CTkButton(
             pie,
             text="Acceso de Gestión",
@@ -272,6 +285,9 @@ class MarcacionApp(ctk.CTk):
     def _abrir_login(self) -> None:
         LoginModal(self, self.db, self._ingresar_gestion)
 
+    def _abrir_consulta_local(self) -> None:
+        ConsultaLocalModal(self, self.db)
+
     def _ingresar_gestion(self, actor: Dict) -> None:
         self.actor = actor
         self.frame_publico.grid_forget()
@@ -284,6 +300,141 @@ class MarcacionApp(ctk.CTk):
             self.panel_gestion = None
         self.actor = None
         self.frame_publico.grid(row=0, column=0, sticky="nsew")
+
+
+class ConsultaLocalModal(ctk.CTkToplevel):
+    """Autoservicio local: marcas del día, horas extra del mes y aguinaldo.
+
+    El empleado digita su cédula y pulsa "Hoy" para capturar la fecha actual
+    de su equipo y ver al instante su historial diario sin salir de la PC.
+    """
+
+    def __init__(self, master: MarcacionApp, db: Database) -> None:
+        super().__init__(master)
+        self.db = db
+        self.title("Consulta Local de Marcas")
+        self.geometry("500x640")
+        self.configure(fg_color=BG)
+        self.transient(master)
+        self.grab_set()
+        self.resizable(False, False)
+
+        tarjeta_consulta = tarjeta(self)
+        tarjeta_consulta.pack(fill="both", expand=True, padx=20, pady=20)
+        etiqueta(tarjeta_consulta, "Consulta Local de Marcas", 20, TEXT, "bold").pack(
+            pady=(20, 4)
+        )
+        etiqueta(
+            tarjeta_consulta, "Autoservicio del empleado en esta PC", 12, MUTED
+        ).pack(pady=(0, 16))
+
+        self.entrada_cedula = entrada(tarjeta_consulta, "Su cédula o usuario", ancho=380)
+        self.entrada_cedula.pack(pady=5)
+        fila_fecha = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
+        fila_fecha.pack(pady=5)
+        self.entrada_fecha = entrada(fila_fecha, "AAAA-MM-DD", ancho=280)
+        self.entrada_fecha.insert(0, datetime.date.today().isoformat())
+        self.entrada_fecha.pack(side="left", padx=(0, 8))
+        boton_hoy = ctk.CTkButton(
+            fila_fecha,
+            text="Hoy",
+            command=self._hoy,
+            fg_color=PRIMARY,
+            hover_color=PRIMARY_HOVER,
+            text_color="white",
+            font=(FONT, 14, "bold"),
+            corner_radius=10,
+            width=80,
+            height=46,
+        )
+        boton_hoy.pack(side="left")
+        boton_primario(tarjeta_consulta, "Consultar", self._consultar).pack(pady=(16, 6))
+        self.lbl_error = etiqueta(tarjeta_consulta, "", 12, DANGER)
+        self.lbl_error.pack(pady=(0, 6))
+        self.texto_resultado = ctk.CTkTextbox(
+            tarjeta_consulta,
+            font=(MONO, 12),
+            fg_color=INPUT_BG,
+            text_color=TEXT,
+            corner_radius=10,
+            height=250,
+            wrap="word",
+        )
+        self.texto_resultado.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        self.entrada_cedula.focus_set()
+
+    def _hoy(self) -> None:
+        """Captura la fecha actual del sistema y ejecuta la consulta."""
+        self.entrada_fecha.delete(0, "end")
+        self.entrada_fecha.insert(0, datetime.date.today().isoformat())
+        self._consultar()
+
+    def _consultar(self) -> None:
+        cedula = self.entrada_cedula.get().strip()
+        if not cedula:
+            self.lbl_error.configure(text="Ingrese su cédula o usuario.")
+            return
+        user = self.db.get_user_by_username(cedula)
+        if not user:
+            self.lbl_error.configure(text="Empleado no encontrado. Verifique su cédula.")
+            return
+        try:
+            fecha = datetime.date.fromisoformat(self.entrada_fecha.get().strip())
+        except ValueError:
+            self.lbl_error.configure(text="Fecha inválida. Use el formato AAAA-MM-DD.")
+            return
+        resumen = reports.resumen_consulta(self.db, user, fecha)
+        self.lbl_error.configure(text="")
+        self.texto_resultado.delete("1.0", "end")
+        self.texto_resultado.insert("1.0", self._formatear(resumen))
+
+    @staticmethod
+    def _formatear(resumen: Dict) -> str:
+        """Convierte el resumen JSON en el reporte legible del modal."""
+        def gs(valor: float) -> str:
+            return f"Gs. {int(round(valor)):,}".replace(",", ".")
+
+        lineas = [f"{resumen['nombre']} · {resumen['fecha']}", "=" * 40]
+        lineas.append("MARCAS DEL DÍA")
+        if not resumen["marcas_dia"]:
+            lineas.append("  Sin marcas registradas este día.")
+        for marca in resumen["marcas_dia"]:
+            estado = marca["salida"] or "en curso"
+            etiquetas = []
+            if marca["tardanza"]:
+                etiquetas.append("Tardanza")
+            if marca["feriado"]:
+                etiquetas.append("Feriado")
+            sufijo = f" [{', '.join(etiquetas)}]" if etiquetas else ""
+            lineas.append(
+                f"  #{marca['id']} Entrada {marca['entrada']} → Salida {estado}{sufijo}"
+            )
+            lineas.append(
+                f"    Ordinarias {marca['ordinarias']} | Extra 50% {marca['extra_50']} "
+                f"| Extra 100% {marca['extra_100']}"
+            )
+        extras = resumen["extras_mes"]
+        lineas.extend(
+            [
+                "HORAS EXTRA DEL MES",
+                f"  Recargo 50%: {extras['texto_50']} ({extras['horas_50']:.2f} h)",
+                f"  Recargo 100%: {extras['texto_100']} ({extras['horas_100']:.2f} h)",
+                "AGUINALDO PROPORCIONAL (Ley 6380/2019)",
+            ]
+        )
+        aguinaldo = resumen["aguinaldo"]
+        if aguinaldo is None:
+            lineas.append("  Sin proyección para este año.")
+        else:
+            lineas.extend(
+                [
+                    f"  Salario mensual: {gs(aguinaldo['salario_mensual'])}",
+                    f"  Meses trabajados: {aguinaldo['meses_trabajados']}",
+                    f"  Valor horas extra: {gs(aguinaldo['valor_extras'])}",
+                    f"  TOTAL: {gs(aguinaldo['aguinaldo'])}",
+                ]
+            )
+        return "\n".join(lineas)
 
 
 class LoginModal(ctk.CTkToplevel):
