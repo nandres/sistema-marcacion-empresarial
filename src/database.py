@@ -78,8 +78,9 @@ class Database:
 
         Estrategia en tres pasos:
         1. Intenta conectar directo a la base objetivo (ya existe).
-        2. Si el fallo es exactamente "base no existe" (SQLSTATE 3D000),
-           conecta a la base de mantenimiento ``postgres`` y la crea.
+        2. Si falla (base inexistente, SQLSTATE 3D000, o mensaje FATAL
+           del servidor sin decodificar en UTF-8), conecta a la base de
+           mantenimiento ``postgres`` y la crea en UTF-8.
         3. Si el usuario no tiene permisos, eleva un error claro con el
            SQL exacto para crearla manualmente en pgAdmin o DBeaver.
         """
@@ -90,8 +91,10 @@ class Database:
             conexion = psycopg2.connect(**self.config, connect_timeout=5)
             conexion.close()
             return
-        except psycopg2.OperationalError as error:
-            if getattr(error, "pgcode", None) != "3D000":
+        except (psycopg2.OperationalError, UnicodeDecodeError) as error:
+            if isinstance(error, psycopg2.OperationalError) and getattr(
+                error, "pgcode", None
+            ) not in (None, "3D000"):
                 raise
         try:
             conexion = psycopg2.connect(
@@ -101,14 +104,17 @@ class Database:
             cursor = conexion.cursor()
             cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (nombre,))
             if cursor.fetchone() is None:
-                cursor.execute(f'CREATE DATABASE "{nombre}"')
+                cursor.execute(
+                    f'CREATE DATABASE "{nombre}" ENCODING \'UTF8\' TEMPLATE template0'
+                )
             cursor.close()
             conexion.close()
         except psycopg2.Error as error:
             raise RuntimeError(
                 f"No se pudo crear la base de datos '{nombre}' automáticamente.\n"
                 f"Causa: {error}\n"
-                f"Solución manual (pgAdmin/DBeaver): ejecuta  CREATE DATABASE {nombre};  "
+                f"Solución manual (pgAdmin/DBeaver): ejecuta  "
+                f"CREATE DATABASE {nombre} ENCODING 'UTF8' TEMPLATE template0;  "
                 f"con un usuario con permisos y vuelve a ejecutar la app."
             ) from error
 
