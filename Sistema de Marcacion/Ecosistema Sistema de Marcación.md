@@ -21,17 +21,17 @@ flowchart LR
 | Archivo | Responsabilidad |
 | --- | --- |
 | `src/app.py` | Punto de entrada: menú interactivo adaptado al rol, flujo de sesión y orquestación |
-| `src/auth.py` | Autenticación (PBKDF2) y control de accesos RBAC: [[Control de Roles y Permisos RBAC]] |
-| `src/database.py` | Conexión PostgreSQL (psycopg2), esquema de roles, usuarios y marcajes |
-| `src/clock_engine.py` | Reglas de negocio: entrada/salida, cálculo de horas trabajadas y horas extra |
+| `src/auth.py` | Autenticación (bcrypt) y control de accesos RBAC: [[Control de Roles y Permisos RBAC]] |
+| `src/database.py` | Conexión PostgreSQL (psycopg2), esquema de roles, usuarios, marcajes y `logs_auditoria` |
+| `src/clock_engine.py` | Reglas de negocio (Ley 213): entrada/salida, tardanzas y horas extra |
 | `src/reports.py` | Exportación mensual de asistencia (xlsx/csv) para contabilidad |
 
 ## Flujo de datos
 
-1. `app.py` inicia `Database` y crea el esquema (tablas `roles`, `users`, `marcajes`).
-2. `auth.py` valida credenciales contra la tabla `users` y verifica el rol.
-3. `clock_engine.py` registra entradas/salidas en `marcajes`.
-4. `database.py` persiste todo en PostgreSQL (credenciales desde `.env`, ignorado por Git).
+1. `app.py` inicia `Database` y crea la base y el esquema (tablas `roles`, `users`, `marcajes`, `logs_auditoria`).
+2. `auth.py` valida credenciales (bcrypt) contra la tabla `users` y verifica el rol.
+3. `clock_engine.py` registra entradas/salidas en `marcajes` con el desglose de la Ley 213.
+4. `database.py` persiste todo en PostgreSQL y audita las operaciones de RRHH/Admin.
 
 ## Documentación vinculada
 
