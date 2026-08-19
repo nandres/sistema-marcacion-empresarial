@@ -74,15 +74,25 @@ class Database:
         return self.connection
 
     def ensure_database(self) -> None:
-        """Crea la base de datos si no existe (requiere permisos de superusuario).
+        """Garantiza que la base de datos configurada exista.
 
-        Si la creación falla por permisos, se continúa contra la base
-        configurada y el error de conexión se propagará de forma natural
-        si la base no existe.
+        Estrategia en tres pasos:
+        1. Intenta conectar directo a la base objetivo (ya existe).
+        2. Si el fallo es exactamente "base no existe" (SQLSTATE 3D000),
+           conecta a la base de mantenimiento ``postgres`` y la crea.
+        3. Si el usuario no tiene permisos, eleva un error claro con el
+           SQL exacto para crearla manualmente en pgAdmin o DBeaver.
         """
         nombre = self.config["dbname"]
         if not nombre.replace("_", "").isalnum():
             raise ValueError("DB_NAME contiene caracteres no permitidos.")
+        try:
+            conexion = psycopg2.connect(**self.config, connect_timeout=5)
+            conexion.close()
+            return
+        except psycopg2.OperationalError as error:
+            if getattr(error, "pgcode", None) != "3D000":
+                raise
         try:
             conexion = psycopg2.connect(
                 **{**self.config, "dbname": "postgres"}, connect_timeout=5
@@ -94,8 +104,13 @@ class Database:
                 cursor.execute(f'CREATE DATABASE "{nombre}"')
             cursor.close()
             conexion.close()
-        except psycopg2.OperationalError:
-            pass
+        except psycopg2.Error as error:
+            raise RuntimeError(
+                f"No se pudo crear la base de datos '{nombre}' automáticamente.\n"
+                f"Causa: {error}\n"
+                f"Solución manual (pgAdmin/DBeaver): ejecuta  CREATE DATABASE {nombre};  "
+                f"con un usuario con permisos y vuelve a ejecutar la app."
+            ) from error
 
     def initialize(self) -> None:
         """Garantiza la base de datos y construye todo el esquema relacional."""
