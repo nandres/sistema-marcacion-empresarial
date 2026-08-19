@@ -1,4 +1,13 @@
-import sys
+"""Interfaz de consola del Sistema de Marcación Empresarial para Paraguay.
+
+Orquesta la autenticación RBAC, la marcación con reglas de la Ley N.º 213,
+la gestión de usuarios con auditoría y la exportación de reportes mensuales.
+El menú se adapta al rol del usuario conectado.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
 
 import auth
 import reports
@@ -6,7 +15,8 @@ from clock_engine import ClockEngine
 from database import Database
 
 
-def list_users_menu(db):
+def list_users_menu(db: Database) -> None:
+    """Muestra el listado de usuarios con su rol."""
     print("\n=== Usuarios registrados ===")
     for user in db.list_users():
         print(
@@ -15,7 +25,8 @@ def list_users_menu(db):
         )
 
 
-def create_user_menu(db, actor):
+def create_user_menu(db: Database, actor: dict) -> None:
+    """Asiste la creación de un usuario desde consola."""
     print("\n=== Crear usuario ===")
     username = input("Nombre de usuario: ").strip()
     full_name = input("Nombre completo: ").strip()
@@ -32,7 +43,8 @@ def create_user_menu(db, actor):
     print(f"Usuario #{user_id} creado.")
 
 
-def update_user_menu(db, actor):
+def update_user_menu(db: Database, actor: dict) -> None:
+    """Asiste la edición de un usuario desde consola."""
     print("\n=== Editar usuario ===")
     user_id = input("ID del usuario a editar: ").strip()
     target = db.get_user_by_id(int(user_id))
@@ -48,7 +60,12 @@ def update_user_menu(db, actor):
     role_input = input(f"Nuevo rol [{target['role_name']}]: ").strip() or None
     try:
         auth.update_user(
-            db, actor, int(user_id), full_name=full_name, password=password, role_name=role_input
+            db,
+            actor,
+            int(user_id),
+            full_name=full_name,
+            password=password,
+            role_name=role_input,
         )
     except (ValueError, PermissionError) as error:
         print(error)
@@ -56,18 +73,20 @@ def update_user_menu(db, actor):
     print("Usuario actualizado.")
 
 
-def delete_user_menu(db, actor):
+def delete_user_menu(db: Database, actor: dict) -> None:
+    """Asiste la eliminación de un usuario desde consola."""
     print("\n=== Eliminar usuario ===")
     user_id = input("ID del usuario a eliminar: ").strip()
     try:
         auth.delete_user(db, actor, int(user_id))
-    except PermissionError as error:
+    except (ValueError, PermissionError) as error:
         print(error)
         return
     print("Usuario eliminado.")
 
 
-def export_monthly_menu(db, actor):
+def export_monthly_menu(db: Database, actor: dict) -> None:
+    """Asiste la exportación del reporte mensual de asistencia."""
     print("\n=== Exportar asistencia mensual ===")
     try:
         anio = int(input("Año (ej. 2026): ").strip())
@@ -80,16 +99,22 @@ def export_monthly_menu(db, actor):
     print(f"Reporte exportado: {ruta}")
 
 
-def prompt_first_admin(db):
+def prompt_first_admin(db: Database) -> None:
+    """Crea el primer Administrador en el arranque inicial del sistema."""
     print("=== Crear el primer Administrador ===")
     username = input("Nombre de usuario: ").strip()
     full_name = input("Nombre completo: ").strip()
     password = input("Contraseña: ")
-    auth.create_user(db, None, username, password, full_name, auth.ROLE_ADMIN)
+    try:
+        auth.crear_primer_admin(db, username, password, full_name)
+    except PermissionError as error:
+        print(error)
+        return
     print("Administrador creado.")
 
 
-def main():
+def main() -> None:
+    """Punto de entrada: inicializa la base de datos y lanza el menú."""
     db = Database()
     db.initialize()
 
@@ -97,7 +122,7 @@ def main():
     if not db.list_users():
         prompt_first_admin(db)
 
-    user = None
+    user: Optional[dict] = None
     while user is None:
         user = auth.prompt_login(db)
         if user is None:
@@ -149,10 +174,10 @@ def main():
             create_user_menu(db, user)
         elif option == "7" and role in auth.ROLES_GESTION_USUARIOS:
             update_user_menu(db, user)
-        elif option == "8" and role == auth.ROLE_ADMIN:
-            delete_user_menu(db, user)
         elif option == "9" and role in auth.ROLES_REPORTES:
             export_monthly_menu(db, user)
+        elif option == "8" and role == auth.ROLE_ADMIN:
+            delete_user_menu(db, user)
         elif option == "0":
             print("Hasta pronto.")
             break
