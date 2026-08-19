@@ -4,8 +4,8 @@ Dos modos de uso:
 - Modo Recepción (pantalla pública por defecto): reloj digital en tiempo
   real, marcación por cédula/usuario y ticket criptográfico de reports.py.
 - Modo Gestión (RRHH/Administrador): acceso mediante modal de credenciales
-  autenticado con auth.py y panel protegido de tres pestañas (personal,
-  justificaciones y reportes).
+  autenticado con auth.py y panel protegido de cinco pestañas (personal,
+  justificaciones, reportes, correcciones y analítica visual).
 """
 
 from __future__ import annotations
@@ -15,6 +15,11 @@ from functools import partial
 from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
+import matplotlib
+
+matplotlib.use("TkAgg")
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 
 import auth
 import reports
@@ -333,10 +338,10 @@ class ConsultaLocalModal(ctk.CTkToplevel):
         self.entrada_cedula.pack(pady=5)
         fila_rango = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
         fila_rango.pack(pady=5)
-        self.entrada_desde = entrada(fila_rango, "Desde (AAAA-MM-DD)", ancho=200)
+        self.entrada_desde = entrada(fila_rango, "Desde · 1 de enero", ancho=200)
         self.entrada_desde.insert(0, datetime.date(datetime.date.today().year, 1, 1).isoformat())
         self.entrada_desde.pack(side="left", padx=(0, 6))
-        self.entrada_hasta = entrada(fila_rango, "Hasta (AAAA-MM-DD)", ancho=200)
+        self.entrada_hasta = entrada(fila_rango, "Hasta · hoy", ancho=200)
         self.entrada_hasta.insert(0, datetime.date.today().isoformat())
         self.entrada_hasta.pack(side="left", padx=(6, 0))
         fila_botones = ctk.CTkFrame(tarjeta_consulta, fg_color="transparent")
@@ -370,6 +375,14 @@ class ConsultaLocalModal(ctk.CTkToplevel):
         )
         self.texto_resultado.pack(fill="both", expand=True, padx=20, pady=(0, 20))
         self.entrada_cedula.focus_set()
+        self.attributes("-alpha", 0.0)
+        self.after(10, lambda: self._desvanecer(0))
+
+    def _desvanecer(self, paso: int) -> None:
+        """Anima la entrada del modal con una transición suave de opacidad."""
+        self.attributes("-alpha", min(1.0, 0.3 + paso * 0.14))
+        if paso < 5:
+            self.after(22, lambda: self._desvanecer(paso + 1))
 
     def _hoy(self) -> None:
         """Captura la fecha actual del sistema en ambos extremos y consulta."""
@@ -394,6 +407,17 @@ class ConsultaLocalModal(ctk.CTkToplevel):
             hasta = datetime.date.fromisoformat(self.entrada_hasta.get().strip())
         except ValueError:
             self.lbl_error.configure(text="Fechas inválidas. Use el formato AAAA-MM-DD.")
+            return
+        hoy = datetime.date.today()
+        inicio_anio = datetime.date(hoy.year, 1, 1)
+        if desde < inicio_anio:
+            self.lbl_error.configure(text="El rango inicia en enero del año en curso.")
+            return
+        if hasta > hoy:
+            self.lbl_error.configure(text="La fecha hasta no puede superar el día de hoy.")
+            return
+        if hasta < desde:
+            self.lbl_error.configure(text="La fecha hasta no puede ser anterior a la de desde.")
             return
         try:
             resumen = reports.resumen_historico(self.db, user, desde, hasta)
@@ -493,7 +517,7 @@ class LoginModal(ctk.CTkToplevel):
 
 
 class PanelGestion(ctk.CTkFrame):
-    """Panel protegido de cuatro pestañas para RRHH/Administrador."""
+    """Panel protegido de cinco pestañas para RRHH/Administrador."""
 
     def __init__(
         self, master: MarcacionApp, db: Database, actor: Dict, on_cerrar: Callable
@@ -538,6 +562,7 @@ class PanelGestion(ctk.CTkFrame):
         tab_justificaciones = self.tabs.add("Justificaciones y Permisos")
         tab_reportes = self.tabs.add("Centro de Reportes")
         tab_correcciones = self.tabs.add("Solicitudes de Corrección")
+        tab_dashboard = self.tabs.add("Dashboard Analítico")
 
         self.personal_tab = PersonalTab(tab_personal, db, actor, self._refrescar_empleados)
         self.personal_tab.pack(fill="both", expand=True, padx=12, pady=12)
@@ -547,6 +572,8 @@ class PanelGestion(ctk.CTkFrame):
         self.reportes_tab.pack(fill="both", expand=True, padx=12, pady=12)
         self.correcciones_tab = CorreccionesTab(tab_correcciones, db, actor)
         self.correcciones_tab.pack(fill="both", expand=True, padx=12, pady=12)
+        self.dashboard_tab = DashboardTab(tab_dashboard, db)
+        self.dashboard_tab.pack(fill="both", expand=True, padx=12, pady=12)
 
     def _refrescar_empleados(self) -> None:
         self.justificaciones_tab.refrescar_empleados()
@@ -671,6 +698,224 @@ class CorreccionesTab(ctk.CTkFrame):
             text_color=SUCCESS,
         )
         self._refrescar()
+
+
+class DashboardTab(ctk.CTkFrame):
+    """Analítica visual de RRHH: tardanzas del mes, horas extra por
+    departamento y proyección del aguinaldo proporcional en Guaraníes."""
+
+    def __init__(self, master: ctk.CTkFrame, db: Database) -> None:
+        super().__init__(master, fg_color="transparent")
+        self.db = db
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        cabecera = tarjeta(self)
+        cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        cabecera.grid_columnconfigure(0, weight=1)
+        etiqueta(
+            cabecera, "Dashboard Analítico de Recursos Humanos", 16, TEXT, "bold"
+        ).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 2))
+        self.lbl_actualizado = etiqueta(
+            cabecera, "Cargando métricas…", 12, MUTED
+        )
+        self.lbl_actualizado.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 14))
+        ctk.CTkButton(
+            cabecera,
+            text="Actualizar",
+            command=self._refrescar,
+            width=110,
+            height=34,
+            font=(FONT, 12),
+            fg_color=PRIMARY,
+            hover_color=PRIMARY_HOVER,
+            corner_radius=8,
+        ).grid(row=0, column=1, rowspan=2, padx=16, sticky="e")
+
+        self.area = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
+        self.area.grid(row=1, column=0, sticky="nsew")
+        self.area.grid_columnconfigure(0, weight=1)
+        self.area.grid_columnconfigure(1, weight=1)
+        self._refrescar()
+
+    def _refrescar(self) -> None:
+        """Recarga los datos analíticos y redibuja los tres bloques."""
+        for hijo in self.area.winfo_children():
+            hijo.destroy()
+        self.tardanzas = reports.obtener_metricas_tardanzas(self.db)
+        self.extras = reports.obtener_horas_extra_por_departamento(self.db)
+        self.aguinaldo = reports.obtener_proyeccion_aguinaldos_totales(self.db)
+        self.lbl_actualizado.configure(
+            text=f"Actualizado · {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        self._construir_tarjeta_aguinaldo(0, 0)
+        self._construir_grafico_tardanzas(1, 0)
+        self._construir_grafico_extras(1, 1)
+
+    def _construir_tarjeta_aguinaldo(self, fila: int, columna: int) -> None:
+        tarjeta_aguinaldo = tarjeta(self.area)
+        tarjeta_aguinaldo.grid(
+            row=fila, column=columna, columnspan=2, sticky="ew", pady=(0, 12)
+        )
+        tarjeta_aguinaldo.grid_columnconfigure(0, weight=1)
+        etiqueta(
+            tarjeta_aguinaldo,
+            "AGUINALDO PROPORCIONAL ESTIMADO · LEY N.º 6380/2019",
+            13,
+            MUTED,
+            "bold",
+        ).grid(row=0, column=0, sticky="w", padx=24, pady=(18, 2))
+        total = self.aguinaldo["total_acumulado_g"]
+        millones = total / 1_000_000
+        etiqueta(
+            tarjeta_aguinaldo,
+            f"Gs. {total:,}".replace(",", "."),
+            38,
+            TEXT,
+            "bold",
+        ).grid(row=1, column=0, sticky="w", padx=24, pady=(2, 0))
+        etiqueta(
+            tarjeta_aguinaldo,
+            f"≈ {millones:,.2f} millones de Guaraníes acumulados",
+            15,
+            "#F5C26B",
+            "bold",
+        ).grid(row=2, column=0, sticky="w", padx=24, pady=(0, 4))
+        resumen = (
+            f"{self.aguinaldo['empleados']} empleados activos · "
+            f"{self.aguinaldo['meses_transcurridos']} meses devengados · "
+            f"Proyección anual Gs. {self.aguinaldo['total_anual_g']:,}".replace(",", ".")
+        )
+        etiqueta(tarjeta_aguinaldo, resumen, 13, MUTED).grid(
+            row=3, column=0, sticky="w", padx=24, pady=(0, 6)
+        )
+        partes = [
+            f"{dep}: Gs. {datos['acumulado_g']:,}".replace(",", ".")
+            for dep, datos in self.aguinaldo["por_departamento"].items()
+        ]
+        if partes:
+            etiqueta(tarjeta_aguinaldo, " · ".join(partes), 12, MUTED).grid(
+                row=4, column=0, sticky="w", padx=24, pady=(0, 18)
+            )
+
+    def _crear_figura(self, ancho: float, alto: float) -> Figure:
+        return Figure(figsize=(ancho, alto), facecolor=BG)
+
+    def _ajustar_figura(self, figura: Figure) -> None:
+        figura.subplots_adjust(left=0.14, right=0.96, top=0.9, bottom=0.16)
+
+    def _estilizar_ejes(self, eje) -> None:
+        eje.set_facecolor(BG)
+        eje.grid(True, color="#34343B", alpha=0.35, linestyle="--", linewidth=0.8)
+        for borde in ("top", "right"):
+            eje.spines[borde].set_visible(False)
+        for borde in ("left", "bottom"):
+            eje.spines[borde].set_color("#34343B")
+
+    def _construir_grafico_tardanzas(self, fila: int, columna: int) -> None:
+        tarjeta_grafico = tarjeta(self.area)
+        tarjeta_grafico.grid(
+            row=fila, column=columna, sticky="nsew", padx=(0, 6), pady=(0, 12)
+        )
+        etiqueta(
+            tarjeta_grafico,
+            "Llegadas Tardías por Día · Mes en Curso",
+            14,
+            TEXT,
+            "bold",
+        ).pack(anchor="w", padx=16, pady=(14, 0))
+        figura = self._crear_figura(5.4, 3.2)
+        self._ajustar_figura(figura)
+        eje = figura.add_subplot(111)
+        self._estilizar_ejes(eje)
+        dias = [datetime.date.fromisoformat(d["fecha"]).day for d in self.tardanzas]
+        cantidades = [d["cantidad"] for d in self.tardanzas]
+        if not cantidades or max(cantidades) == 0:
+            eje.text(
+                0.5, 0.5, "Sin llegadas tardías registradas en el mes",
+                ha="center", va="center", color=MUTED, fontsize=12,
+                transform=eje.transAxes,
+            )
+        else:
+            eje.plot(
+                dias, cantidades, color=PRIMARY, linewidth=2.5,
+                marker="o", markersize=5, markerfacecolor=TEXT,
+            )
+            eje.fill_between(dias, cantidades, color=PRIMARY, alpha=0.12)
+            pico = max(cantidades)
+            if pico > 0:
+                dia_pico = dias[cantidades.index(pico)]
+                eje.scatter([dia_pico], [pico], s=90, color=DANGER, zorder=5)
+                eje.annotate(
+                    f"Pico: {pico}",
+                    xy=(dia_pico, pico), xytext=(6, 12),
+                    textcoords="offset points", color=DANGER, fontsize=10, fontweight="bold",
+                )
+            eje.set_xlabel("Día del mes", fontsize=10)
+            eje.set_ylabel("Cantidad de tardanzas", fontsize=10)
+            eje.set_xticks(dias)
+            eje.tick_params(labelsize=8)
+        lienzo = FigureCanvasTkAgg(figura, master=tarjeta_grafico)
+        lienzo.draw()
+        lienzo.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=(4, 12))
+
+    def _construir_grafico_extras(self, fila: int, columna: int) -> None:
+        tarjeta_grafico = tarjeta(self.area)
+        tarjeta_grafico.grid(
+            row=fila, column=columna, sticky="nsew", padx=(6, 0), pady=(0, 12)
+        )
+        etiqueta(
+            tarjeta_grafico,
+            "Horas Extra 50% vs 100% por Departamento",
+            14,
+            TEXT,
+            "bold",
+        ).pack(anchor="w", padx=16, pady=(14, 0))
+        figura = self._crear_figura(5.4, 3.2)
+        self._ajustar_figura(figura)
+        eje = figura.add_subplot(111)
+        self._estilizar_ejes(eje)
+        departamentos = [e["departamento"] for e in self.extras]
+        if not departamentos:
+            eje.text(
+                0.5, 0.5, "Sin horas extra acumuladas todavía",
+                ha="center", va="center", color=MUTED, fontsize=12,
+                transform=eje.transAxes,
+            )
+        else:
+            posiciones = range(len(departamentos))
+            ancho_barra = 0.38
+            eje.bar(
+                [p - ancho_barra / 2 for p in posiciones],
+                [e["horas_50"] for e in self.extras],
+                width=ancho_barra, color=PRIMARY, label="Recargo 50%",
+                edgecolor="#26262C",
+            )
+            eje.bar(
+                [p + ancho_barra / 2 for p in posiciones],
+                [e["horas_100"] for e in self.extras],
+                width=ancho_barra, color="#F5C26B", label="Recargo 100%",
+                edgecolor="#26262C",
+            )
+            for indice, extra in enumerate(self.extras):
+                eje.text(
+                    indice - ancho_barra / 2, extra["horas_50"] + 0.3,
+                    f"{extra['horas_50']:.1f}", ha="center", va="bottom",
+                    color=TEXT, fontsize=9,
+                )
+                eje.text(
+                    indice + ancho_barra / 2, extra["horas_100"] + 0.3,
+                    f"{extra['horas_100']:.1f}", ha="center", va="bottom",
+                    color=TEXT, fontsize=9,
+                )
+            eje.set_xticks(list(posiciones))
+            eje.set_xticklabels(departamentos, fontsize=8)
+            eje.set_ylabel("Horas acumuladas", fontsize=10)
+            eje.legend(loc="upper right", frameon=False, fontsize=9)
+            eje.tick_params(labelsize=8)
+        lienzo = FigureCanvasTkAgg(figura, master=tarjeta_grafico)
+        lienzo.draw()
+        lienzo.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=(4, 12))
 
 
 class PersonalTab(ctk.CTkFrame):

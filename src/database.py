@@ -13,7 +13,7 @@ Responsabilidades:
 from __future__ import annotations
 
 import os
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -160,6 +160,30 @@ class Database:
         cursor.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_biometrico "
             "ON users (biometrico_id) WHERE biometrico_id IS NOT NULL"
+        )
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "departamento VARCHAR(80) NOT NULL DEFAULT 'General'"
+        )
+        cursor.execute(
+            """
+            UPDATE users u
+            SET departamento = CASE
+                WHEN r.nombre IN ('Administrador', 'Recursos Humanos')
+                    THEN 'Dirección y Administración'
+                ELSE 'Operaciones'
+            END
+            FROM roles r
+            WHERE r.id = u.role_id AND u.departamento = 'General'
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_departamento "
+            "ON users (departamento)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_marcajes_analitica "
+            "ON marcajes (es_tardanza, hora_entrada)"
         )
         cursor.execute(
             "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
@@ -689,3 +713,55 @@ class Database:
             (hora_entrada, es_tardanza, tipo_incidencia, entry_id),
         )
         self.connection.commit()
+
+    def get_metricas_tardanzas(
+        self, desde: datetime.date, hasta: datetime.date
+    ) -> List[Dict[str, Any]]:
+        """Cantidad de llegadas tardías por día dentro de un rango."""
+        cursor = self._execute(
+            """
+            SELECT DATE(hora_entrada AT TIME ZONE 'America/Asuncion') AS fecha,
+                   COUNT(*) AS cantidad
+            FROM marcajes
+            WHERE es_tardanza = TRUE
+              AND hora_entrada >= %s AND hora_entrada < %s
+            GROUP BY DATE(hora_entrada AT TIME ZONE 'America/Asuncion')
+            ORDER BY fecha
+            """,
+            (
+                datetime.combine(desde, time.min),
+                datetime.combine(hasta + timedelta(days=1), time.min),
+            ),
+            fetch="all",
+        )
+        return [dict(fila) for fila in cursor]
+
+    def get_horas_extra_por_departamento(self) -> List[Dict[str, Any]]:
+        """Horas extra al 50% y 100% acumuladas por departamento."""
+        cursor = self._execute(
+            """
+            SELECT u.departamento,
+                   EXTRACT(EPOCH FROM SUM(m.horas_extra_50)) / 3600.0 AS horas_50,
+                   EXTRACT(EPOCH FROM SUM(m.horas_extra_100)) / 3600.0 AS horas_100
+            FROM marcajes m
+            JOIN users u ON u.id = m.user_id
+            GROUP BY u.departamento
+            ORDER BY (EXTRACT(EPOCH FROM SUM(m.horas_extra_50)) +
+                      EXTRACT(EPOCH FROM SUM(m.horas_extra_100))) DESC
+            """,
+            fetch="all",
+        )
+        return [dict(fila) for fila in cursor]
+
+    def get_proyeccion_aguinaldos(self) -> List[Dict[str, Any]]:
+        """Salarios y departamento de cada empleado para proyectar aguinaldos."""
+        cursor = self._execute(
+            """
+            SELECT id, full_name, departamento, salario_mensual
+            FROM users
+            WHERE salario_mensual > 0
+            ORDER BY departamento, full_name
+            """,
+            fetch="all",
+        )
+        return [dict(fila) for fila in cursor]

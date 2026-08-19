@@ -478,3 +478,76 @@ def exportar_asistencia_mensual(
     else:
         _exportar_csv(grupos, ruta)
     return str(ruta)
+
+
+def obtener_metricas_tardanzas(
+    db: Database, desde: Optional[date] = None, hasta: Optional[date] = None
+) -> List[Dict[str, Any]]:
+    """Distribución diaria de llegadas tardías para el tablero analítico.
+
+    Completa con ceros los días sin incidencias para que el gráfico refleje
+    el mes completo del 1 hasta hoy.
+    """
+    hoy = date.today()
+    desde = desde or date(hoy.year, hoy.month, 1)
+    hasta = hasta or hoy
+    filas = db.get_metricas_tardanzas(desde, hasta)
+    mapa = {fila["fecha"]: int(fila["cantidad"]) for fila in filas}
+    dias: List[Dict[str, Any]] = []
+    dia = desde
+    while dia <= hasta:
+        dias.append({"fecha": dia.isoformat(), "cantidad": mapa.get(dia, 0)})
+        dia += timedelta(days=1)
+    return dias
+
+
+def obtener_horas_extra_por_departamento(db: Database) -> List[Dict[str, Any]]:
+    """Horas extra acumuladas al 50% y 100% agrupadas por departamento."""
+    filas = db.get_horas_extra_por_departamento()
+    return [
+        {
+            "departamento": fila["departamento"],
+            "horas_50": round(float(fila["horas_50"] or 0.0), 2),
+            "horas_100": round(float(fila["horas_100"] or 0.0), 2),
+        }
+        for fila in filas
+    ]
+
+
+def obtener_proyeccion_aguinaldos_totales(
+    db: Database, anio: Optional[int] = None
+) -> Dict[str, Any]:
+    """Proyección del aguinaldo proporcional de toda la empresa en Guaraníes.
+
+    Acumula mes a mes desde enero (Ley N.º 6380/2019): por cada empleado
+    activo se devenga ``salario_mensual / 12`` por mes transcurrido.
+    """
+    if anio is None:
+        anio = date.today().year
+    filas = db.get_proyeccion_aguinaldos()
+    meses_transcurridos = date.today().month
+    por_departamento: Dict[str, Dict[str, float]] = {}
+    for fila in filas:
+        salario = float(fila["salario_mensual"] or 0.0)
+        acumulado = salario / 12.0 * meses_transcurridos
+        resumen = por_departamento.setdefault(
+            fila["departamento"], {"acumulado": 0.0, "anual": 0.0}
+        )
+        resumen["acumulado"] += acumulado
+        resumen["anual"] += salario
+    return {
+        "anio": anio,
+        "meses_transcurridos": meses_transcurridos,
+        "empleados": len(filas),
+        "total_acumulado_g": round(
+            sum(v["acumulado"] for v in por_departamento.values())
+        ),
+        "total_anual_g": round(sum(v["anual"] for v in por_departamento.values())),
+        "por_departamento": {
+            departamento: {
+                "acumulado_g": round(resumen["acumulado"]),
+                "anual_g": round(resumen["anual"]),
+            }
+            for departamento, resumen in por_departamento.items()
+        },
+    }

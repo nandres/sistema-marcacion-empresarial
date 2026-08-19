@@ -32,7 +32,7 @@ flowchart LR
 | `src/database.py` | Conexión PostgreSQL (psycopg2), esquema de roles, usuarios, marcajes y `logs_auditoria` |
 | `src/clock_engine.py` | Reglas de negocio (Ley 213): entrada/salida, tardanzas y horas extra |
 | `src/reports.py` | Exportación mensual de asistencia (xlsx/csv) y aguinaldos para contabilidad |
-| `src/gui.py` | Interfaz premium en CustomTkinter: [[Diseño de Interfaz Premium UI-UX]] |
+| `src/gui.py` | Interfaz premium en CustomTkinter: [[Diseño de Interfaz Premium UI-UX]] y [[Panel de Analítica Visual y UX Premium]] |
 | `src/web_server.py` | Autoservicio web FastAPI: [[Estructura Web y Conexión Biométrica]] |
 | `src/biometric_sync.py` | Sincronización TCP/IP con relojes ZKTeco (puerto 4370) |
 | `solicitudes_correccion` | Tabla de reclamos de marcación fallida (Pendiente/Aprobado/Rechazado) |
@@ -54,6 +54,7 @@ flowchart LR
 - [[Diseño de Interfaz Premium UI-UX]]
 - [[Estructura Web y Conexión Biométrica]]
 - [[Seguridad y Cifrado de Comunicaciones]]
+- [[Panel de Analítica Visual y UX Premium]]
 
 ## Vinculación con el repositorio
 
