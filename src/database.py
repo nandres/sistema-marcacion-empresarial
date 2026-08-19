@@ -138,10 +138,15 @@ class Database:
                 username VARCHAR(100) UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 full_name VARCHAR(200) NOT NULL,
+                salario_mensual NUMERIC(12,2) NOT NULL DEFAULT 0,
                 role_id INTEGER NOT NULL REFERENCES roles (id),
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """
+        )
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "salario_mensual NUMERIC(12,2) NOT NULL DEFAULT 0"
         )
         cursor.execute(
             """
@@ -183,6 +188,26 @@ class Database:
             """
             CREATE INDEX IF NOT EXISTS idx_auditoria_usuario
             ON logs_auditoria (usuario_id, creado_en)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS justificaciones (
+                id SERIAL PRIMARY KEY,
+                usuario_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+                tipo_permiso VARCHAR(50) NOT NULL
+                    CHECK (tipo_permiso IN ('Vacaciones', 'Reposo', 'Permiso')),
+                fecha_inicio DATE NOT NULL,
+                fecha_fin DATE NOT NULL,
+                aprobado_por INTEGER NOT NULL REFERENCES users (id),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_justificaciones_usuario_fechas
+            ON justificaciones (usuario_id, fecha_inicio, fecha_fin)
             """
         )
         for nombre in ROLES_INICIALES:
@@ -238,16 +263,21 @@ class Database:
         return cursor.fetchone()["id"]
 
     def create_user(
-        self, username: str, password_hash: str, full_name: str, role_id: int
+        self,
+        username: str,
+        password_hash: str,
+        full_name: str,
+        role_id: int,
+        salario_mensual: float = 0.0,
     ) -> int:
         """Inserta un usuario y retorna su identificador."""
         cursor = self._execute(
             """
-            INSERT INTO users (username, password_hash, full_name, role_id)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO users (username, password_hash, full_name, role_id, salario_mensual)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (username, password_hash, full_name, role_id),
+            (username, password_hash, full_name, role_id, salario_mensual),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
@@ -277,10 +307,11 @@ class Database:
         )
 
     def list_users(self) -> List[Dict[str, Any]]:
-        """Lista todos los usuarios con su rol asociado."""
+        """Lista todos los usuarios con su rol y salario mensual."""
         return self._execute(
             """
-            SELECT u.id, u.username, u.full_name, r.nombre AS role_name, u.created_at
+            SELECT u.id, u.username, u.full_name, u.salario_mensual,
+                   r.nombre AS role_name, u.created_at
             FROM users u JOIN roles r ON r.id = u.role_id
             ORDER BY u.id
             """,
@@ -293,6 +324,7 @@ class Database:
         full_name: Optional[str] = None,
         password_hash: Optional[str] = None,
         role_id: Optional[int] = None,
+        salario_mensual: Optional[float] = None,
     ) -> bool:
         """Actualiza los campos provistos de un usuario y retorna si hubo cambios."""
         updates: List[str] = []
@@ -306,6 +338,9 @@ class Database:
         if role_id is not None:
             updates.append("role_id = %s")
             params.append(role_id)
+        if salario_mensual is not None:
+            updates.append("salario_mensual = %s")
+            params.append(salario_mensual)
         if not updates:
             return False
         params.append(user_id)
@@ -422,6 +457,74 @@ class Database:
             FROM marcajes m JOIN users u ON u.id = m.user_id
             WHERE m.hora_entrada >= %s AND m.hora_entrada < %s
             ORDER BY u.username, m.hora_entrada
+            """,
+            (inicio, fin),
+            fetch="all",
+        )
+
+    def crear_justificacion(
+        self,
+        usuario_id: int,
+        tipo_permiso: str,
+        fecha_inicio: Any,
+        fecha_fin: Any,
+        aprobado_por: int,
+    ) -> int:
+        """Registra una justificación aprobada por RRHH/Administrador."""
+        cursor = self._execute(
+            """
+            INSERT INTO justificaciones
+                (usuario_id, tipo_permiso, fecha_inicio, fecha_fin, aprobado_por)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (usuario_id, tipo_permiso, fecha_inicio, fecha_fin, aprobado_por),
+        )
+        self.connection.commit()
+        return cursor.fetchone()["id"]
+
+    def get_justificacion_por_fecha(
+        self, usuario_id: int, fecha: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Retorna la justificación aprobada que cubre una fecha, si existe."""
+        return self._execute(
+            """
+            SELECT * FROM justificaciones
+            WHERE usuario_id = %s
+              AND aprobado_por IS NOT NULL
+              AND %s BETWEEN fecha_inicio AND fecha_fin
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (usuario_id, fecha),
+            fetch="one",
+        )
+
+    def list_justificaciones(self) -> List[Dict[str, Any]]:
+        """Lista las justificaciones con datos del empleado y del aprobador."""
+        return self._execute(
+            """
+            SELECT j.*, u.username, u.full_name, a.username AS aprobador
+            FROM justificaciones j
+            JOIN users u ON u.id = j.usuario_id
+            JOIN users a ON a.id = j.aprobado_por
+            ORDER BY j.fecha_inicio
+            """,
+            fetch="all",
+        )
+
+    def get_horas_extra_year(self, anio: int) -> List[Dict[str, Any]]:
+        """Acumula por empleado las horas extra del año (suma de INTERVAL)."""
+        inicio = datetime(anio, 1, 1)
+        fin = datetime(anio + 1, 1, 1)
+        return self._execute(
+            """
+            SELECT user_id,
+                   COALESCE(SUM(horas_extra_50), INTERVAL '0 seconds') AS extra_50,
+                   COALESCE(SUM(horas_extra_100), INTERVAL '0 seconds') AS extra_100
+            FROM marcajes
+            WHERE hora_entrada >= %s AND hora_entrada < %s
+            GROUP BY user_id
             """,
             (inicio, fin),
             fetch="all",
