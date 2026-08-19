@@ -227,14 +227,26 @@ class MarcacionApp(ctk.CTk):
         boton_primario(self.tarjeta_marcacion, "REGISTRAR ASISTENCIA", self._marcar).grid(
             row=2, column=0, pady=(0, 6)
         )
+        fila_clima = ctk.CTkFrame(self.tarjeta_marcacion, fg_color="transparent")
+        fila_clima.grid(row=3, column=0, pady=(0, 10))
+        self.dia_lluvioso = ctk.BooleanVar(value=False)
+        ctk.CTkSwitch(
+            fila_clima,
+            text="Día de Lluvia Intensa · tolerancia climática 30 min (Res. 3028/2024)",
+            variable=self.dia_lluvioso,
+            font=(FONT, 12),
+            text_color=MUTED,
+            progress_color=PRIMARY,
+            fg_color=INPUT_BG,
+        ).pack(side="left")
         etiqueta(
             self.tarjeta_marcacion,
             "El sistema detecta automáticamente si corresponde Entrada o Salida",
             12,
             MUTED,
-        ).grid(row=3, column=0, pady=(0, 14))
+        ).grid(row=4, column=0, pady=(0, 14))
         self.lbl_estado = etiqueta(self.tarjeta_marcacion, "", 14, SUCCESS)
-        self.lbl_estado.grid(row=4, column=0, pady=(0, 18))
+        self.lbl_estado.grid(row=5, column=0, pady=(0, 18))
 
     def _construir_tarjeta_ticket(self, master: ctk.CTkFrame) -> None:
         self.tarjeta_ticket = tarjeta(master)
@@ -287,7 +299,9 @@ class MarcacionApp(ctk.CTk):
             return
         engine = ClockEngine(self.db, user)
         try:
-            entry_id, momento, tipo = engine.registrar_asistencia()
+            entry_id, momento, tipo = engine.registrar_asistencia(
+                es_dia_lluvioso=self.dia_lluvioso.get()
+            )
         except ValueError as error:
             self._mostrar_estado(str(error), DANGER)
             return
@@ -1112,6 +1126,21 @@ class PersonalTab(ctk.CTkFrame):
             height=40,
         )
         self.menu_rol.pack(pady=5)
+        self.menu_vinculo = ctk.CTkOptionMenu(
+            formulario,
+            values=list(auth.TIPOS_VINCULO),
+            font=(FONT, 14),
+            fg_color=INPUT_BG,
+            button_color=PRIMARY,
+            button_hover_color=PRIMARY_HOVER,
+            text_color=TEXT,
+            dropdown_fg_color=INPUT_BG,
+            dropdown_hover_color=PRIMARY,
+            width=280,
+            height=40,
+        )
+        self.menu_vinculo.set("Funcionario")
+        self.menu_vinculo.pack(pady=5)
         self.ent_salario = entrada(formulario, "Salario base (Gs.)", ancho=280)
         self.ent_salario.pack(pady=5)
         self.ent_clave = entrada(formulario, "Contraseña inicial", ancho=280)
@@ -1141,6 +1170,7 @@ class PersonalTab(ctk.CTkFrame):
         for hijo in self.scroll.winfo_children():
             hijo.destroy()
         for usuario in self.db.list_users():
+            vinculo = usuario.get("tipo_vinculo") or "Funcionario"
             fila = ctk.CTkFrame(self.scroll, fg_color=INPUT_BG, corner_radius=10)
             fila.pack(fill="x", pady=4)
             fila.grid_columnconfigure(0, weight=1)
@@ -1149,7 +1179,13 @@ class PersonalTab(ctk.CTkFrame):
                 f"{usuario['username']} · {usuario['full_name']} · "
                 f"{usuario['role_name']} · Gs. {float(usuario['salario_mensual'] or 0):,.0f}",
                 13,
-            ).grid(row=0, column=0, sticky="w", padx=14, pady=10)
+            ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+            etiqueta(
+                fila,
+                f"Vínculo: {vinculo}",
+                11,
+                ACCENTO if vinculo == "Pasante" else MUTED,
+            ).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
             boton_editar = ctk.CTkButton(
                 fila,
                 text="Editar",
@@ -1192,6 +1228,7 @@ class PersonalTab(ctk.CTkFrame):
                 self.ent_nombre.get().strip(),
                 self.menu_rol.get(),
                 salario,
+                self.menu_vinculo.get(),
             )
         except (ValueError, PermissionError) as error:
             self.lbl_resultado.configure(text=str(error), text_color=DANGER)
@@ -1235,7 +1272,7 @@ class EditEmployeeModal(ctk.CTkToplevel):
         self.on_guardar = on_guardar
         self.on_cambio = on_cambio
         self.title(f"Editar: {usuario['username']}")
-        self.geometry("380x400")
+        self.geometry("380x460")
         self.configure(fg_color=BG)
         self.transient(master.winfo_toplevel())
         self.grab_set()
@@ -1264,6 +1301,21 @@ class EditEmployeeModal(ctk.CTkToplevel):
         )
         self.menu_rol.set(usuario["role_name"])
         self.menu_rol.pack(pady=5)
+        self.menu_vinculo = ctk.CTkOptionMenu(
+            formulario,
+            values=list(auth.TIPOS_VINCULO),
+            font=(FONT, 14),
+            fg_color=INPUT_BG,
+            button_color=PRIMARY,
+            button_hover_color=PRIMARY_HOVER,
+            text_color=TEXT,
+            dropdown_fg_color=INPUT_BG,
+            dropdown_hover_color=PRIMARY,
+            width=300,
+            height=40,
+        )
+        self.menu_vinculo.set(usuario.get("tipo_vinculo") or "Funcionario")
+        self.menu_vinculo.pack(pady=5)
         self.ent_clave = entrada(formulario, "Nueva contraseña (opcional)", ancho=300)
         self.ent_clave.configure(show="•")
         self.ent_clave.pack(pady=5)
@@ -1286,6 +1338,7 @@ class EditEmployeeModal(ctk.CTkToplevel):
                 password=clave,
                 role_name=self.menu_rol.get(),
                 salario_mensual=salario,
+                tipo_vinculo=self.menu_vinculo.get(),
             )
         except (ValueError, PermissionError) as error:
             self.lbl_error.configure(text=str(error))

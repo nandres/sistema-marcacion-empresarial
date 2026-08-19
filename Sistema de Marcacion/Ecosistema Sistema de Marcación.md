@@ -30,7 +30,7 @@ flowchart LR
 | `src/app.py` | Punto de entrada: menú interactivo adaptado al rol, flujo de sesión y orquestación |
 | `src/auth.py` | Autenticación (bcrypt) y control de accesos RBAC: [[Control de Roles y Permisos RBAC]] y [[Seguridad y Cifrado de Comunicaciones]] |
 | `src/database.py` | Conexión PostgreSQL (psycopg2), esquema de roles, usuarios, marcajes y `logs_auditoria` |
-| `src/clock_engine.py` | Reglas de negocio (Ley 213): entrada/salida, tardanzas y horas extra |
+| `src/clock_engine.py` | Reglas de negocio (Ley 213): entrada/salida, tardanzas y horas extra; cumplimiento CONATEL Res. 3028/2024: [[Reglamento de Asistencia y Disciplina CONATEL]] |
 | `src/reports.py` | Exportación mensual de asistencia (xlsx/csv) y aguinaldos para contabilidad |
 | `src/gui.py` | Interfaz premium en CustomTkinter: [[Diseño de Interfaz Premium UI-UX]] y [[Panel de Analítica Visual y UX Premium]] |
 | `src/web_server.py` | Autoservicio web FastAPI: [[Estructura Web y Conexión Biométrica]] |
@@ -42,7 +42,7 @@ flowchart LR
 
 1. `app.py` inicia `Database` y crea la base y el esquema (tablas `roles`, `users`, `marcajes`, `logs_auditoria`).
 2. `auth.py` valida credenciales (bcrypt) contra la tabla `users` y verifica el rol.
-3. `clock_engine.py` registra entradas/salidas en `marcajes` con el desglose de la Ley 213.
+3. `clock_engine.py` registra entradas/salidas en `marcajes` con el desglose de la Ley 213 y las reglas de tolerancia de la Res. 3028/2024 de CONATEL.
 4. `database.py` persiste todo en PostgreSQL y audita las operaciones de RRHH/Admin.
 
 ## Documentación vinculada
@@ -57,6 +57,7 @@ flowchart LR
 - [[Seguridad y Cifrado de Comunicaciones]]
 - [[Panel de Analítica Visual y UX Premium]]
 - [[Despliegue en la Nube e Infraestructura SaaS]]
+- [[Reglamento de Asistencia y Disciplina CONATEL]]
 
 ## Vinculación con el repositorio
 

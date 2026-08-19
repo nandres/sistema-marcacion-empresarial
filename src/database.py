@@ -212,6 +212,18 @@ class Database:
             "ON marcajes (es_tardanza, hora_entrada)"
         )
         cursor.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "tipo_vinculo VARCHAR(20) NOT NULL DEFAULT 'Funcionario'"
+        )
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
+            "tolerancia_aplicada BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
+            "condicion_climatica VARCHAR(30) NOT NULL DEFAULT ''"
+        )
+        cursor.execute(
             "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
             "tipo_incidencia VARCHAR(50) NOT NULL DEFAULT ''"
         )
@@ -359,15 +371,17 @@ class Database:
         full_name: str,
         role_id: int,
         salario_mensual: float = 0.0,
+        tipo_vinculo: str = "Funcionario",
     ) -> int:
         """Inserta un usuario y retorna su identificador."""
         cursor = self._execute(
             """
-            INSERT INTO users (username, password_hash, full_name, role_id, salario_mensual)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO users (username, password_hash, full_name, role_id,
+                               salario_mensual, tipo_vinculo)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (username, password_hash, full_name, role_id, salario_mensual),
+            (username, password_hash, full_name, role_id, salario_mensual, tipo_vinculo),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
@@ -397,11 +411,11 @@ class Database:
         )
 
     def list_users(self) -> List[Dict[str, Any]]:
-        """Lista todos los usuarios con su rol y salario mensual."""
+        """Lista todos los usuarios con su rol, salario y vínculo laboral."""
         return self._execute(
             """
             SELECT u.id, u.username, u.full_name, u.salario_mensual,
-                   r.nombre AS role_name, u.created_at
+                   u.tipo_vinculo, r.nombre AS role_name, u.created_at
             FROM users u JOIN roles r ON r.id = u.role_id
             ORDER BY u.id
             """,
@@ -415,6 +429,7 @@ class Database:
         password_hash: Optional[str] = None,
         role_id: Optional[int] = None,
         salario_mensual: Optional[float] = None,
+        tipo_vinculo: Optional[str] = None,
     ) -> bool:
         """Actualiza los campos provistos de un usuario y retorna si hubo cambios."""
         updates: List[str] = []
@@ -431,6 +446,9 @@ class Database:
         if salario_mensual is not None:
             updates.append("salario_mensual = %s")
             params.append(salario_mensual)
+        if tipo_vinculo is not None:
+            updates.append("tipo_vinculo = %s")
+            params.append(tipo_vinculo)
         if not updates:
             return False
         params.append(user_id)
@@ -462,19 +480,50 @@ class Database:
         return self._execute("SELECT * FROM roles ORDER BY id", fetch="all")
 
     def open_clock_in(
-        self, user_id: int, hora_entrada: datetime, es_tardanza: bool, tipo_incidencia: str = ""
+        self,
+        user_id: int,
+        hora_entrada: datetime,
+        es_tardanza: bool,
+        tipo_incidencia: str = "",
+        tolerancia_aplicada: bool = False,
+        condicion_climatica: str = "",
     ) -> int:
-        """Abre un marcaje de entrada con su estado de tardanza e incidencia."""
+        """Abre un marcaje de entrada con su estado, incidencia y contexto.
+
+        ``tolerancia_aplicada`` indica si se consumió la gracia ordinaria o
+        climática de la Res. 3028/2024 de CONATEL; ``condicion_climatica``
+        documenta el evento meteorológico declarado en el kiosco.
+        """
         cursor = self._execute(
             """
-            INSERT INTO marcajes (user_id, hora_entrada, es_tardanza, tipo_incidencia)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO marcajes (user_id, hora_entrada, es_tardanza,
+                                  tipo_incidencia, tolerancia_aplicada,
+                                  condicion_climatica)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (user_id, hora_entrada, es_tardanza, tipo_incidencia),
+            (user_id, hora_entrada, es_tardanza, tipo_incidencia,
+             tolerancia_aplicada, condicion_climatica),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
+
+    def contar_tardanzas_mes(self, user_id: int, fecha: datetime.date) -> int:
+        """Cuenta las llegadas tardías del usuario dentro del mes indicado."""
+        primer_dia = fecha.replace(day=1)
+        siguiente_mes = (primer_dia.replace(day=28) + timedelta(days=4)).replace(day=1)
+        fila = self._execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM marcajes
+            WHERE user_id = %s AND es_tardanza = TRUE
+              AND hora_entrada >= %s AND hora_entrada < %s
+            """,
+            (user_id, datetime.combine(primer_dia, time.min),
+             datetime.combine(siguiente_mes, time.min)),
+            fetch="one",
+        )
+        return int(fila["total"])
 
     def close_clock_out(
         self,

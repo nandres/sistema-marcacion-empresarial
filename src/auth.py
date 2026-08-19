@@ -28,7 +28,9 @@ ROLES_GESTION_USUARIOS: tuple = (ROLE_ADMIN, ROLE_RRHH)
 ROLES_REPORTES: tuple = (ROLE_ADMIN, ROLE_RRHH)
 ROLES_MARCAJES: tuple = (ROLE_ADMIN, ROLE_RRHH, ROLE_EMPLEADO)
 
-TIPOS_PERMISO: tuple = ("Vacaciones", "Reposo", "Permiso")
+TIPOS_PERMISO: tuple = ("Vacaciones", "Reposo", "Permiso", "Permiso por Examen")
+
+TIPOS_VINCULO: tuple = ("Pasante", "Funcionario")
 
 JWT_EXPIRACION_HORAS: int = 8
 JWT_ALGORITMO: str = "HS256"
@@ -158,17 +160,25 @@ def create_user(
     full_name: str,
     role_name: str,
     salario_mensual: float = 0.0,
+    tipo_vinculo: str = "Funcionario",
 ) -> int:
     """Crea un usuario auditando la acción; solo el Admin asigna otro Admin."""
     if role_name == ROLE_ADMIN:
         require_role(db, actor, (ROLE_ADMIN,))
+    if tipo_vinculo not in TIPOS_VINCULO:
+        raise ValueError(f"Tipo de vínculo inválido. Use: {', '.join(TIPOS_VINCULO)}")
     role = db.get_role_by_name(role_name)
     if not role:
         raise ValueError(f"El rol '{role_name}' no existe.")
     if db.get_user_by_username(username):
         raise ValueError("El usuario ya existe.")
     user_id = db.create_user(
-        username, hash_password(password), full_name, role["id"], salario_mensual
+        username,
+        hash_password(password),
+        full_name,
+        role["id"],
+        salario_mensual,
+        tipo_vinculo,
     )
     db.registrar_auditoria(
         actor["id"],
@@ -180,6 +190,7 @@ def create_user(
             "full_name": full_name,
             "role_id": role["id"],
             "salario_mensual": salario_mensual,
+            "tipo_vinculo": tipo_vinculo,
         },
     )
     return user_id
@@ -194,10 +205,13 @@ def update_user(
     password: Optional[str] = None,
     role_name: Optional[str] = None,
     salario_mensual: Optional[float] = None,
+    tipo_vinculo: Optional[str] = None,
 ) -> None:
     """Edita un usuario auditando los valores anterior y nuevo."""
     if role_name == ROLE_ADMIN:
         require_role(db, actor, (ROLE_ADMIN,))
+    if tipo_vinculo is not None and tipo_vinculo not in TIPOS_VINCULO:
+        raise ValueError(f"Tipo de vínculo inválido. Use: {', '.join(TIPOS_VINCULO)}")
     target = db.get_user_by_id(user_id)
     if not target:
         raise ValueError("El usuario no existe.")
@@ -215,6 +229,7 @@ def update_user(
         password_hash=password_hash,
         role_id=role_id,
         salario_mensual=salario_mensual,
+        tipo_vinculo=tipo_vinculo,
     )
     nuevos = _valores_auditoria(
         {
@@ -225,6 +240,11 @@ def update_user(
                 salario_mensual
                 if salario_mensual is not None
                 else target["salario_mensual"]
+            ),
+            "tipo_vinculo": (
+                tipo_vinculo
+                if tipo_vinculo is not None
+                else target.get("tipo_vinculo", "Funcionario")
             ),
         }
     )

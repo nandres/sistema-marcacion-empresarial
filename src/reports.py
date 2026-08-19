@@ -253,6 +253,8 @@ def resumen_consulta(
             "salida": m["hora_salida"].strftime("%H:%M:%S") if m["hora_salida"] else None,
             "tardanza": bool(m["es_tardanza"]),
             "feriado": bool(m["es_feriado"]),
+            "tolerancia_aplicada": bool(m.get("tolerancia_aplicada")),
+            "condicion_climatica": m.get("condicion_climatica") or "",
             "ordinarias": _fmt(m["horas_ordinarias"] or timedelta(0)),
             "extra_50": _fmt(m["horas_extra_50"] or timedelta(0)),
             "extra_100": _fmt(m["horas_extra_100"] or timedelta(0)),
@@ -275,6 +277,7 @@ def resumen_consulta(
     return {
         "usuario": user["username"],
         "nombre": user["full_name"],
+        "vinculo": user.get("tipo_vinculo") or "Funcionario",
         "fecha": fecha.isoformat(),
         "marcas_dia": marcas_dia,
         "extras_mes": {
@@ -318,6 +321,8 @@ def resumen_historico(
             "tardanza": bool(m["es_tardanza"]),
             "feriado": bool(m["es_feriado"]),
             "incidencia": m.get("tipo_incidencia") or "",
+            "tolerancia_aplicada": bool(m.get("tolerancia_aplicada")),
+            "condicion_climatica": m.get("condicion_climatica") or "",
             "ordinarias": _fmt(m["horas_ordinarias"] or timedelta(0)),
             "extra_50": _fmt(m["horas_extra_50"] or timedelta(0)),
             "extra_100": _fmt(m["horas_extra_100"] or timedelta(0)),
@@ -333,6 +338,7 @@ def resumen_historico(
     return {
         "usuario": user["username"],
         "nombre": user["full_name"],
+        "vinculo": user.get("tipo_vinculo") or "Funcionario",
         "desde": desde.isoformat(),
         "hasta": hasta.isoformat(),
         "marcas": marcas,

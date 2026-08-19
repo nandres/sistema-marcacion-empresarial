@@ -6,13 +6,20 @@ ordinarias), liquidando el exceso con recargo del 50% o 100%. Los domingos
 y feriados oficiales se liquidan íntegros con recargo del 100%. Incluye la
 gracia de tolerancia de 10 minutos en la entrada antes de considerarla
 llegada tardía y soporta turnos nocturnos que cruzan la medianoche.
+
+Desde la Resolución de Directorio N.º 3028/2024 de la CONATEL, el
+``evaluar_asistencia_conatel`` distingue el vínculo del empleado: los
+pasantes gozan de tolerancia ordinaria limitada a tres veces al mes y de
+la tolerancia climática legal de 30 minutos en días de lluvia intensa
+(con corte a ``Ausencia Injustificada`` a los 30 minutos de retraso),
+mientras los funcionarios conservan la gracia general de 15 minutos.
 """
 
 from __future__ import annotations
 
 import os
 from datetime import date, datetime, time, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from database import Database
 
@@ -22,6 +29,11 @@ JORNADA_JUSTIFICADA: timedelta = JORNADA_DIURNA
 INICIO_DIURNO: time = time(6, 0)
 FIN_DIURNO: time = time(20, 0)
 TOLERANCIA_ENTRADA: timedelta = timedelta(minutes=10)
+
+TOLERANCIA_PASANTE: timedelta = timedelta(minutes=10)
+TOLERANCIA_FUNCIONARIO: timedelta = timedelta(minutes=15)
+TOLERANCIA_CLIMATICA: timedelta = timedelta(minutes=30)
+MAX_TARDANZAS_PASANTE: int = 3
 
 FERIADOS_PARAGUAY_2026: frozenset = frozenset(
     {
@@ -67,6 +79,69 @@ def es_feriado_o_domingo(momento: datetime) -> bool:
 def es_tardanza(hora_entrada: datetime) -> bool:
     """Aplica la gracia de 10 minutos: tardanza solo si supera el límite."""
     return hora_entrada.time() > LIMITE_TARDANZA
+
+
+def evaluar_asistencia_conatel(
+    db: Database,
+    usuario_id: int,
+    hora_marca: datetime,
+    es_dia_lluvioso: bool = False,
+) -> Dict[str, Any]:
+    """Evalúa una entrada según la Res. 3028/2024 de CONATEL.
+
+    Para pasantes:
+    - Tolerancia ordinaria de 10 minutos, consumible como máximo 3 veces
+      al mes; a partir de la 4.ª llegada el retraso cuenta de inmediato.
+    - En días de lluvia intensa se activa automáticamente la tolerancia
+      climática legal de 30 minutos, acumulable a la ordinaria vigente.
+    - Si el retraso excede los 30 minutos, el estado pasa directamente a
+      ``Ausencia Injustificada``.
+
+    Para funcionarios:
+    - Gracia general de 15 minutos sin límite mensual de uso.
+    - Sin corte de ausencia por retraso y con la misma cobertura climática.
+
+    Returns:
+        Diccionario con ``estado`` (Normal, Llegada Tardía o Ausencia
+        Injustificada), las tolerancias consideradas y un resumen legible.
+    """
+    usuario = db.get_user_by_id(usuario_id)
+    if not usuario:
+        raise ValueError("Empleado no encontrado.")
+    vinculo = (usuario.get("tipo_vinculo") or "Funcionario").strip()
+    if vinculo not in ("Pasante", "Funcionario"):
+        raise ValueError(f"Tipo de vínculo desconocido: '{vinculo}'.")
+    inicio = datetime.combine(hora_marca.date(), INICIO_JORNADA)
+    retraso = max(timedelta(0), hora_marca - inicio)
+    climatica = TOLERANCIA_CLIMATICA if es_dia_lluvioso else timedelta(0)
+    if vinculo == "Pasante":
+        tardanzas_mes = db.contar_tardanzas_mes(usuario_id, hora_marca.date())
+        ordinaria = (
+            TOLERANCIA_PASANTE if tardanzas_mes < MAX_TARDANZAS_PASANTE else timedelta(0)
+        )
+        tolerancia = ordinaria + climatica
+        if retraso > TOLERANCIA_CLIMATICA:
+            estado = "Ausencia Injustificada"
+        elif retraso > tolerancia:
+            estado = "Llegada Tardía"
+        else:
+            estado = "Normal"
+    else:
+        tolerancia = TOLERANCIA_FUNCIONARIO + climatica
+        estado = "Llegada Tardía" if retraso > tolerancia else "Normal"
+    return {
+        "tipo_vinculo": vinculo,
+        "estado": estado,
+        "retraso_min": int(retraso.total_seconds() // 60),
+        "tolerancia_efectiva_min": int(tolerancia.total_seconds() // 60),
+        "tolerancia_climatica": es_dia_lluvioso,
+        "tardanzas_mes_previas": tardanzas_mes if vinculo == "Pasante" else None,
+        "detalle": (
+            f"{vinculo} · retraso {int(retraso.total_seconds() // 60)} min vs "
+            f"tolerancia {int(tolerancia.total_seconds() // 60)} min "
+            f"({climatica and 'climática activa' or 'sin clima'}) → {estado}"
+        ),
+    }
 
 
 def _es_nocturno(momento: datetime) -> bool:
@@ -145,11 +220,13 @@ class ClockEngine:
         self.db = db
         self.user = user
 
-    def clock_in(self) -> Tuple[int, datetime]:
-        """Registra la entrada, marcando la tardanza según la tolerancia.
+    def clock_in(self, es_dia_lluvioso: bool = False) -> Tuple[int, datetime]:
+        """Registra la entrada aplicando la Res. 3028/2024 de CONATEL.
 
-        La llegada que supera la gracia de 10 minutos queda clasificada
-        como incidencia ``Llegada Tardía`` en el propio marcaje.
+        La evaluación distingue pasantes de funcionarios: consume la
+        tolerancia ordinaria (10 o 15 minutos), activa la climática de
+        30 minutos en días de lluvia intensa y clasifica la incidencia
+        como ``Llegada Tardía`` o ``Ausencia Injustificada``.
 
         Returns:
             Tupla con el identificador del marcaje y el instante exacto
@@ -159,9 +236,27 @@ class ClockEngine:
         if open_entry:
             raise ValueError("Ya hay una entrada abierta sin salida registrada.")
         ahora = ahora_local()
-        tardanza = es_tardanza(ahora)
-        incidencia = "Llegada Tardía" if tardanza else ""
-        entry_id = self.db.open_clock_in(self.user["id"], ahora, tardanza, incidencia)
+        evaluacion = evaluar_asistencia_conatel(
+            self.db, self.user["id"], ahora, es_dia_lluvioso
+        )
+        estado = evaluacion["estado"]
+        incidencia = (
+            "Ausencia Injustificada"
+            if estado == "Ausencia Injustificada"
+            else ("Llegada Tardía" if estado == "Llegada Tardía" else "")
+        )
+        condicion = "Lluvia intensa" if es_dia_lluvioso else ""
+        tolerancia_aplicada = (
+            evaluacion["tolerancia_climatica"] or evaluacion["retraso_min"] > 0
+        )
+        entry_id = self.db.open_clock_in(
+            self.user["id"],
+            ahora,
+            estado != "Normal",
+            incidencia,
+            tolerancia_aplicada,
+            condicion,
+        )
         return entry_id, ahora
 
     def clock_out(self) -> Tuple[int, datetime]:
@@ -231,12 +326,13 @@ class ClockEngine:
             return "SALIDA"
         raise ValueError("Ya registró su entrada y su salida de hoy.")
 
-    def registrar_asistencia(self) -> Tuple[int, datetime, str]:
+    def registrar_asistencia(self, es_dia_lluvioso: bool = False) -> Tuple[int, datetime, str]:
         """Botón maestro: registra entrada o salida según el estado del día.
 
         Una sola acción para el kiosco de recepción: consulta internamente
-        PostgreSQL y decide si corresponde abrir la jornada o cerrarla con
-        el desglose legal de horas extraordinarias.
+        PostgreSQL y decide si corresponde abrir la jornada (con las reglas
+        CONATEL vigentes según el vínculo) o cerrarla con el desglose legal
+        de horas extraordinarias.
 
         Returns:
             Tupla con el identificador del marcaje, el instante registrado
@@ -246,7 +342,7 @@ class ClockEngine:
         if accion == "SALIDA":
             entry_id, momento = self.clock_out()
             return entry_id, momento, "SALIDA"
-        entry_id, momento = self.clock_in()
+        entry_id, momento = self.clock_in(es_dia_lluvioso)
         return entry_id, momento, "ENTRADA"
 
     def justificacion_para(self, fecha: date) -> Optional[Dict]:

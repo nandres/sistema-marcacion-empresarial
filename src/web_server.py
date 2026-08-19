@@ -104,6 +104,7 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
   }}
   .tardanza {{ background:#3A1F1E; color:#F0544F; }}
   .feriado {{ background:#3A2F1E; color:#F5C26B; }}
+  .clima {{ background:#1E2A3A; color:#7FB4F0; }}
   .ok {{ background:#12301F; color:#4ADE80; }}
   .total {{ font-size:1.15rem; font-weight:700; margin-top:8px; }}
   .error {{ color:#F0544F; text-align:center; margin-top:16px; }}
@@ -240,7 +241,8 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
   }}
   function renderHistorico(d) {{
     const r = document.getElementById('resultado');
-    let html = '<div class="bloque"><h3>' + d.nombre + ' · ' + d.desde + ' → ' + d.hasta + '</h3>';
+    let html = '<div class="bloque"><h3>' + d.nombre + ' · ' + d.desde + ' → ' + d.hasta + '</h3>' +
+      '<div class="fila-marca"><small>Vínculo: ' + d.vinculo + '</small></div>';
     if (!d.marcas.length) {{
       html += '<p>Sin marcas registradas en el período.</p>';
     }} else {{
@@ -248,6 +250,7 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
         let badges = '';
         if (m.incidencia) badges += ' <span class="etiqueta tardanza">' + m.incidencia + '</span>';
         if (m.feriado) badges += ' <span class="etiqueta feriado">Feriado</span>';
+        if (m.condicion_climatica) badges += ' <span class="etiqueta clima">' + m.condicion_climatica + '</span>';
         html += '<div class="fila-marca"><span><b>' + m.fecha + '</b> ' +
           m.entrada + ' → ' + (m.salida || 'en curso') + badges + '</span></div>' +
           '<div class="fila-marca"><small>Ordinarias ' + m.ordinarias +
