@@ -24,6 +24,8 @@ ROLES_GESTION_USUARIOS: tuple = (ROLE_ADMIN, ROLE_RRHH)
 ROLES_REPORTES: tuple = (ROLE_ADMIN, ROLE_RRHH)
 ROLES_MARCAJES: tuple = (ROLE_ADMIN, ROLE_RRHH, ROLE_EMPLEADO)
 
+TIPOS_PERMISO: tuple = ("Vacaciones", "Reposo", "Permiso")
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 
@@ -104,6 +106,7 @@ def _valores_auditoria(user: Dict) -> Dict[str, Any]:
         "full_name": user["full_name"],
         "role_id": user["role_id"],
         "role_name": user.get("role_name"),
+        "salario_mensual": float(user.get("salario_mensual") or 0),
     }
 
 
@@ -115,6 +118,7 @@ def create_user(
     password: str,
     full_name: str,
     role_name: str,
+    salario_mensual: float = 0.0,
 ) -> int:
     """Crea un usuario auditando la acción; solo el Admin asigna otro Admin."""
     if role_name == ROLE_ADMIN:
@@ -124,13 +128,20 @@ def create_user(
         raise ValueError(f"El rol '{role_name}' no existe.")
     if db.get_user_by_username(username):
         raise ValueError("El usuario ya existe.")
-    user_id = db.create_user(username, hash_password(password), full_name, role["id"])
+    user_id = db.create_user(
+        username, hash_password(password), full_name, role["id"], salario_mensual
+    )
     db.registrar_auditoria(
         actor["id"],
         "CREAR",
         "users",
         user_id,
-        nuevos={"username": username, "full_name": full_name, "role_id": role["id"]},
+        nuevos={
+            "username": username,
+            "full_name": full_name,
+            "role_id": role["id"],
+            "salario_mensual": salario_mensual,
+        },
     )
     return user_id
 
@@ -143,6 +154,7 @@ def update_user(
     full_name: Optional[str] = None,
     password: Optional[str] = None,
     role_name: Optional[str] = None,
+    salario_mensual: Optional[float] = None,
 ) -> None:
     """Edita un usuario auditando los valores anterior y nuevo."""
     if role_name == ROLE_ADMIN:
@@ -163,17 +175,64 @@ def update_user(
         full_name=full_name,
         password_hash=password_hash,
         role_id=role_id,
+        salario_mensual=salario_mensual,
     )
     nuevos = _valores_auditoria(
         {
             **target,
             "full_name": full_name if full_name is not None else target["full_name"],
             "role_id": role_id if role_id is not None else target["role_id"],
+            "salario_mensual": (
+                salario_mensual
+                if salario_mensual is not None
+                else target["salario_mensual"]
+            ),
         }
     )
     db.registrar_auditoria(
         actor["id"], "ACTUALIZAR", "users", user_id, anterior=anterior, nuevos=nuevos
     )
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def crear_justificacion(
+    db: Database,
+    actor: Dict,
+    empleado_id: int,
+    tipo_permiso: str,
+    fecha_inicio: Any,
+    fecha_fin: Any,
+) -> int:
+    """Crea una justificación aprobada para un empleado (solo RRHH/Admin).
+
+    El actor que la crea queda registrado como ``aprobado_por`` y la
+    operación se audita en ``logs_auditoria``.
+    """
+    if tipo_permiso not in TIPOS_PERMISO:
+        raise ValueError(
+            f"Tipo de permiso inválido. Use: {', '.join(TIPOS_PERMISO)}"
+        )
+    if fecha_fin < fecha_inicio:
+        raise ValueError("La fecha de fin no puede ser anterior al inicio.")
+    if not db.get_user_by_id(empleado_id):
+        raise ValueError("El empleado no existe.")
+    justificacion_id = db.crear_justificacion(
+        empleado_id, tipo_permiso, fecha_inicio, fecha_fin, actor["id"]
+    )
+    db.registrar_auditoria(
+        actor["id"],
+        "CREAR",
+        "justificaciones",
+        justificacion_id,
+        nuevos={
+            "usuario_id": empleado_id,
+            "tipo_permiso": tipo_permiso,
+            "fecha_inicio": fecha_inicio.isoformat(),
+            "fecha_fin": fecha_fin.isoformat(),
+            "aprobado_por": actor["id"],
+        },
+    )
+    return justificacion_id
 
 
 @autorizado(ROLE_ADMIN,)
