@@ -18,6 +18,7 @@ from database import Database
 
 JORNADA_DIURNA: timedelta = timedelta(hours=8)
 JORNADA_NOCTURNA: timedelta = timedelta(hours=7)
+JORNADA_JUSTIFICADA: timedelta = JORNADA_DIURNA
 INICIO_DIURNO: time = time(6, 0)
 FIN_DIURNO: time = time(20, 0)
 TOLERANCIA_ENTRADA: timedelta = timedelta(minutes=10)
@@ -144,16 +145,27 @@ class ClockEngine:
         self.db = db
         self.user = user
 
-    def clock_in(self) -> int:
-        """Registra la entrada, marcando la tardanza según la tolerancia."""
+    def clock_in(self) -> Tuple[int, datetime]:
+        """Registra la entrada, marcando la tardanza según la tolerancia.
+
+        Returns:
+            Tupla con el identificador del marcaje y el instante exacto
+            registrado (para el comprobante digital).
+        """
         open_entry = self.db.get_open_entry(self.user["id"])
         if open_entry:
             raise ValueError("Ya hay una entrada abierta sin salida registrada.")
         ahora = ahora_local()
-        return self.db.open_clock_in(self.user["id"], ahora, es_tardanza(ahora))
+        entry_id = self.db.open_clock_in(self.user["id"], ahora, es_tardanza(ahora))
+        return entry_id, ahora
 
-    def clock_out(self) -> int:
-        """Cierra la salida calculando y persistiendo el desglose legal."""
+    def clock_out(self) -> Tuple[int, datetime]:
+        """Cierra la salida calculando y persistiendo el desglose legal.
+
+        Returns:
+            Tupla con el identificador del marcaje y el instante exacto
+            de la salida (para el comprobante digital).
+        """
         open_entry = self.db.get_open_entry(self.user["id"])
         if not open_entry:
             raise ValueError("No hay una entrada abierta para cerrar.")
@@ -168,7 +180,36 @@ class ClockEngine:
             desglose["horas_extra_50"],
             desglose["horas_extra_100"],
         )
-        return open_entry["id"]
+        return open_entry["id"], ahora
+
+    def justificacion_para(self, fecha: date) -> Optional[Dict]:
+        """Retorna la justificación aprobada que cubre la fecha, si existe."""
+        return self.db.get_justificacion_por_fecha(self.user["id"], fecha)
+
+    def es_dia_laboral(self, fecha: date) -> bool:
+        """Indica si la fecha es un día laboral (ni domingo ni feriado)."""
+        return not es_feriado_o_domingo(datetime.combine(fecha, time(12, 0)))
+
+    def horas_justificadas(self, fecha: date) -> timedelta:
+        """Horas ordinarias legales que reconoce una justificación aprobada.
+
+        Se reconoce la jornada diurna estándar (8 horas) solo en días
+        laborales; domingos y feriados ya son días de descanso y no
+        generan horas.
+        """
+        if not self.justificacion_para(fecha):
+            return timedelta(0)
+        if not self.es_dia_laboral(fecha):
+            return timedelta(0)
+        return JORNADA_JUSTIFICADA
+
+    def es_falta_no_justificada(self, fecha: date) -> bool:
+        """Indica si una fecha laboral quedó sin marcar y sin justificación."""
+        if not self.es_dia_laboral(fecha):
+            return False
+        if self.justificacion_para(fecha):
+            return False
+        return not self.db.get_entries_by_date(self.user["id"], fecha)
 
     def worked_seconds(self, entry: Dict) -> int:
         """Segundos efectivos trabajados en un marcaje cerrado."""
@@ -196,7 +237,16 @@ class ClockEngine:
         """Genera el reporte textual de marcajes del día con su desglose."""
         today = datetime.now().date()
         entries = self.db.get_entries_by_date(self.user["id"], today)
+        justificacion = self.justificacion_para(today)
         lines = [f"Registros de hoy ({today.isoformat()}):"]
+        if not entries and justificacion:
+            lines.append(
+                f"  Justificación aprobada: {justificacion['tipo_permiso']} "
+                f"({justificacion['fecha_inicio']} a {justificacion['fecha_fin']}) | "
+                f"Horas legales reconocidas: {self.horas_justificadas(today)}"
+            )
+        elif not entries and self.es_falta_no_justificada(today):
+            lines.append("  Sin marcajes y sin justificación: falta no justificada.")
         for entry in entries:
             lines.append(
                 f"  #{entry['id']} Entrada: {entry['hora_entrada']} | "
