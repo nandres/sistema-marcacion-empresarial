@@ -1,59 +1,69 @@
+"""Autenticación y control de accesos basado en roles (RBAC) con bcrypt.
+
+Las contraseñas se encriptan con bcrypt (sal aleatoria embebida en el hash)
+y nunca se almacenan en texto plano en PostgreSQL. Las operaciones de
+gestión de usuarios registran automáticamente un evento en
+``logs_auditoria`` con quién, qué, cuándo y los valores anterior/nuevo.
+"""
+
+from __future__ import annotations
+
 import getpass
-import hashlib
-import hmac
-import os
 from functools import wraps
+from typing import Any, Callable, Dict, Optional, TypeVar
+
+import bcrypt
 
 from database import Database
 
-PBKDF2_ITERATIONS = 100_000
+ROLE_ADMIN: str = "Administrador"
+ROLE_RRHH: str = "Recursos Humanos"
+ROLE_EMPLEADO: str = "Empleado"
 
-ROLE_ADMIN = "Administrador"
-ROLE_RRHH = "Recursos Humanos"
-ROLE_EMPLEADO = "Empleado"
+ROLES_GESTION_USUARIOS: tuple = (ROLE_ADMIN, ROLE_RRHH)
+ROLES_REPORTES: tuple = (ROLE_ADMIN, ROLE_RRHH)
+ROLES_MARCAJES: tuple = (ROLE_ADMIN, ROLE_RRHH, ROLE_EMPLEADO)
 
-ROLES_GESTION_USUARIOS = (ROLE_ADMIN, ROLE_RRHH)
-ROLES_REPORTES = (ROLE_ADMIN, ROLE_RRHH)
-ROLES_MARCAJES = (ROLE_ADMIN, ROLE_RRHH, ROLE_EMPLEADO)
+F = TypeVar("F", bound=Callable[..., Any])
 
 
-def autorizado(*roles):
-    def decorador(func):
+def autorizado(*roles: str) -> Callable[[F], F]:
+    """Decorador que exige un rol permitido al actor antes de ejecutar."""
+
+    def decorador(func: F) -> F:
         @wraps(func)
-        def envoltura(db, actor, *args, **kwargs):
+        def envoltura(db: Database, actor: Dict, *args: Any, **kwargs: Any) -> Any:
             require_role(db, actor, roles)
             return func(db, actor, *args, **kwargs)
 
-        return envoltura
+        return envoltura  # type: ignore[return-value]
 
     return decorador
 
 
-def hash_password(password, salt=None):
-    if salt is None:
-        salt = os.urandom(16)
-    digest = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), salt, PBKDF2_ITERATIONS
-    )
-    return salt.hex() + ":" + digest.hex()
+def hash_password(password: str) -> str:
+    """Encripta la contraseña con bcrypt y retorna el hash en texto seguro."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-def verify_password(password, stored):
-    salt_hex, digest_hex = stored.split(":")
-    salt = bytes.fromhex(salt_hex)
-    digest = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), salt, PBKDF2_ITERATIONS
-    )
-    return hmac.compare_digest(digest.hex(), digest_hex)
+def verify_password(password: str, stored: str) -> bool:
+    """Verifica la contraseña contra un hash bcrypt almacenado."""
+    return bcrypt.checkpw(password.encode("utf-8"), stored.encode("utf-8"))
 
 
-def get_role_name(db, user):
+def get_role_name(db: Database, user: Dict) -> str:
+    """Resuelve el nombre del rol del usuario autenticado."""
     if "role_name" in user:
         return user["role_name"]
     return db.get_user_by_id(user["id"])["role_name"]
 
 
-def require_role(db, user, allowed_roles):
+def require_role(db: Database, user: Dict, allowed_roles: tuple) -> str:
+    """Valida el rol del usuario antes de tocar la base de datos.
+
+    Raises:
+        PermissionError: si el rol no figura entre los permitidos.
+    """
     role = get_role_name(db, user)
     if role not in allowed_roles:
         raise PermissionError(
@@ -62,21 +72,51 @@ def require_role(db, user, allowed_roles):
     return role
 
 
-def authenticate(db, username, password):
+def authenticate(db: Database, username: str, password: str) -> Optional[Dict]:
+    """Autentica credenciales contra el hash bcrypt de la base de datos."""
     user = db.get_user_by_username(username)
     if user and verify_password(password, user["password_hash"]):
         return user
     return None
 
 
-def prompt_login(db):
+def prompt_login(db: Database) -> Optional[Dict]:
+    """Solicita credenciales por consola y autentica al usuario."""
     username = input("Usuario: ").strip()
     password = getpass.getpass("Contraseña: ")
     return authenticate(db, username, password)
 
 
+def crear_primer_admin(
+    db: Database, username: str, password: str, full_name: str
+) -> int:
+    """Crea el primer Administrador (bootstrap, solo con tabla de usuarios vacía)."""
+    if db.list_users():
+        raise PermissionError("El administrador inicial ya fue creado.")
+    role = db.get_role_by_name(ROLE_ADMIN)
+    return db.create_user(username, hash_password(password), full_name, role["id"])
+
+
+def _valores_auditoria(user: Dict) -> Dict[str, Any]:
+    """Snapshot de un usuario sin datos sensibles (hash excluido)."""
+    return {
+        "username": user["username"],
+        "full_name": user["full_name"],
+        "role_id": user["role_id"],
+        "role_name": user.get("role_name"),
+    }
+
+
 @autorizado(ROLE_ADMIN, ROLE_RRHH)
-def create_user(db, actor, username, password, full_name, role_name):
+def create_user(
+    db: Database,
+    actor: Dict,
+    username: str,
+    password: str,
+    full_name: str,
+    role_name: str,
+) -> int:
+    """Crea un usuario auditando la acción; solo el Admin asigna otro Admin."""
     if role_name == ROLE_ADMIN:
         require_role(db, actor, (ROLE_ADMIN,))
     role = db.get_role_by_name(role_name)
@@ -84,19 +124,39 @@ def create_user(db, actor, username, password, full_name, role_name):
         raise ValueError(f"El rol '{role_name}' no existe.")
     if db.get_user_by_username(username):
         raise ValueError("El usuario ya existe.")
-    return db.create_user(username, hash_password(password), full_name, role["id"])
+    user_id = db.create_user(username, hash_password(password), full_name, role["id"])
+    db.registrar_auditoria(
+        actor["id"],
+        "CREAR",
+        "users",
+        user_id,
+        nuevos={"username": username, "full_name": full_name, "role_id": role["id"]},
+    )
+    return user_id
 
 
 @autorizado(ROLE_ADMIN, ROLE_RRHH)
-def update_user(db, actor, user_id, full_name=None, password=None, role_name=None):
+def update_user(
+    db: Database,
+    actor: Dict,
+    user_id: int,
+    full_name: Optional[str] = None,
+    password: Optional[str] = None,
+    role_name: Optional[str] = None,
+) -> None:
+    """Edita un usuario auditando los valores anterior y nuevo."""
     if role_name == ROLE_ADMIN:
         require_role(db, actor, (ROLE_ADMIN,))
+    target = db.get_user_by_id(user_id)
+    if not target:
+        raise ValueError("El usuario no existe.")
     role_id = None
     if role_name is not None:
         role = db.get_role_by_name(role_name)
         if not role:
             raise ValueError(f"El rol '{role_name}' no existe.")
         role_id = role["id"]
+    anterior = _valores_auditoria(target)
     password_hash = hash_password(password) if password else None
     db.update_user(
         user_id,
@@ -104,15 +164,33 @@ def update_user(db, actor, user_id, full_name=None, password=None, role_name=Non
         password_hash=password_hash,
         role_id=role_id,
     )
+    nuevos = _valores_auditoria(
+        {
+            **target,
+            "full_name": full_name if full_name is not None else target["full_name"],
+            "role_id": role_id if role_id is not None else target["role_id"],
+        }
+    )
+    db.registrar_auditoria(
+        actor["id"], "ACTUALIZAR", "users", user_id, anterior=anterior, nuevos=nuevos
+    )
 
 
 @autorizado(ROLE_ADMIN,)
-def delete_user(db, actor, user_id):
+def delete_user(db: Database, actor: Dict, user_id: int) -> None:
+    """Elimina un usuario (solo Admin) auditando los valores previos."""
     if user_id == actor["id"]:
         raise ValueError("No puede eliminarse a sí mismo.")
+    target = db.get_user_by_id(user_id)
+    if not target:
+        raise ValueError("El usuario no existe.")
     db.delete_user(user_id)
+    db.registrar_auditoria(
+        actor["id"], "ELIMINAR", "users", user_id, anterior=_valores_auditoria(target)
+    )
 
 
-def can_register_marks(db, user):
+def can_register_marks(db: Database, user: Dict) -> bool:
+    """Autoriza el registro de marcas a cualquier rol autenticado."""
     require_role(db, user, ROLES_MARCAJES)
     return True
