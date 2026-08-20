@@ -1,6 +1,6 @@
-# Sistema de Marcación · CONATEL Paraguay
+# Sistema de Marcación · Paraguay
 
-Sistema integral de control de asistencia para CONATEL: **kiosco de marcación de escritorio**, **panel de Recursos Humanos**, **autoservicio web** para el empleado y **despliegue en contenedor** con integración continua.
+Sistema integral de control de asistencia: **kiosco de marcación de escritorio**, **panel de Recursos Humanos**, **autoservicio web** para el empleado y **despliegue en contenedor** con integración continua.
 
 Cumple la **Ley 213** (horas extra), la **Ley 6380/2019** (aguinaldo proporcional), la **Res. Directorio 3028/2024** (tolerancias y reglas para pasantes/funcionarios) y el **Reglamento Interno de Personal Res. 1307/2010** (catálogo de permisos y licencias).
 
