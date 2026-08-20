@@ -78,6 +78,12 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"tipo":"ci","severidad":"baja","mensaje":"alerta CI","detalle":""}'
 
+      - name: Kiosco web + Panel de Gestión (RRHH)
+        run: |
+          timeout 25 python src/web_server.py &
+          sleep 6
+          WEB_BASE=http://127.0.0.1:8000 python tests/smoke_web_panel.py
+
       - name: GUI login / cambio de clave / temas (pantalla virtual)
         run: xvfb-run -a python tests/smoke_login.py
 
