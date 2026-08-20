@@ -237,6 +237,19 @@ PERMISOS_PASANTES: List[Dict[str, Any]] = [
         "expresa del tutor.",
     },
     {
+        "tipo": "Salidas Personales",
+        "articulo": "Art. 14",
+        "nombre": "Salidas por motivos personales",
+        "reglamento": REGLAMENTO_PASANTIA,
+        "vinculos": ("Pasante",),
+        "cuota": 4,
+        "unidad": UNIDAD_HORAS,
+        "periodo": PERIODO_MENSUAL,
+        "usos_max": 3,
+        "condiciones": "Hasta cuatro (4) horas al mes, no acumulables, y por un "
+        "máximo de tres (3) veces en el mes. Autorización del tutor.",
+    },
+    {
         "tipo": "Maternidad",
         "articulo": "Art. 25, inc. a.1",
         "nombre": "Licencia por maternidad",
@@ -520,7 +533,14 @@ def disponibilidad_permisos(
         else:
             cuota = articulo["cuota"]
         usados = _usados(articulo, en_periodo)
+        usos = float(
+            sum(1 for j in en_periodo if j["tipo_permiso"] == articulo["tipo"])
+        )
+        usos_max = articulo.get("usos_max")
         restantes = None if cuota is None else max(0.0, float(cuota) - usados)
+        disponible = (cuota is None or usados < cuota) and (
+            usos_max is None or usos < usos_max
+        )
         resultado.append(
             {
                 "tipo": articulo["tipo"],
@@ -532,7 +552,9 @@ def disponibilidad_permisos(
                 "cuota": cuota,
                 "usados": usados,
                 "restantes": restantes,
-                "disponible": cuota is None or usados < cuota,
+                "usos": usos,
+                "usos_max": usos_max,
+                "disponible": disponible,
                 "condiciones": articulo["condiciones"],
             }
         )

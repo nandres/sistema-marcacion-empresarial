@@ -5,7 +5,7 @@
 ## Filosofía de diseño
 
 - **Un solo clic a todo**: el Panel de Gestión usa dos columnas (botones grandes a la izquierda, paneles a la derecha). Nada de modales: el login, la consulta de marcas y la edición de personal ocurren en línea.
-- **Portal del Empleado por cédula**: el kiosco público pide únicamente la cédula (autoservicio sin contraseña). El portal web conserva cédula + contraseña con JWT por seguridad.
+- **Login unificado**: el kiosco de marcación es público; el Portal del Empleado y la Gestión piden usuario + contraseña (bcrypt) y avisan "El usuario no existe." o "Contraseña incorrecta." El rol decide el destino (Empleado → resumen; RRHH/Admin → Panel de Gestión).
 - **Temas dinámicos**: paletas declaradas como tokens (`t("CARD")`) con aplicación inmediata a todos los widgets y a los gráficos matplotlib; la web los replica con variables CSS y `localStorage`.
 
 ## Paleta de tokens
@@ -32,7 +32,7 @@
 
 ## Portal del Empleado
 
-- Kiosco público: reloj, marcación con interruptor de lluvia, ticket de salida y, a la derecha, el Portal (cédula → resumen).
+- Kiosco público: reloj, marcación con interruptor de lluvia y ticket de salida; a la derecha, el **login** (usuario + contraseña) con enlace a **Cambiar contraseña** (verifica la clave actual, exige 6+ caracteres y audita el cambio).
 - `EmployeeDashboard` en `src/gui.py`: tarjetas de **Vacaciones Art. 23** (disponibles/usadas/devengadas), **Permisos del mes Art. 25** (total + detalle por tipo) y **Horas extra del mes** (50%/100% Ley 213), gráfico matplotlib de horas ordinarias por día y lista de permisos con botón **Descargar PDF**.
 - Datos provistos por `reports.resumen_empleado(db, user, fecha=None)`.
 
@@ -58,7 +58,7 @@
 
 ## Decisiones de negocio
 
-- El portal de escritorio **no pide contraseña** (kiosco físico de recepción); la web sí, porque expone datos por red.
+- El kiosco de escritorio es público solo para **marcar**; el resumen personal y la gestión exigen usuario + contraseña (el web conserva cédula + contraseña con JWT).
 - `generar_pdf_permiso` usa `ensure_database()` + `connect()` en lugar de `initialize()` para no ejecutar DDL mientras otra conexión del sistema mantiene transacciones abiertas (evita esperas de locks).
 - Los tests de humo deben setear `app.variable_tema.set(True)` antes de llamar `_cambiar_tema()` (el flujo real lo dispara el switch).
 

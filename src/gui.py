@@ -12,6 +12,7 @@ Dos modos de uso:
 from __future__ import annotations
 
 import datetime
+import calendar
 from functools import partial
 from typing import Callable, Dict, List, Optional
 
@@ -143,6 +144,182 @@ def entrada(master, placeholder: str, ancho: int = 320) -> ctk.CTkEntry:
     return campo
 
 
+class CalendarioPopup(ctk.CTkToplevel):
+    """Calendario emergente para elegir una fecha con navegación de mes.
+
+    Al hacer clic en un día se invoca ``on_seleccionar(fecha)`` y la
+    ventana se cierra; el botón inferior selecciona directamente el día
+    de hoy.
+    """
+
+    DIAS_SEMANA = ("Lu", "Ma", "Mi", "Ju", "Vi", "Sa", "Do")
+
+    def __init__(
+        self,
+        master: ctk.CTkBaseClass,
+        on_seleccionar: Callable[[datetime.date], None],
+        valor_inicial: Optional[datetime.date] = None,
+    ) -> None:
+        super().__init__(master)
+        self.on_seleccionar = on_seleccionar
+        self.mes_visible = (valor_inicial or datetime.date.today()).replace(day=1)
+        self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.title("Elegir fecha")
+        try:
+            self.geometry(
+                f"+{master.winfo_rootx() + 80}+{master.winfo_rooty() + 100}"
+            )
+        except Exception:
+            pass
+        cuerpo = tarjeta(self)
+        cuerpo.pack(fill="both", expand=True, padx=10, pady=10)
+        fila_nav = ctk.CTkFrame(cuerpo, fg_color="transparent")
+        fila_nav.pack(pady=(8, 4))
+        boton_secundario(fila_nav, "◀", partial(self._cambiar_mes, -1)).pack(
+            side="left", padx=4
+        )
+        self.lbl_mes = etiqueta(fila_nav, "", 15, t("TEXT"), "bold")
+        self.lbl_mes.pack(side="left", padx=14)
+        boton_secundario(fila_nav, "▶", partial(self._cambiar_mes, 1)).pack(
+            side="left", padx=4
+        )
+        self.grilla = ctk.CTkFrame(cuerpo, fg_color="transparent")
+        self.grilla.pack(padx=8)
+        for indice, nombre in enumerate(self.DIAS_SEMANA):
+            etiqueta(self.grilla, nombre, 11, t("MUTED"), "bold").grid(
+                row=0, column=indice, padx=4, pady=(4, 2)
+            )
+        self.botones_dias: List[ctk.CTkButton] = []
+        self._dibujar_mes()
+        hoy = datetime.date.today()
+        boton_hoy = ctk.CTkButton(
+            cuerpo,
+            text=f"Hoy · {hoy.strftime('%d/%m/%Y')}",
+            command=lambda: self._elegir(hoy),
+            fg_color=t("PRIMARY"),
+            hover_color=t("PRIMARY_HOVER"),
+            text_color="white",
+            font=(FONT, 13, "bold"),
+            corner_radius=8,
+            height=38,
+        )
+        boton_hoy.pack(pady=(8, 12))
+
+    def _cambiar_mes(self, delta: int) -> None:
+        """Navega un mes hacia adelante o atrás conservando el día 1."""
+        mes = self.mes_visible.month + delta
+        anio = self.mes_visible.year + (mes - 1) // 12
+        mes = (mes - 1) % 12 + 1
+        self.mes_visible = self.mes_visible.replace(year=anio, month=mes)
+        self._dibujar_mes()
+
+    def _dibujar_mes(self) -> None:
+        """Reconstruye la grilla de días del mes visible."""
+        self.lbl_mes.configure(text=f"{MESES[self.mes_visible.month - 1].capitalize()} {self.mes_visible.year}")
+        for boton in self.botones_dias:
+            boton.destroy()
+        self.botones_dias.clear()
+        primer_dia = self.mes_visible.weekday()
+        total_dias = calendar.monthrange(
+            self.mes_visible.year, self.mes_visible.month
+        )[1]
+        hoy = datetime.date.today()
+        for dia in range(1, total_dias + 1):
+            fecha = self.mes_visible.replace(day=dia)
+            es_hoy = fecha == hoy
+            boton = ctk.CTkButton(
+                self.grilla,
+                text=str(dia),
+                width=40,
+                height=30,
+                font=(FONT, 12, "bold" if es_hoy else "normal"),
+                fg_color=t("PRIMARY") if es_hoy else t("INPUT_BG"),
+                hover_color=t("PRIMARY_HOVER"),
+                text_color="white" if es_hoy else t("TEXT"),
+                corner_radius=8,
+                command=partial(self._elegir, fecha),
+            )
+            boton.grid(
+                row=(primer_dia + dia - 1) // 7 + 1,
+                column=(primer_dia + dia - 1) % 7,
+                padx=2,
+                pady=2,
+            )
+            self.botones_dias.append(boton)
+
+    def _elegir(self, fecha: datetime.date) -> None:
+        """Entrega la fecha elegida al formulario y cierra el calendario."""
+        self.on_seleccionar(fecha)
+        self.destroy()
+
+
+def campo_fecha(
+    master: ctk.CTkFrame, placeholder: str, ancho: int = 170
+) -> ctk.CTkFrame:
+    """Entrada de fecha con calendario emergente y botón para el día de hoy.
+
+    Devuelve un contenedor con la entrada accesible como ``.entrada``;
+    también expone ``.boton_hoy`` por si el consumidor quiere reestilizarlo.
+    """
+    fila = ctk.CTkFrame(master, fg_color="transparent")
+
+    def aplicar(fecha: datetime.date) -> None:
+        entrada_fecha.delete(0, "end")
+        entrada_fecha.insert(0, fecha.isoformat())
+
+    def abrir_calendario() -> None:
+        try:
+            actual = datetime.date.fromisoformat(entrada_fecha.get().strip())
+        except ValueError:
+            actual = datetime.date.today()
+        CalendarioPopup(entrada_fecha.winfo_toplevel(), aplicar, actual)
+
+    entrada_fecha = ctk.CTkEntry(
+        fila,
+        placeholder_text=placeholder,
+        font=(FONT, 14),
+        fg_color=t("INPUT_BG"),
+        border_color=t("INPUT_BORDER"),
+        text_color=t("TEXT"),
+        corner_radius=10,
+        height=40,
+        width=ancho,
+    )
+    entrada_fecha._rol = "entrada"
+    entrada_fecha.pack(side="left", padx=(0, 6))
+    boton_cal = ctk.CTkButton(
+        fila,
+        text="📅",
+        width=42,
+        height=40,
+        font=(FONT, 13),
+        fg_color=t("PRIMARY"),
+        hover_color=t("PRIMARY_HOVER"),
+        corner_radius=8,
+        command=abrir_calendario,
+    )
+    boton_cal.pack(side="left", padx=(0, 6))
+    boton_hoy = ctk.CTkButton(
+        fila,
+        text="Hoy",
+        width=52,
+        height=40,
+        font=(FONT, 12, "bold"),
+        fg_color="transparent",
+        hover_color=t("PRIMARY_HOVER"),
+        border_width=2,
+        border_color=t("PRIMARY"),
+        text_color=t("PRIMARY"),
+        corner_radius=8,
+        command=lambda: aplicar(datetime.date.today()),
+    )
+    boton_hoy.pack(side="left")
+    fila.entrada = entrada_fecha
+    fila.boton_hoy = boton_hoy
+    return fila
+
+
 def etiqueta(master, texto: str, tamano: int = 14, color: str = t("TEXT"), peso: str = "normal") -> ctk.CTkLabel:
     """Etiqueta tipográfica limpia del sistema."""
     return ctk.CTkLabel(
@@ -187,6 +364,20 @@ def _recolorear(widget, anterior: Dict[str, str], nuevo: Dict[str, str]) -> None
             border_color=nuevo["PRIMARY"],
             text_color=nuevo["PRIMARY"],
         )
+    elif rol == "plano":
+        color = _normalizar_color(widget.cget("fg_color"))
+        if color == anterior.get("PRIMARY"):
+            widget.configure(
+                fg_color=nuevo["PRIMARY"],
+                hover_color=nuevo["PRIMARY_HOVER"],
+                text_color="#FFFFFF",
+            )
+        else:
+            widget.configure(
+                fg_color="transparent",
+                hover_color=nuevo["INPUT_BG"],
+                text_color=nuevo["MUTED"],
+            )
     elif isinstance(widget, ctk.CTkLabel):
         color = _normalizar_color(widget.cget("text_color"))
         for clave in ("MUTED", "TEXT", "SUCCESS", "DANGER", "ACCENTO", "PRIMARY"):
@@ -400,98 +591,150 @@ class MarcacionApp(ctk.CTk):
         self.pie.grid_columnconfigure(0, weight=1)
         etiqueta(
             self.pie,
-            "El Portal del Empleado no requiere clave · la gestión sí",
+            "Marque su asistencia en el kiosco · el Portal del Empleado y la Gestión requieren usuario y contraseña",
             12,
             t("MUTED"),
         ).grid(row=0, column=0, sticky="w")
-        boton_acceso = ctk.CTkButton(
-            self.pie,
-            text="Acceso de Gestión",
-            command=self._mostrar_login,
-            fg_color="transparent",
-            hover_color=t("INPUT_BG"),
-            text_color=t("MUTED"),
-            font=(FONT, 12),
-            corner_radius=8,
-            width=140,
-            height=32,
-        )
-        boton_acceso._rol = "plano"
-        boton_acceso.grid(row=0, column=1, sticky="e")
 
     def _mostrar_portal(self) -> None:
-        """Pantalla de acceso rápido: solo la cédula abre el tablero personal."""
-        for hijo in self.zona_empleado.winfo_children():
-            hijo.destroy()
-        tarjeta_portal = tarjeta(self.zona_empleado)
-        tarjeta_portal.grid(row=0, column=0, sticky="nsew")
-        tarjeta_portal.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_portal, "Portal del Empleado", 20, t("TEXT"), "bold").grid(
-            row=0, column=0, pady=(30, 4)
-        )
-        etiqueta(
-            tarjeta_portal,
-            "Ingrese su cédula o usuario para ver su resumen personal",
-            13,
-            t("MUTED"),
-        ).grid(row=1, column=0)
-        self.entrada_cedula = entrada(tarjeta_portal, "Ej. 1234567 o juan", ancho=360)
-        self.entrada_cedula.grid(row=2, column=0, pady=(26, 16))
-        self.entrada_cedula.bind("<Return>", lambda _e: self._abrir_dashboard())
-        boton_primario(tarjeta_portal, "Ver mi Resumen", self._abrir_dashboard).grid(
-            row=3, column=0, pady=(0, 10)
-        )
-        self.lbl_portal = etiqueta(tarjeta_portal, "", 12, t("DANGER"))
-        self.lbl_portal.grid(row=4, column=0, pady=(0, 30))
-        self.entrada_cedula.focus_set()
-
-    def _mostrar_login(self) -> None:
-        """Formulario de credenciales embebido, sin ventanas emergentes."""
+        """Inicio de sesión único para el Portal del Empleado y la Gestión."""
         for hijo in self.zona_empleado.winfo_children():
             hijo.destroy()
         tarjeta_login = tarjeta(self.zona_empleado)
         tarjeta_login.grid(row=0, column=0, sticky="nsew")
         tarjeta_login.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_login, "Acceso de Gestión", 20, t("TEXT"), "bold").grid(
+        etiqueta(tarjeta_login, "Iniciar sesión", 20, t("TEXT"), "bold").grid(
             row=0, column=0, pady=(30, 4)
         )
         etiqueta(
-            tarjeta_login, "Solo Recursos Humanos o Administrador", 13, t("MUTED")
+            tarjeta_login,
+            "Portal del Empleado · Recursos Humanos · Administrador",
+            13,
+            t("MUTED"),
         ).grid(row=1, column=0, pady=(0, 24))
         self.entrada_usuario = entrada(tarjeta_login, "Usuario", ancho=360)
         self.entrada_usuario.grid(row=2, column=0, pady=6)
         self.entrada_clave = entrada(tarjeta_login, "Contraseña", ancho=360)
         self.entrada_clave.configure(show="•")
         self.entrada_clave.grid(row=3, column=0, pady=6)
-        self.entrada_clave.bind("<Return>", lambda _e: self._ingresar_gestion())
-        boton_primario(tarjeta_login, "Ingresar", self._ingresar_gestion).grid(
+        self.entrada_clave.bind("<Return>", lambda _e: self._ingresar())
+        boton_primario(tarjeta_login, "Ingresar", self._ingresar).grid(
             row=4, column=0, pady=(18, 8)
         )
         self.lbl_login = etiqueta(tarjeta_login, "", 12, t("DANGER"))
         self.lbl_login.grid(row=5, column=0, pady=(0, 12))
-        boton_secundario(tarjeta_login, "Volver al Portal", self._mostrar_portal).grid(
-            row=6, column=0, pady=(0, 24)
-        )
+        boton_secundario(
+            tarjeta_login, "Cambiar contraseña", self._mostrar_cambio_clave
+        ).grid(row=6, column=0, pady=(0, 24))
         self.entrada_usuario.focus_set()
 
-    def _abrir_dashboard(self) -> None:
-        """Valida la cédula y despliega el tablero personal del empleado."""
-        cedula = self.entrada_cedula.get().strip()
-        if not cedula:
-            self.lbl_portal.configure(text="Ingrese su cédula o usuario.")
-            return
-        user = self.db.get_user_by_username(cedula)
-        if not user:
-            self.lbl_portal.configure(
-                text="Empleado no encontrado. Verifique su cédula."
+    def _ingresar(self) -> None:
+        """Valida credenciales y abre el tablero del empleado o la gestión."""
+        usuario = self.entrada_usuario.get().strip()
+        clave = self.entrada_clave.get()
+        if not usuario:
+            self.lbl_login.configure(
+                text="Ingrese su usuario.", text_color=t("DANGER")
             )
             return
+        user = self.db.get_user_by_username(usuario)
+        if not user:
+            self.lbl_login.configure(
+                text="El usuario no existe. Verifique el nombre.",
+                text_color=t("DANGER"),
+            )
+            return
+        user = auth.authenticate(self.db, usuario, clave)
+        if not user:
+            self.lbl_login.configure(
+                text="Contraseña incorrecta.", text_color=t("DANGER")
+            )
+            return
+        rol = auth.get_role_name(self.db, user)
         for hijo in self.zona_empleado.winfo_children():
             hijo.destroy()
+        if rol in auth.ROLES_GESTION_USUARIOS:
+            self.actor = user
+            self.frame_publico.grid_forget()
+            self.panel_gestion = PanelGestion(self, self.db, user, self._volver_publico)
+            self.panel_gestion.grid(row=0, column=0, sticky="nsew")
+            return
         self.dashboard_empleado = EmployeeDashboard(
             self.zona_empleado, self.db, user, self._mostrar_portal
         )
         self.dashboard_empleado.grid(row=0, column=0, sticky="nsew")
+
+    def _mostrar_cambio_clave(self) -> None:
+        """Formulario de cambio de contraseña del propio usuario."""
+        for hijo in self.zona_empleado.winfo_children():
+            hijo.destroy()
+        tarjeta_cambio = tarjeta(self.zona_empleado)
+        tarjeta_cambio.grid(row=0, column=0, sticky="nsew")
+        tarjeta_cambio.grid_columnconfigure(0, weight=1)
+        etiqueta(tarjeta_cambio, "Cambiar contraseña", 20, t("TEXT"), "bold").grid(
+            row=0, column=0, pady=(30, 4)
+        )
+        etiqueta(
+            tarjeta_cambio,
+            "Verifique su identidad con la contraseña actual",
+            13,
+            t("MUTED"),
+        ).grid(row=1, column=0, pady=(0, 24))
+        self.entrada_usuario = entrada(tarjeta_cambio, "Usuario", ancho=360)
+        self.entrada_usuario.grid(row=2, column=0, pady=6)
+        self.entrada_actual = entrada(tarjeta_cambio, "Contraseña actual", ancho=360)
+        self.entrada_actual.configure(show="•")
+        self.entrada_actual.grid(row=3, column=0, pady=6)
+        self.entrada_nueva = entrada(
+            tarjeta_cambio, "Contraseña nueva (mín. 6 caracteres)", ancho=360
+        )
+        self.entrada_nueva.configure(show="•")
+        self.entrada_nueva.grid(row=4, column=0, pady=6)
+        self.entrada_repetir = entrada(tarjeta_cambio, "Repetir contraseña nueva", ancho=360)
+        self.entrada_repetir.configure(show="•")
+        self.entrada_repetir.grid(row=5, column=0, pady=6)
+        self.entrada_repetir.bind("<Return>", lambda _e: self._ejecutar_cambio_clave())
+        boton_primario(
+            tarjeta_cambio, "Cambiar contraseña", self._ejecutar_cambio_clave
+        ).grid(row=6, column=0, pady=(18, 8))
+        self.lbl_cambio = etiqueta(tarjeta_cambio, "", 12, t("DANGER"))
+        self.lbl_cambio.grid(row=7, column=0, pady=(0, 12))
+        boton_secundario(
+            tarjeta_cambio, "Volver al inicio de sesión", self._mostrar_portal
+        ).grid(row=8, column=0, pady=(0, 24))
+        self.entrada_usuario.focus_set()
+
+    def _ejecutar_cambio_clave(self) -> None:
+        """Ejecuta el cambio de contraseña con las validaciones pertinentes."""
+        usuario = self.entrada_usuario.get().strip()
+        if not usuario:
+            self.lbl_cambio.configure(
+                text="Ingrese su usuario.", text_color=t("DANGER")
+            )
+            return
+        user = self.db.get_user_by_username(usuario)
+        if not user:
+            self.lbl_cambio.configure(
+                text="El usuario no existe. Verifique el nombre.",
+                text_color=t("DANGER"),
+            )
+            return
+        nueva = self.entrada_nueva.get()
+        if nueva != self.entrada_repetir.get():
+            self.lbl_cambio.configure(
+                text="Las contraseñas nuevas no coinciden.", text_color=t("DANGER")
+            )
+            return
+        try:
+            auth.cambiar_clave(self.db, user, self.entrada_actual.get(), nueva)
+        except ValueError as error:
+            self.lbl_cambio.configure(text=str(error), text_color=t("DANGER"))
+            return
+        self.lbl_cambio.configure(
+            text="Contraseña actualizada. Inicie sesión con la nueva clave.",
+            text_color=t("SUCCESS"),
+        )
+        self.after(1400, self._mostrar_portal)
 
     def _construir_tarjeta_reloj(self, master: ctk.CTkFrame) -> None:
         tarjeta_reloj = tarjeta(master)
@@ -664,24 +907,6 @@ class MarcacionApp(ctk.CTk):
     # ------------------------------------------------------------------
     # Modo Gestión (RRHH/Administrador)
     # ------------------------------------------------------------------
-    def _ingresar_gestion(self) -> None:
-        usuario = self.entrada_usuario.get().strip()
-        clave = self.entrada_clave.get()
-        user = auth.authenticate(self.db, usuario, clave)
-        if not user:
-            self.lbl_login.configure(text="Credenciales incorrectas.")
-            return
-        rol = auth.get_role_name(self.db, user)
-        if rol not in auth.ROLES_GESTION_USUARIOS:
-            self.lbl_login.configure(
-                text="Solo RRHH o Administrador pueden gestionar."
-            )
-            return
-        self.actor = user
-        self.frame_publico.grid_forget()
-        self.panel_gestion = PanelGestion(self, self.db, user, self._volver_publico)
-        self.panel_gestion.grid(row=0, column=0, sticky="nsew")
-
     def _volver_publico(self) -> None:
         if self.panel_gestion is not None:
             self.panel_gestion.destroy()
@@ -736,6 +961,15 @@ class EmployeeDashboard(ctk.CTkFrame):
         self.area.grid_columnconfigure(0, weight=1)
         self.area.grid_columnconfigure(1, weight=1)
         self._refrescar()
+        self.app_raiz = master.winfo_toplevel()
+        if hasattr(self.app_raiz, "registrar_refresco_tema"):
+            self.app_raiz.registrar_refresco_tema(self._refrescar)
+            self.bind("<Destroy>", self._al_destruir)
+
+    def _al_destruir(self, evento) -> None:
+        """Desuscribe el refresco de tema cuando el tablero se cierra."""
+        if evento.widget is self and hasattr(self.app_raiz, "quitar_refresco_tema"):
+            self.app_raiz.quitar_refresco_tema(self._refrescar)
 
     def _refrescar(self) -> None:
         """Recarga el resumen del empleado y reconstruye tarjetas y gráfico."""
@@ -861,12 +1095,14 @@ class EmployeeDashboard(ctk.CTkFrame):
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 10))
         fila_rango = ctk.CTkFrame(tarjeta_historial, fg_color="transparent")
         fila_rango.grid(row=2, column=0, columnspan=2, sticky="w", padx=18)
-        self.ent_hist_desde = entrada(fila_rango, "Desde (AAAA-MM-DD)", ancho=170)
+        self.fila_hist_desde = campo_fecha(fila_rango, "Desde (AAAA-MM-DD)", ancho=160)
+        self.fila_hist_desde.pack(side="left", padx=(0, 8))
+        self.ent_hist_desde = self.fila_hist_desde.entrada
         self.ent_hist_desde.insert(0, f"{hoy.year}-01-01")
-        self.ent_hist_desde.pack(side="left", padx=(0, 8))
-        self.ent_hist_hasta = entrada(fila_rango, "Hasta (AAAA-MM-DD)", ancho=170)
+        self.fila_hist_hasta = campo_fecha(fila_rango, "Hasta (AAAA-MM-DD)", ancho=160)
+        self.fila_hist_hasta.pack(side="left", padx=(0, 8))
+        self.ent_hist_hasta = self.fila_hist_hasta.entrada
         self.ent_hist_hasta.insert(0, hoy.isoformat())
-        self.ent_hist_hasta.pack(side="left", padx=(0, 8))
         boton_primario(fila_rango, "Consultar", self._consultar_historial).pack(
             side="left", padx=8
         )
@@ -1796,10 +2032,12 @@ class JustificacionesTab(ctk.CTkFrame):
             height=40,
         )
         self.menu_tipo.grid(row=2, column=0, pady=5)
-        self.ent_inicio = entrada(formulario, "Fecha inicio (AAAA-MM-DD)", ancho=420)
-        self.ent_inicio.grid(row=3, column=0, pady=5)
-        self.ent_fin = entrada(formulario, "Fecha fin (AAAA-MM-DD) · máx. hoy", ancho=420)
-        self.ent_fin.grid(row=4, column=0, pady=5)
+        self.fila_inicio = campo_fecha(formulario, "Fecha inicio", ancho=310)
+        self.fila_inicio.grid(row=3, column=0, pady=5)
+        self.ent_inicio = self.fila_inicio.entrada
+        self.fila_fin = campo_fecha(formulario, "Fecha fin · máx. hoy", ancho=310)
+        self.fila_fin.grid(row=4, column=0, pady=5)
+        self.ent_fin = self.fila_fin.entrada
         self.ent_horas = entrada(formulario, "Horas del permiso (ej. 2.5)", ancho=420)
         self.lbl_condiciones = etiqueta(formulario, "", 11, t("MUTED"))
         boton_primario(formulario, "Registrar Justificación", self._crear).grid(
@@ -1972,6 +2210,11 @@ class JustificacionesTab(ctk.CTkFrame):
                     f"Quedan {disp['restantes']:g} {unidad}"
                     if disp["restantes"] is not None
                     else ("Disponible" if disp["disponible"] else "No aplica")
+                )
+                + (
+                    f" · {disp['usos']:g} de {disp['usos_max']:g} usos"
+                    if disp.get("usos_max")
+                    else ""
                 ),
                 10,
                 t("MUTED"),

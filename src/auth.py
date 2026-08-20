@@ -255,6 +255,31 @@ def update_user(
     )
 
 
+def cambiar_clave(db: Database, user: Dict, clave_actual: str, clave_nueva: str) -> None:
+    """Cambia la contraseña del propio usuario verificando la actual.
+
+    No requiere rol administrativo: la verificación de la clave vigente
+    basta como prueba de identidad. El evento queda en ``logs_auditoria``
+    sin exponer los hashes.
+
+    Raises:
+        ValueError: si la clave actual no coincide o la nueva es muy corta.
+    """
+    if not verify_password(clave_actual, user["password_hash"]):
+        raise ValueError("La contraseña actual no es correcta.")
+    if len(clave_nueva) < 6:
+        raise ValueError("La contraseña nueva debe tener al menos 6 caracteres.")
+    db.update_user(user["id"], password_hash=hash_password(clave_nueva))
+    db.registrar_auditoria(
+        user["id"],
+        "ACTUALIZAR",
+        "users",
+        user["id"],
+        anterior={"password_hash": "(oculto)"},
+        nuevos={"password_hash": "(cambiado)"},
+    )
+
+
 @autorizado(ROLE_ADMIN, ROLE_RRHH)
 def crear_justificacion(
     db: Database,
@@ -310,10 +335,11 @@ def crear_justificacion(
     if estado is None:
         raise ValueError("No se encontró disponibilidad para el permiso.")
     if not estado["disponible"]:
+        detalle = f"{estado['usados']:g} {estado['unidad']} usados de {estado['cuota']:g}"
+        if estado.get("usos_max"):
+            detalle += f" y {estado['usos']:g} de {estado['usos_max']:g} usos"
         raise ValueError(
-            f"Cuota agotada de '{tipo_permiso}': {estado['usados']:g} "
-            f"{estado['unidad']} usados de {estado['cuota']:g} "
-            f"({estado['periodo']})."
+            f"Cuota agotada de '{tipo_permiso}': {detalle} ({estado['periodo']})."
         )
     if estado["restantes"] is not None and horas_usadas > estado["restantes"]:
         raise ValueError(
