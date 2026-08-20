@@ -48,6 +48,7 @@ flowchart LR
 
 ## Documentación vinculada
 
+- [[Bitácora de Implementación]] (historial cronológico completo)
 - [[Control de Roles y Permisos RBAC]]
 - [[Módulo de Gestión de Usuarios]]
 - [[Motor de Reglas de Horas Extra]]
