@@ -24,7 +24,7 @@ from clock_engine import (
     ClockEngine,
     calcular_horas_paraguay,
     es_feriado_o_domingo,
-    evaluar_asistencia_conatel,
+    evaluar_asistencia,
 )
 from offline_queue import ColaOffline
 
@@ -114,7 +114,7 @@ def sincronizar(
 
 def _sincronizar_entrada(db, user, momento, lluvia, pendiente, avisar) -> None:
     """Reinserta una ENTRADA offline con su timestamp y evaluación original."""
-    evaluacion = evaluar_asistencia_conatel(db, user["id"], momento, lluvia)
+    evaluacion = evaluar_asistencia(db, user["id"], momento, lluvia)
     estado = evaluacion["estado"]
     incidencia = (
         "Ausencia Injustificada"

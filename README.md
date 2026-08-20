@@ -15,7 +15,7 @@ Cumple la **Ley 213** (horas extra), la **Ley 6380/2019** (aguinaldo proporciona
 | **Reconocimiento facial** | Validación del rostro contra la foto registrada del empleado (OpenCV LBPH); si no coincide, la marcación se bloquea y se **audita FRAUDE**. |
 | **Notificaciones** | Bus de alertas en tiempo real: cuota agotada (Art. 14), llegada tardía injustificada y fraude → campana parpadeante en el Panel de Gestión, **WebSocket** hacia el portal web y **correo SMTP** opcional con el comprobante. |
 | **Reglamento** | 15 artículos para funcionarios y 18 para pasantes (Res. 1307/2010 + 3028/2024) con cuotas mensuales por horas, días o usos, y bloqueo del 4.º uso del Art. 14. |
-| **RRHH** | Alta/edición de personal con roles RBAC, justificaciones con PDF oficial CONATEL, correcciones de marcación, reportes xlsx/csv y aguinaldo. |
+| **RRHH** | Alta/edición de personal con roles RBAC, justificaciones con PDF oficial, correcciones de marcación, reportes xlsx/csv y aguinaldo. |
 | **Analítica** | Dashboard con gráficos (CustomTkinter + matplotlib) y tema claro/oscuro al instante. |
 | **Autoservicio web** | FastAPI + JWT (8 h): resumen personal, histórico, permisos con PDF y reclamos de marcación. |
 | **Biometría ZKTeco** | Sincronización TCP/IP (puerto 4370) de empleados con el reloj biométrico. |
@@ -93,7 +93,7 @@ SMTP_HOST=smtp.tuproveedor.com
 SMTP_PORT=587
 SMTP_USER=****
 SMTP_PASSWORD=****
-SMTP_FROM=sistema@conatel.gob.py
+SMTP_FROM=no-reply@sistema-marcacion.com
 
 # Servidor web (opcional)
 HOST=127.0.0.1
@@ -134,4 +134,4 @@ La bóveda de documentación vive en [`Sistema de Marcacion/`](Sistema%20de%20Ma
 
 ---
 
-*Sistema desarrollado para cumplir la normativa laboral y reglamentaria envase a la CONATEL Paraguay. Los datos de empleados son confidenciales: no subir `.env` ni reportes generados (ambos ignorados por git).*
+*Sistema desarrollado para cumplir la normativa laboral y reglamentaria paraguaya. Los datos de empleados son confidenciales: no subir `.env` ni reportes generados (ambos ignorados por git).*

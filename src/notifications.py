@@ -93,7 +93,7 @@ def _config_smtp() -> Optional[Dict[str, str]]:
         "port": os.getenv("SMTP_PORT", "587"),
         "user": os.getenv("SMTP_USER", ""),
         "password": os.getenv("SMTP_PASSWORD", ""),
-        "from": os.getenv("SMTP_FROM", "sistema@conatel.gob.py"),
+        "from": os.getenv("SMTP_FROM", "no-reply@sistema-marcacion.com"),
     }
 
 
@@ -126,7 +126,7 @@ def enviar_correo_ticket(destinatario: str, ticket: str) -> bool:
     """Envía el comprobante de una marcación por correo (best-effort)."""
     return enviar_correo(
         destinatario,
-        "Sistema de Marcación CONATEL · Comprobante de asistencia",
+        "Sistema de Marcación · Comprobante de asistencia",
         f"Estimado colaborador:\n\nSu marcación fue registrada correctamente.\n\n"
-        f"Comprobante:\n{ticket}\n\nSistema de Marcación · CONATEL",
+        f"Comprobante:\n{ticket}\n\nSistema de Marcación",
     )

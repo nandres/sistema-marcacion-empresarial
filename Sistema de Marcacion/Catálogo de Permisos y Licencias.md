@@ -1,12 +1,12 @@
-# Catálogo de Permisos y Licencias CONATEL
+# Catálogo de Permisos y Licencias
 
-> Catálogo reglamentario digitalizado de permisos, licencias y justificaciones de la CONATEL. Implementado en `src/reglamento.py`, consumido por `database.py` (CHECK de tipos), `auth.py` (validación de cuotas), `reports.py` (disponibilidad en el resumen) y `gui.py` (panel de justificación).
+> Catálogo reglamentario digitalizado de permisos, licencias y justificaciones de la empresa. Implementado en `src/reglamento.py`, consumido por `database.py` (CHECK de tipos), `auth.py` (validación de cuotas), `reports.py` (disponibilidad en el resumen) y `gui.py` (panel de justificación).
 
 ## Reglamentos vigentes
 
 | Reglamento | Alcance | Artículos codificados |
 | --- | --- | --- |
-| **Reglamento Interno CONATEL** (Res. Directorio N.º 1307/2010, homologada por la SFP) | Funcionarios y personal contratado | Art. 18, Art. 29 y Art. 34 |
+| **Reglamento Interno** (Res. Directorio N.º 1307/2010, homologada por la SFP) | Funcionarios y personal contratado | Art. 18, Art. 29 y Art. 34 |
 | **Programa de Pasantía** (Res. Directorio N.º 3028/2024) | Pasantes | Art. 10, 14, 23 y 25 |
 
 ## Funcionarios (Res. 1307/2010)
@@ -81,6 +81,6 @@
 ## Documentación vinculada
 
 - [[Manual de Diseño UI-UX Simplificado y Reportes PDF]]
-- [[Reglamento de Asistencia y Disciplina CONATEL]]
+- [[Reglamento de Asistencia y Disciplina]]
 - [[Módulo de Justificaciones y Aguinaldos]]
 - [[Ecosistema Sistema de Marcación]]

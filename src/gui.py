@@ -572,7 +572,7 @@ class MarcacionApp(ctk.CTk):
             row=0, column=0, sticky="w"
         )
         etiqueta(
-            cabecera, "Cumplimiento Ley N.º 213/93 · Res. 3028/2024 CONATEL", 13, t("MUTED")
+            cabecera, "Cumplimiento Ley N.º 213/93 · Res. 3028/2024", 13, t("MUTED")
         ).grid(row=1, column=0, sticky="w")
         interruptor_tema(cabecera, self).grid(row=0, column=1, rowspan=2, sticky="e")
 

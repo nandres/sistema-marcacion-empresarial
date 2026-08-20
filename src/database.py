@@ -596,7 +596,7 @@ class Database:
         """Abre un marcaje de entrada con su estado, incidencia y contexto.
 
         ``tolerancia_aplicada`` indica si se consumió la gracia ordinaria o
-        climática de la Res. 3028/2024 de CONATEL; ``condicion_climatica``
+        climática de la Res. 3028/2024; ``condicion_climatica``
         documenta el evento meteorológico declarado en el kiosco.
 
         Si se provee ``sync_id`` (marcación offline) el inserto es

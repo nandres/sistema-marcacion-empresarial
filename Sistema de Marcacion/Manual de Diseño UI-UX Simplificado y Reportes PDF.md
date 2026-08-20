@@ -1,6 +1,6 @@
 # Manual de Diseño UI-UX Simplificado y Reportes PDF
 
-> Rediseño integral del [[Ecosistema Sistema de Marcación|Sistema de Marcación]]: interfaz simplificada sin ventanas emergentes, temas dinámicos Claro/Oscuro aplicados al instante y generación automatizada de reportes PDF oficiales CONATEL con validación SHA-256.
+> Rediseño integral del [[Ecosistema Sistema de Marcación|Sistema de Marcación]]: interfaz simplificada sin ventanas emergentes, temas dinámicos Claro/Oscuro aplicados al instante y generación automatizada de reportes PDF oficiales con validación SHA-256.
 
 ## Filosofía de diseño
 
@@ -36,11 +36,11 @@
 - `EmployeeDashboard` en `src/gui.py`: tarjetas de **Vacaciones Art. 23** (disponibles/usadas/devengadas), **Permisos del mes Art. 25** (total + detalle por tipo) y **Horas extra del mes** (50%/100% Ley 213), gráfico matplotlib de horas ordinarias por día y lista de permisos con botón **Descargar PDF**.
 - Datos provistos por `reports.resumen_empleado(db, user, fecha=None)`.
 
-## Reportes PDF oficiales CONATEL
+## Reportes PDF oficiales
 
-- `reports.generar_pdf_permiso(solicitud_id: int) -> str` (firma exacta de negocio): abre su propia conexión (sin DDL, evita bloqueos de locks), localiza la justificación y devuelve la ruta del PDF en `reportes/permiso_{id:04d}_CONATEL.pdf`.
-- Documento A4 con membrete simulado de la CONATEL (Dirección de Talento Humano), tabla de datos del empleado (cédula, vínculo, dependencia, período, días hábiles), firmas electrónicas del tutor y el sello institucional.
-- **Integridad legal**: serie canónica `CONATEL|3028/2024|id|username|tipo|inicio|fin|aprobador` → SHA-256 persistido en `justificaciones.hash_legal` (columna `VARCHAR(64)`).
+- `reports.generar_pdf_permiso(solicitud_id: int) -> str` (firma exacta de negocio): abre su propia conexión (sin DDL, evita bloqueos de locks), localiza la justificación y devuelve la ruta del PDF en `reportes/permiso_{id:04d}.pdf`.
+- Documento A4 con membrete simulado de la empresa (Dirección de Talento Humano), tabla de datos del empleado (cédula, vínculo, dependencia, período, días hábiles), firmas electrónicas del tutor y el sello institucional.
+- **Integridad legal**: serie canónica `EMPRESA|3028/2024|id|username|tipo|inicio|fin|aprobador` → SHA-256 persistido en `justificaciones.hash_legal` (columna `VARCHAR(64)`).
 - La web lo sirve por `GET /api/permiso/{solicitud_id}/pdf` (FileResponse) validando que la justificación pertenezca al usuario autenticado; la GUI lo abre con `os.startfile`.
 
 ## Administración simplificada
@@ -65,7 +65,7 @@
 ## Enlaces
 
 - [[Ecosistema Sistema de Marcación]]
-- [[Reglamento de Asistencia y Disciplina CONATEL]] (Art. 23 y 25, Res. 3028/2024)
+- [[Reglamento de Asistencia y Disciplina]] (Art. 23 y 25, Res. 3028/2024)
 - [[Diseño de Interfaz Premium UI-UX]] (evolución del tema)
 - [[Panel de Reportes y Auditoría]] (log JSONB)
 - [[Panel de Analítica Visual y UX Premium]] (gráficos matplotlib)
