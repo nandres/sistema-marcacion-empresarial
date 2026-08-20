@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import jwt
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
@@ -27,14 +27,15 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 import auth
+import clock_engine
 import database
 import notifications
 import reports
 
 app = FastAPI(
-    title="Sistema de Marcación · Portal del Empleado",
-    description="Tablero personal, historial de marcas y PDFs de permisos.",
-    version="3.1.0",
+    title="Sistema de Marcación · Portal, Kiosco y Gestión",
+    description="Kiosco de marcación, tablero del empleado y panel de Recursos Humanos.",
+    version="3.2.0",
 )
 
 PAGINA_HTML: str = f"""<!DOCTYPE html>
@@ -157,16 +158,43 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
     .fila {{ flex-direction:column; }}
     .btn-hoy {{ width:100%; }}
   }}
+.tabs {{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }}
+  .tab {{ background:var(--card); border:1px solid var(--borde); color:var(--mutado);
+    padding:8px 14px; border-radius:20px; cursor:pointer; font-size:.9rem; }}
+  .tab.activo {{ background:var(--primario); border-color:var(--primario); color:#fff; }}
+  .tabla {{ width:100%; border-collapse:collapse; font-size:.88rem; margin-top:8px; }}
+  .tabla th, .tabla td {{ padding:8px 10px; border-bottom:1px solid var(--borde); text-align:left; vertical-align:top; }}
+  .tabla th {{ color:var(--mutado); font-weight:600; font-size:.8rem; text-transform:uppercase; }}
 </style>
 </head>
 <body>
   <div id="caja_toast"></div>
   <div class="cabecera" id="cabecera" style="display:none">
     <b id="usuario_nombre">Sesión activa</b>
-    <div style="display:flex; gap:8px; align-items:center">
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+      <button class="btn-secundario" onclick="mostrarPortal()">Portal</button>
+      <button class="btn-secundario" id="btn_gestion" onclick="mostrarGestion()" style="display:none">Gestión</button>
+      <button class="btn-secundario" onclick="mostrarKiosco()">Kiosco</button>
       <span class="conmutador" onclick="alternarTema()">◐ <span id="texto_tema">Claro</span></span>
       <button class="btn-secundario" onclick="cerrarSesion()">Cerrar sesión</button>
     </div>
+  </div>
+
+  <div class="tarjeta" id="vista_kiosco">
+    <h1 style="font-size:1.3rem">Kiosco de Marcación</h1>
+    <p class="subtitulo">Registra tu entrada o salida desde el navegador</p>
+    <label for="cedula_kiosco">Cédula o usuario</label>
+    <input id="cedula_kiosco" placeholder="Ej. 1234567 o juan" autocomplete="username">
+    <label for="password_kiosco">Contraseña</label>
+    <input id="password_kiosco" type="password" placeholder="••••••••" autocomplete="current-password">
+    <label style="display:flex; align-items:center; gap:8px; font-size:.9rem">
+      <input id="lluvia_kiosco" type="checkbox" style="width:auto">
+      Día lluvioso (tolerancia ampliada)
+    </label>
+    <button onclick="marcarKiosco()">REGISTRAR ASISTENCIA</button>
+    <p id="kiosco_respuesta" class="exito-texto"></p>
+    <p id="kiosco_error" class="error"></p>
+    <button class="btn-secundario" style="margin-top:10px" onclick="mostrarLogin('')">Portal del Empleado →</button>
   </div>
 
   <div class="tarjeta" id="vista_login">
@@ -223,6 +251,24 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
   </div>
 
   <p class="pie">Las correcciones quedan sujetas a aprobación de Recursos Humanos</p>
+
+  <div class="tarjeta oculto" id="vista_gestion">
+    <h1 style="font-size:1.2rem">Panel de Gestión · Recursos Humanos</h1>
+    <div class="tabs" id="tabs_gestion">
+      <button class="tab activo" data-seccion="resumen" onclick="mostrarSeccionGestion('resumen')">Resumen</button>
+      <button class="tab" data-seccion="personal" onclick="mostrarSeccionGestion('personal')">Personal</button>
+      <button class="tab" data-seccion="justificaciones" onclick="mostrarSeccionGestion('justificaciones')">Justificaciones</button>
+      <button class="tab" data-seccion="correcciones" onclick="mostrarSeccionGestion('correcciones')">Correcciones</button>
+      <button class="tab" data-seccion="alertas" onclick="mostrarSeccionGestion('alertas')">Alertas</button>
+      <button class="tab" data-seccion="auditoria" onclick="mostrarSeccionGestion('auditoria')">Auditoría</button>
+    </div>
+    <div id="seccion_resumen"></div>
+    <div id="seccion_personal" class="oculto"></div>
+    <div id="seccion_justificaciones" class="oculto"></div>
+    <div id="seccion_correcciones" class="oculto"></div>
+    <div id="seccion_alertas" class="oculto"></div>
+    <div id="seccion_auditoria" class="oculto"></div>
+  </div>
 <script>
   function isoHoy() {{
     const hoy = new Date();
@@ -270,25 +316,43 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
     }};
   }}
   function mostrarLogin(mensaje) {{
+    ocultarVistas();
     document.getElementById('vista_login').classList.remove('oculto');
-    document.getElementById('vista_tablero').classList.add('oculto');
-    document.getElementById('vista_consulta').classList.add('oculto');
-    document.getElementById('vista_reclamo').classList.add('oculto');
     document.getElementById('cabecera').style.display = 'none';
     if (mensaje) document.getElementById('login_error').textContent = mensaje;
   }}
-  function mostrarApp() {{
-    document.getElementById('vista_login').classList.add('oculto');
+  function ocultarVistas() {{
+    ['vista_login','vista_kiosco','vista_tablero','vista_consulta','vista_reclamo','vista_gestion']
+      .forEach(function (v) {{ document.getElementById(v).classList.add('oculto'); }});
+  }}
+  function mostrarKiosco() {{
+    ocultarVistas();
+    document.getElementById('vista_kiosco').classList.remove('oculto');
+    document.getElementById('cabecera').style.display = obtenerToken() ? 'flex' : 'none';
+  }}
+  function mostrarPortal() {{
+    ocultarVistas();
     document.getElementById('vista_tablero').classList.remove('oculto');
     document.getElementById('vista_consulta').classList.remove('oculto');
     document.getElementById('vista_reclamo').classList.remove('oculto');
     document.getElementById('cabecera').style.display = 'flex';
     cargarResumen();
   }}
+  function mostrarGestion() {{
+    ocultarVistas();
+    document.getElementById('vista_gestion').classList.remove('oculto');
+    document.getElementById('cabecera').style.display = 'flex';
+    mostrarSeccionGestion('resumen');
+  }}
+  function actualizarNav(rol) {{
+    document.getElementById('btn_gestion').style.display =
+      (rol === 'Administrador' || rol === 'Recursos Humanos') ? 'inline-block' : 'none';
+  }}
   function cerrarSesion() {{
     localStorage.removeItem('marcacion_jwt');
+    localStorage.removeItem('marcacion_rol');
     if (socketAlertas) {{ socketAlertas.close(); socketAlertas = null; }}
-    mostrarLogin('');
+    mostrarKiosco();
   }}
   async function iniciarSesion() {{
     const cedula = document.getElementById('cedula_login').value.trim();
@@ -305,18 +369,20 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
       return;
     }}
     localStorage.setItem('marcacion_jwt', dato.token);
+    localStorage.setItem('marcacion_rol', dato.rol);
     document.getElementById('usuario_nombre').textContent = dato.nombre + ' · ' + dato.rol;
-    mostrarApp();
+    actualizarNav(dato.rol);
+    mostrarPortal();
     conectarAlertas();
   }}
-  async function peticionAutenticada(ruta, cuerpo) {{
+  async function peticionAutenticada(ruta, cuerpo, metodo) {{
     const opciones = {{
       headers: {{ 'Authorization': 'Bearer ' + obtenerToken() }}
     }};
-    if (cuerpo !== undefined) {{
-      opciones.method = 'POST';
+    if (cuerpo !== undefined || metodo) {{
+      opciones.method = metodo || 'POST';
       opciones.headers['Content-Type'] = 'application/json';
-      opciones.body = JSON.stringify(cuerpo);
+      if (cuerpo !== undefined) opciones.body = JSON.stringify(cuerpo);
     }}
     const resp = await fetch(ruta, opciones);
     if (resp.status === 401) {{
@@ -468,7 +534,302 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
     respuesta.textContent = dato.mensaje;
     document.getElementById('motivo').value = '';
   }}
-  if (obtenerToken()) {{ mostrarApp(); }} else {{ mostrarLogin(''); }}
+  async function marcarKiosco() {{
+    var ce = document.getElementById('cedula_kiosco').value.trim();
+    var pa = document.getElementById('password_kiosco').value;
+    var ll = document.getElementById('lluvia_kiosco').checked;
+    var respuesta = document.getElementById('kiosco_respuesta');
+    var error = document.getElementById('kiosco_error');
+    respuesta.textContent = ''; error.textContent = '';
+    if (!ce || !pa) {{ error.textContent = 'Ingresa tu cédula y contraseña.'; return; }}
+    var resp = await fetch('/api/marcar', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ cedula: ce, password: pa, es_dia_lluvioso: ll }})
+    }});
+    var dato = await resp.json();
+    if (!resp.ok) {{ error.textContent = dato.detail || 'Error al marcar.'; return; }}
+    respuesta.innerHTML = '<b>' + dato.nombre + '</b> · ' + dato.tipo + ' a las ' + dato.hora +
+      '<br><br><pre style="text-align:left;background:var(--card);padding:12px;border-radius:8px;' +
+      'border:1px solid var(--borde);overflow-x:auto;font-size:.75rem">' + dato.ticket + '</pre>';
+    document.getElementById('password_kiosco').value = '';
+  }}
+  function esc(s) {{
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }}
+  function mostrarSeccionGestion(nombre) {{
+    document.querySelectorAll('#tabs_gestion .tab').forEach(function (b) {{
+      b.classList.toggle('activo', b.dataset.seccion === nombre);
+    }});
+    ['resumen','personal','justificaciones','correcciones','alertas','auditoria'].forEach(function (s) {{
+      document.getElementById('seccion_' + s).classList.toggle('oculto', s !== nombre);
+    }});
+    if (nombre === 'resumen') cargarResumenPanel();
+    if (nombre === 'personal') cargarPersonal();
+    if (nombre === 'justificaciones') cargarJustificaciones();
+    if (nombre === 'correcciones') cargarCorrecciones();
+    if (nombre === 'alertas') cargarAlertasPanel();
+    if (nombre === 'auditoria') cargarAuditoria();
+  }}
+  async function cargarResumenPanel() {{
+    var cont = document.getElementById('seccion_resumen');
+    var resp = await peticionAutenticada('/api/panel/resumen');
+    if (!resp) return;
+    var d = await resp.json();
+    if (!resp.ok) {{ cont.innerHTML = '<p class="error">' + (d.detail || 'Error.') + '</p>'; return; }}
+    cont.innerHTML =
+      '<div class="rejilla">' +
+      tarjetaDato(d.personal, 'Empleados registrados', 'Todos los vínculos', '') +
+      tarjetaDato(d.marcas_hoy, 'Marcajes de hoy', 'Entradas registradas', 'exito') +
+      tarjetaDato(d.justificaciones, 'Justificaciones emitidas', 'PDF oficial disponible', 'acento') +
+      tarjetaDato(d.correcciones_pendientes, 'Correcciones pendientes', 'Solicitudes sin resolver', 'acento') +
+      tarjetaDato(d.alertas_no_leidas, 'Alertas sin leer', 'Notificaciones activas', 'peligro') +
+      '</div>' +
+      '<div class="bloque"><h3>Acciones rápidas</h3>' +
+      '<button class="btn-secundario" onclick="mostrarSeccionGestion(\'personal\')">Gestionar personal</button> ' +
+      '<button class="btn-secundario" onclick="mostrarSeccionGestion(\'justificaciones\')">Emitir justificación</button> ' +
+      '<button class="btn-secundario" onclick="mostrarSeccionGestion(\'correcciones\')">Revisar correcciones</button></div>';
+  }}
+  var personalActual = [];
+  var rolesActual = [];
+  function renderTablaPersonal(lista, editandoId) {{
+    var html = '<table class="tabla"><tr><th>Nombre</th><th>Usuario</th><th>Rol</th>' +
+      '<th>Vínculo</th><th>Salario</th><th>Acciones</th></tr>';
+    lista.forEach(function (p) {{
+      if (p.id === editandoId) {{
+        var opRoles = rolesActual.map(function (r) {{
+          return '<option' + (r === p.role_name ? ' selected' : '') + '>' + esc(r) + '</option>';
+        }}).join('');
+        var opVinculos = ['Funcionario','Pasante'].map(function (v) {{
+          return '<option' + (v === p.tipo_vinculo ? ' selected' : '') + '>' + v + '</option>';
+        }}).join('');
+        html += '<tr><td colspan="6"><div class="rejilla">' +
+          '<div><label>Nombre</label><input id="e_nombre" value="' + esc(p.full_name) + '"></div>' +
+          '<div><label>Rol</label><select id="e_rol">' + opRoles + '</select></div>' +
+          '<div><label>Vínculo</label><select id="e_vinculo">' + opVinculos + '</select></div>' +
+          '<div><label>Salario (Gs.)</label><input id="e_salario" type="number" min="0" step="100000" value="' + (p.salario_mensual || 0) + '"></div>' +
+          '<div><label>Nueva contraseña (vacío = no cambia)</label><input id="e_password" type="password"></div>' +
+          '</div><button onclick="guardarPersonal(' + p.id + ')">Guardar</button> ' +
+          '<button class="btn-secundario" onclick="cargarPersonal()">Cancelar</button></td></tr>';
+        return;
+      }}
+      html += '<tr><td>' + esc(p.full_name) + '</td><td>' + esc(p.username) + '</td>' +
+        '<td>' + esc(p.role_name) + '</td><td>' + esc(p.tipo_vinculo || '') + '</td>' +
+        '<td>Gs. ' + gs(p.salario_mensual || 0) + '</td>' +
+        '<td><button class="btn-pdf" onclick="editarPersonal(' + p.id + ')">Editar</button> ' +
+        '<button class="btn-secundario" onclick="eliminarPersonal(' + p.id + ')">Eliminar</button></td></tr>';
+    }});
+    html += '</table>';
+    return html;
+  }}
+  async function cargarPersonal() {{
+    var cont = document.getElementById('seccion_personal');
+    var resp = await peticionAutenticada('/api/panel/personal');
+    if (!resp) return;
+    var dato = await resp.json();
+    if (!resp.ok) {{ cont.innerHTML = '<p class="error">' + (dato.detail || 'Error.') + '</p>'; return; }}
+    personalActual = dato.personal;
+    rolesActual = dato.roles;
+    var roles = dato.roles.map(function (r) {{ return '<option>' + esc(r) + '</option>'; }}).join('');
+    var html = '<div class="bloque"><h3>Nuevo empleado</h3><div class="rejilla">' +
+      '<div><label>Usuario</label><input id="n_username" placeholder="p. ej. maria"></div>' +
+      '<div><label>Contraseña</label><input id="n_password" type="password"></div>' +
+      '<div><label>Nombre y apellido</label><input id="n_nombre" placeholder="Nombre completo"></div>' +
+      '<div><label>Rol</label><select id="n_rol">' + roles + '</select></div>' +
+      '<div><label>Salario mensual (Gs.)</label><input id="n_salario" type="number" min="0" step="100000" value="0"></div>' +
+      '<div><label>Vínculo</label><select id="n_vinculo"><option>Funcionario</option><option>Pasante</option></select></div>' +
+      '</div><button onclick="crearPersonal()">CREAR EMPLEADO</button><p id="personal_respuesta" class="exito-texto"></p></div>';
+    html += '<div class="bloque"><h3>Personal registrado</h3>' + renderTablaPersonal(personalActual, null) + '</div>';
+    cont.innerHTML = html;
+  }}
+  async function crearPersonal() {{
+    var respuesta = document.getElementById('personal_respuesta');
+    respuesta.textContent = '';
+    var body = {{
+      username: document.getElementById('n_username').value.trim(),
+      password: document.getElementById('n_password').value,
+      full_name: document.getElementById('n_nombre').value.trim(),
+      role_name: document.getElementById('n_rol').value,
+      salario_mensual: parseFloat(document.getElementById('n_salario').value) || 0,
+      tipo_vinculo: document.getElementById('n_vinculo').value
+    }};
+    if (!body.username || !body.password || !body.full_name) {{
+      respuesta.textContent = 'Completa usuario, contraseña y nombre.';
+      return;
+    }}
+    var resp = await peticionAutenticada('/api/panel/personal', body);
+    if (!resp) return;
+    var d = await resp.json();
+    if (!resp.ok) {{ respuesta.textContent = d.detail || 'Error al crear.'; return; }}
+    cargarPersonal();
+  }}
+  function editarPersonal(id) {{
+    document.getElementById('seccion_personal').innerHTML =
+      renderTablaPersonal(personalActual, id);
+  }}
+  async function guardarPersonal(id) {{
+    var body = {{
+      full_name: document.getElementById('e_nombre').value.trim(),
+      role_name: document.getElementById('e_rol').value,
+      salario_mensual: parseFloat(document.getElementById('e_salario').value) || 0,
+      tipo_vinculo: document.getElementById('e_vinculo').value
+    }};
+    var pass = document.getElementById('e_password').value;
+    if (pass) body.password = pass;
+    var resp = await peticionAutenticada('/api/panel/personal/' + id, body, 'PUT');
+    if (!resp) return;
+    var d = await resp.json();
+    if (!resp.ok) {{ alert(d.detail || 'Error al actualizar.'); return; }}
+    cargarPersonal();
+  }}
+  async function eliminarPersonal(id) {{
+    if (!confirm('¿Eliminar a este empleado? La acción queda auditada.')) return;
+    var resp = await peticionAutenticada('/api/panel/personal/' + id, undefined, 'DELETE');
+    if (!resp) return;
+    var d = await resp.json();
+    if (!resp.ok) {{ alert(d.detail || 'Error al eliminar.'); return; }}
+    cargarPersonal();
+  }}
+  async function cargarJustificaciones() {{
+    var cont = document.getElementById('seccion_justificaciones');
+    var resp = await peticionAutenticada('/api/panel/justificaciones');
+    if (!resp) return;
+    var dato = await resp.json();
+    if (!resp.ok) {{ cont.innerHTML = '<p class="error">' + (dato.detail || 'Error.') + '</p>'; return; }}
+    var opcionesEmp = (dato.personal || []).map(function (p) {{
+      return '<option value="' + p.id + '">' + esc(p.full_name) + ' (' + esc(p.username) + ')</option>';
+    }}).join('');
+    var opcionesTipo = (dato.tipos || []).map(function (t) {{
+      return '<option>' + esc(t) + '</option>';
+    }}).join('');
+    var html = '<div class="bloque"><h3>Emitir justificación oficial</h3><div class="rejilla">' +
+      '<div><label>Empleado</label><select id="j_empleado">' + opcionesEmp + '</select></div>' +
+      '<div><label>Tipo de permiso</label><select id="j_tipo">' + opcionesTipo + '</select></div>' +
+      '<div><label>Desde</label><input id="j_desde" type="date"></div>' +
+      '<div><label>Hasta</label><input id="j_hasta" type="date"></div>' +
+      '<div><label>Horas usadas (solo permisos por horas)</label><input id="j_horas" type="number" step="0.5" min="0" value="0"></div>' +
+      '</div><button onclick="crearJustificacion()">EMITIR JUSTIFICACIÓN</button><p id="j_respuesta" class="exito-texto"></p></div>';
+    var tabla = '<div class="bloque"><h3>Justificaciones emitidas</h3><table class="tabla">' +
+      '<tr><th>Empleado</th><th>Tipo</th><th>Desde</th><th>Hasta</th><th>Horas</th><th>PDF</th></tr>';
+    (dato.justificaciones || []).forEach(function (j) {{
+      tabla += '<tr><td>' + esc(j.full_name) + '</td><td>' + esc(j.tipo_permiso) + '</td>' +
+        '<td>' + j.fecha_inicio + '</td><td>' + j.fecha_fin + '</td><td>' + (j.horas_usadas || 0) + '</td>' +
+        '<td><button class="btn-pdf" onclick="descargarPDFPanel(' + j.id + ')">PDF</button></td></tr>';
+    }});
+    tabla += '</table></div>';
+    cont.innerHTML = html + tabla;
+    document.getElementById('j_desde').value = isoHoy();
+    document.getElementById('j_hasta').value = isoHoy();
+  }}
+  function descargarPDFPanel(id) {{
+    window.open('/api/panel/justificaciones/' + id + '/pdf?token=' + encodeURIComponent(obtenerToken()), '_blank');
+  }}
+  async function crearJustificacion() {{
+    var respuesta = document.getElementById('j_respuesta');
+    respuesta.textContent = '';
+    var body = {{
+      empleado_id: parseInt(document.getElementById('j_empleado').value, 10),
+      tipo_permiso: document.getElementById('j_tipo').value,
+      fecha_inicio: document.getElementById('j_desde').value,
+      fecha_fin: document.getElementById('j_hasta').value,
+      horas_usadas: parseFloat(document.getElementById('j_horas').value) || 0
+    }};
+    var resp = await peticionAutenticada('/api/panel/justificaciones', body);
+    if (!resp) return;
+    var d = await resp.json();
+    if (!resp.ok) {{ respuesta.textContent = d.detail || 'Error al emitir.'; return; }}
+    respuesta.textContent = d.mensaje;
+    cargarJustificaciones();
+  }}
+  async function cargarCorrecciones() {{
+    var cont = document.getElementById('seccion_correcciones');
+    var resp = await peticionAutenticada('/api/panel/correcciones');
+    if (!resp) return;
+    var lista = await resp.json();
+    if (!resp.ok) {{ cont.innerHTML = '<p class="error">' + (lista.detail || 'Error.') + '</p>'; return; }}
+    var html = '<div class="bloque"><h3>Solicitudes de corrección</h3>';
+    if (!lista.length) html += '<p>Sin solicitudes.</p>';
+    else {{
+      html += '<table class="tabla"><tr><th>#</th><th>Empleado</th><th>Fecha</th><th>Marca</th>' +
+        '<th>Hora propuesta</th><th>Motivo</th><th>Estado</th><th>Acciones</th></tr>';
+      lista.forEach(function (s) {{
+        html += '<tr><td>' + s.id + '</td><td>' + esc(s.full_name) + '</td><td>' + s.fecha_registro + '</td>' +
+          '<td>' + s.tipo_marca + '</td><td>' + s.hora_propuesta + '</td><td>' + esc(s.motivo) + '</td>' +
+          '<td>' + (s.estado || 'Pendiente') + '</td>';
+        if (s.estado === 'Pendiente') {{
+          html += '<td><button class="btn-pdf" onclick="resolverCorreccion(' + s.id + ', true)">Aprobar</button> ' +
+            '<button class="btn-secundario" onclick="resolverCorreccion(' + s.id + ', false)">Rechazar</button></td>';
+        }} else {{
+          html += '<td></td>';
+        }}
+        html += '</tr>';
+      }});
+      html += '</table>';
+    }}
+    html += '</div>';
+    cont.innerHTML = html;
+  }}
+  async function resolverCorreccion(id, aprobar) {{
+    var resp = await peticionAutenticada('/api/panel/correcciones/' + id + (aprobar ? '/aprobar' : '/rechazar'));
+    if (!resp) return;
+    var d = await resp.json();
+    if (!resp.ok) {{ alert(d.detail || 'Error.'); return; }}
+    cargarCorrecciones();
+  }}
+  async function cargarAlertasPanel() {{
+    var cont = document.getElementById('seccion_alertas');
+    var resp = await peticionAutenticada('/api/alertas');
+    if (!resp) return;
+    var dato = await resp.json();
+    if (!resp.ok) {{ cont.innerHTML = '<p class="error">' + (dato.detail || 'Error.') + '</p>'; return; }}
+    var html = '<div class="bloque"><h3>Alertas del sistema</h3>';
+    if (!dato.alertas.length) html += '<p>Sin alertas.</p>';
+    else {{
+      html += '<table class="tabla"><tr><th>Severidad</th><th>Mensaje</th><th>Detalle</th><th>Fecha</th></tr>';
+      dato.alertas.forEach(function (a) {{
+        var icono = a.severidad === 'alta' ? '🔔' : (a.severidad === 'media' ? '⚠️' : 'ℹ️');
+        html += '<tr><td>' + icono + ' ' + esc(a.severidad) + '</td><td>' + esc(a.mensaje) + '</td>' +
+          '<td>' + esc(a.detalle || '') + '</td><td>' + (a.creado_en || '') + '</td></tr>';
+      }});
+      html += '</table>';
+      html += '<br><button class="btn-secundario" onclick="marcarAlertasLeidas()">Marcar todas como leídas</button>';
+    }}
+    html += '</div>';
+    cont.innerHTML = html;
+  }}
+  async function marcarAlertasLeidas() {{
+    var resp = await peticionAutenticada('/api/alertas/leidas');
+    if (!resp) return;
+    cargarAlertasPanel();
+  }}
+  async function cargarAuditoria() {{
+    var cont = document.getElementById('seccion_auditoria');
+    var resp = await peticionAutenticada('/api/panel/auditoria');
+    if (!resp) return;
+    var lista = await resp.json();
+    if (!resp.ok) {{ cont.innerHTML = '<p class="error">' + (lista.detail || 'Error.') + '</p>'; return; }}
+    var html = '<div class="bloque"><h3>Bitácora de auditoría</h3>';
+    if (!lista.length) html += '<p>Sin eventos registrados.</p>';
+    else {{
+      html += '<table class="tabla"><tr><th>Fecha</th><th>Usuario</th><th>Acción</th><th>Registro</th></tr>';
+      lista.forEach(function (e) {{
+        var nuevo = e.valores_nuevos ? JSON.stringify(e.valores_nuevos) : '';
+        html += '<tr><td>' + (e.creado_en || '') + '</td><td>' + esc(e.full_name || e.username) + '</td>' +
+          '<td>' + esc(e.accion) + '</td><td>' + esc(nuevo) + '</td></tr>';
+      }});
+      html += '</table>';
+    }}
+    html += '</div>';
+    cont.innerHTML = html;
+  }}
+  if (obtenerToken()) {{
+    actualizarNav(localStorage.getItem('marcacion_rol') || 'Empleado');
+    mostrarPortal();
+    conectarAlertas();
+  }} else {{
+    mostrarKiosco();
+  }}
 </script>
 </body>
 </html>"""
@@ -782,6 +1143,328 @@ def api_reclamo(
             "estado": "Pendiente",
             "mensaje": f"Solicitud #{solicitud_id} enviada a Recursos Humanos.",
         }
+    finally:
+        db.cerrar()
+
+
+class MarcarRequest(BaseModel):
+    cedula: str
+    password: str
+    es_dia_lluvioso: bool = False
+
+
+class PersonalNuevo(BaseModel):
+    username: str
+    password: str
+    full_name: str
+    role_name: str
+    salario_mensual: float = 0.0
+    tipo_vinculo: str = "Funcionario"
+
+
+class PersonalEditar(BaseModel):
+    full_name: Optional[str] = None
+    password: Optional[str] = None
+    role_name: Optional[str] = None
+    salario_mensual: Optional[float] = None
+    tipo_vinculo: Optional[str] = None
+
+
+class JustificacionRRHH(BaseModel):
+    empleado_id: int
+    tipo_permiso: str
+    fecha_inicio: str
+    fecha_fin: str
+    horas_usadas: float = 0.0
+
+
+def _exigir_rrhh(usuario: Dict[str, Any]) -> None:
+    """Exige rol de Recursos Humanos o Administrador para el Panel de Gestión."""
+    if usuario["role_name"] not in ("Administrador", "Recursos Humanos"):
+        raise HTTPException(status_code=403, detail="Requiere rol de Recursos Humanos.")
+
+
+def _personal_publico(fila: Dict[str, Any]) -> Dict[str, Any]:
+    """Filtra los campos de un empleado sin exponer credenciales."""
+    return {
+        k: fila[k]
+        for k in (
+            "id",
+            "username",
+            "full_name",
+            "role_name",
+            "salario_mensual",
+            "tipo_vinculo",
+            "activo",
+            "creado_en",
+        )
+        if k in fila
+    }
+
+
+@app.post("/api/marcar")
+def api_marcar(payload: MarcarRequest) -> Dict[str, Any]:
+    """Kiosco web: registra entrada/salida con cédula y contraseña."""
+    db = _cliente()
+    try:
+        usuario = auth.authenticate(db, payload.cedula.strip(), payload.password)
+        if not usuario:
+            raise HTTPException(
+                status_code=401, detail="Cédula o contraseña incorrectas."
+            )
+        engine = clock_engine.ClockEngine(db, usuario)
+        try:
+            registro_id, momento, tipo = engine.registrar_asistencia(
+                es_dia_lluvioso=payload.es_dia_lluvioso
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        return {
+            "nombre": usuario["full_name"],
+            "tipo": tipo,
+            "hora": momento.strftime("%H:%M:%S"),
+            "momento": momento.isoformat(),
+            "ticket": reports.comprobante_marcacion(registro_id, momento, tipo),
+        }
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/panel/resumen")
+def api_panel_resumen(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Resumen operativo del Panel de Gestión (RRHH/Administrador)."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        return {
+            "personal": len(db.list_users()),
+            "marcas_hoy": db.count_marcajes_hoy(),
+            "justificaciones": len(db.list_justificaciones()),
+            "correcciones_pendientes": sum(
+                1
+                for c in db.list_solicitudes_correccion()
+                if c.get("estado") == "Pendiente"
+            ),
+            "alertas_no_leidas": len(db.listar_alertas(no_leidas=True)),
+        }
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/panel/personal")
+def api_panel_personal(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Lista de empleados (sin credenciales) y roles disponibles."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        return {
+            "roles": [r["nombre"] for r in db.list_roles()],
+            "personal": [_personal_publico(u) for u in db.list_users()],
+        }
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/personal")
+def api_panel_personal_crear(
+    payload: PersonalNuevo,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Crea un empleado desde el Panel de Gestión."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            nuevo_id = auth.create_user(
+                db,
+                usuario,
+                payload.username.strip(),
+                payload.password,
+                payload.full_name.strip(),
+                payload.role_name,
+                payload.salario_mensual,
+                payload.tipo_vinculo,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"id": nuevo_id, "mensaje": "Personal creado correctamente."}
+    finally:
+        db.cerrar()
+
+
+@app.put("/api/panel/personal/{user_id}")
+def api_panel_personal_editar(
+    user_id: int,
+    payload: PersonalEditar,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Actualiza los datos de un empleado."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            auth.update_user(
+                db,
+                usuario,
+                user_id,
+                full_name=payload.full_name.strip() if payload.full_name else None,
+                password=payload.password or None,
+                role_name=payload.role_name or None,
+                salario_mensual=payload.salario_mensual,
+                tipo_vinculo=payload.tipo_vinculo or None,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"mensaje": "Personal actualizado correctamente."}
+    finally:
+        db.cerrar()
+
+
+@app.delete("/api/panel/personal/{user_id}")
+def api_panel_personal_eliminar(
+    user_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Elimina un empleado (queda auditado en logs_auditoria)."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            auth.delete_user(db, usuario, user_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"mensaje": "Personal eliminado correctamente."}
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/panel/justificaciones")
+def api_panel_justificaciones(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Justificaciones emitidas, empleados y catálogo de permisos."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        return {
+            "justificaciones": db.list_justificaciones(),
+            "personal": [_personal_publico(u) for u in db.list_users()],
+            "tipos": list(auth.TIPOS_PERMISO),
+        }
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/justificaciones")
+def api_panel_justificaciones_crear(
+    payload: JustificacionRRHH,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Emitir una justificación oficial (valida reglamento y cuotas)."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            inicio = datetime.date.fromisoformat(payload.fecha_inicio.strip())
+            fin = datetime.date.fromisoformat(payload.fecha_fin.strip())
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Fechas inválidas. Use AAAA-MM-DD.")
+        try:
+            solicitud_id = auth.crear_justificacion(
+                db,
+                usuario,
+                payload.empleado_id,
+                payload.tipo_permiso,
+                inicio,
+                fin,
+                payload.horas_usadas,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {
+            "id": solicitud_id,
+            "mensaje": f"Justificación #{solicitud_id} emitida y aprobada.",
+        }
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/panel/justificaciones/{solicitud_id}/pdf")
+def api_panel_justificaciones_pdf(
+    solicitud_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> FileResponse:
+    """Descarga del PDF oficial de una justificación (solo RRHH/Admin)."""
+    _exigir_rrhh(usuario)
+    try:
+        ruta = reports.generar_pdf_permiso(solicitud_id)
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return FileResponse(
+        ruta, media_type="application/pdf", filename=Path(ruta).name
+    )
+
+
+@app.get("/api/panel/correcciones")
+def api_panel_correcciones(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> List[Dict[str, Any]]:
+    """Solicitudes de corrección de marcaje con su estado."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        return db.list_solicitudes_correccion()
+    finally:
+        db.cerrar()
+
+
+def _resolver_correccion(
+    solicitud_id: int, aprobar: bool, usuario: Dict[str, Any]
+) -> Dict[str, Any]:
+    db = _cliente()
+    try:
+        try:
+            estado = auth.aprobar_solicitud_correccion(db, usuario, solicitud_id, aprobar)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"estado": estado, "mensaje": f"Solicitud #{solicitud_id} {estado.lower()}."}
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/correcciones/{solicitud_id}/aprobar")
+def api_panel_correcciones_aprobar(
+    solicitud_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Aprueba la corrección: materializa la marca propuesta."""
+    _exigir_rrhh(usuario)
+    return _resolver_correccion(solicitud_id, True, usuario)
+
+
+@app.post("/api/panel/correcciones/{solicitud_id}/rechazar")
+def api_panel_correcciones_rechazar(
+    solicitud_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Rechaza la corrección sin tocar los marcajes."""
+    _exigir_rrhh(usuario)
+    return _resolver_correccion(solicitud_id, False, usuario)
+
+
+@app.get("/api/panel/auditoria")
+def api_panel_auditoria(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> List[Dict[str, Any]]:
+    """Bitácora de auditoría para trazabilidad (RRHH/Administrador)."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        return db.listar_auditoria(limite=100)
     finally:
         db.cerrar()
 

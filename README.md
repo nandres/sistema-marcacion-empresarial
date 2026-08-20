@@ -16,8 +16,9 @@ Cumple la **Ley 213** (horas extra), la **Ley 6380/2019** (aguinaldo proporciona
 | **Notificaciones** | Bus de alertas en tiempo real: cuota agotada (Art. 14), llegada tardía injustificada y fraude → campana parpadeante en el Panel de Gestión, **WebSocket** hacia el portal web y **correo SMTP** opcional con el comprobante. |
 | **Reglamento** | 15 artículos para funcionarios y 18 para pasantes (Res. 1307/2010 + 3028/2024) con cuotas mensuales por horas, días o usos, y bloqueo del 4.º uso del Art. 14. |
 | **RRHH** | Alta/edición de personal con roles RBAC, justificaciones con PDF oficial, correcciones de marcación, reportes xlsx/csv y aguinaldo. |
+| **Gestión web** | El portal incluye el **Panel de Gestión** completo (RRHH/Admin) en el navegador: resumen operativo, personal, justificaciones con PDF, correcciones, alertas y auditoría. |
 | **Analítica** | Dashboard con gráficos (CustomTkinter + matplotlib) y tema claro/oscuro al instante. |
-| **Autoservicio web** | FastAPI + JWT (8 h): resumen personal, histórico, permisos con PDF y reclamos de marcación. |
+| **Autoservicio web** | FastAPI + JWT (8 h): **kiosco de marcación en el navegador** (entrada/salida con ticket), resumen personal, histórico, permisos con PDF y reclamos. |
 | **Biometría ZKTeco** | Sincronización TCP/IP (puerto 4370) de empleados con el reloj biométrico. |
 | **Despliegue** | Docker (gunicorn + uvicorn) y **GitHub Actions** que corre los tests contra PostgreSQL y publica la imagen en GHCR con disparo opcional a Render. |
 
@@ -27,7 +28,7 @@ Cumple la **Ley 213** (horas extra), la **Ley 6380/2019** (aguinaldo proporciona
 src/
 ├── app.py            # CLI administrativa
 ├── gui.py            # Escritorio CustomTkinter (kiosco + Panel de Gestión)
-├── web_server.py     # Portal del empleado (FastAPI + WebSockets)
+├── web_server.py     # Kiosco web + Portal del empleado + Panel de Gestión (FastAPI + WebSockets)
 ├── database.py       # PostgreSQL (esquema auto-migrado, auditoría JSONB)
 ├── auth.py           # Login unificado, JWT, cambio de clave, justificaciones
 ├── clock_engine.py   # Evaluación de asistencia y desglose legal de horas
@@ -111,7 +112,7 @@ El pipeline de **GitHub Actions** (`.github/workflows/deploy.yml`) ejecuta en ca
 
 1. Compilación de todos los módulos y smokes headless contra un **PostgreSQL 16** de servicio.
 2. Smokes de GUI bajo `xvfb-run` (login, temas, justificaciones).
-3. Smoke del servidor web (login + alertas reales por HTTP).
+3. Smoke del servidor web (login + alertas reales por HTTP) y del **kiosco + Panel de Gestión**.
 4. Build de la imagen Docker → **GHCR** (`ghcr.io/<repo>:latest`).
 5. Si se define el secreto `RENDER_DEPLOY_HOOK`, dispara el despliegue en Render.
 
@@ -126,6 +127,7 @@ python tests/smoke_facial.py        # reconocimiento facial
 python tests/smoke_alertas.py       # API + WebSocket de alertas
 python tests/smoke_login.py         # GUI: login, clave, temas
 python tests/smoke_reglamento_gui.py# GUI: justificaciones y dashboard
+python tests/smoke_web_panel.py     # Web: kiosco + panel de gestión RRHH
 ```
 
 ## Documentación

@@ -842,6 +842,27 @@ class Database:
         )
         return self._execute(consulta, (limite,), fetch="all")
 
+    def list_solicitudes_correccion(self) -> List[Dict[str, Any]]:
+        """Lista las solicitudes de corrección con datos del solicitante."""
+        return self._execute(
+            """
+            SELECT s.*, u.username, u.full_name, r.username AS revisor
+            FROM solicitudes_correccion s
+            JOIN users u ON u.id = s.usuario_id
+            LEFT JOIN users r ON r.id = s.revisado_por
+            ORDER BY s.id DESC
+            """,
+            fetch="all",
+        )
+
+    def count_marcajes_hoy(self) -> int:
+        """Cantidad de marcajes con entrada registrada en la fecha actual."""
+        fila = self._execute(
+            "SELECT COUNT(*) AS total FROM marcajes WHERE hora_entrada::date = CURRENT_DATE",
+            fetch="one",
+        )
+        return int(fila["total"]) if fila else 0
+
     def marcar_alertas_leidas(self) -> int:
         """Marca todas las alertas como leídas y devuelve la cantidad."""
         cursor = self._execute(
