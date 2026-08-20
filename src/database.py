@@ -197,6 +197,10 @@ class Database:
             "departamento VARCHAR(80) NOT NULL DEFAULT 'General'"
         )
         cursor.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "email VARCHAR(200) NOT NULL DEFAULT ''"
+        )
+        cursor.execute(
             """
             UPDATE users u
             SET departamento = CASE
@@ -286,6 +290,45 @@ class Database:
                 aprobado_por INTEGER NOT NULL REFERENCES users (id),
                 horas_usadas NUMERIC(4, 1) NOT NULL DEFAULT 0,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS sync_id VARCHAR(64)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_marcajes_sync_id "
+            "ON marcajes (sync_id) WHERE sync_id IS NOT NULL"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alertas (
+                id SERIAL PRIMARY KEY,
+                tipo VARCHAR(50) NOT NULL,
+                severidad VARCHAR(20) NOT NULL DEFAULT 'media',
+                mensaje TEXT NOT NULL,
+                detalle TEXT NOT NULL DEFAULT '',
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                leida BOOLEAN NOT NULL DEFAULT FALSE
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_alertas_leida
+            ON alertas (leida, creado_en)
+            """
+        )
+        cursor.execute(
+            "ALTER TABLE alertas ADD COLUMN IF NOT EXISTS "
+            "usuario_id INTEGER REFERENCES users (id) ON DELETE SET NULL"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fotos (
+                user_id INTEGER PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+                imagen BYTEA NOT NULL,
+                actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """
         )
@@ -548,26 +591,46 @@ class Database:
         tipo_incidencia: str = "",
         tolerancia_aplicada: bool = False,
         condicion_climatica: str = "",
-    ) -> int:
+        sync_id: Optional[str] = None,
+    ) -> Optional[int]:
         """Abre un marcaje de entrada con su estado, incidencia y contexto.
 
         ``tolerancia_aplicada`` indica si se consumió la gracia ordinaria o
         climática de la Res. 3028/2024 de CONATEL; ``condicion_climatica``
         documenta el evento meteorológico declarado en el kiosco.
+
+        Si se provee ``sync_id`` (marcación offline) el inserto es
+        idempotente: ante un duplicado retorna ``None`` en lugar de crear
+        una segunda fila.
         """
-        cursor = self._execute(
-            """
-            INSERT INTO marcajes (user_id, hora_entrada, es_tardanza,
-                                  tipo_incidencia, tolerancia_aplicada,
-                                  condicion_climatica)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (user_id, hora_entrada, es_tardanza, tipo_incidencia,
-             tolerancia_aplicada, condicion_climatica),
-        )
+        if sync_id:
+            cursor = self._execute(
+                """
+                INSERT INTO marcajes (user_id, hora_entrada, es_tardanza,
+                                      tipo_incidencia, tolerancia_aplicada,
+                                      condicion_climatica, sync_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (sync_id) WHERE sync_id IS NOT NULL DO NOTHING
+                RETURNING id
+                """,
+                (user_id, hora_entrada, es_tardanza, tipo_incidencia,
+                 tolerancia_aplicada, condicion_climatica, sync_id),
+            )
+        else:
+            cursor = self._execute(
+                """
+                INSERT INTO marcajes (user_id, hora_entrada, es_tardanza,
+                                      tipo_incidencia, tolerancia_aplicada,
+                                      condicion_climatica)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (user_id, hora_entrada, es_tardanza, tipo_incidencia,
+                 tolerancia_aplicada, condicion_climatica),
+            )
         self.connection.commit()
-        return cursor.fetchone()["id"]
+        fila = cursor.fetchone()
+        return fila["id"] if fila else None
 
     def contar_tardanzas_mes(self, user_id: int, fecha: datetime.date) -> int:
         """Cuenta las llegadas tardías del usuario dentro del mes indicado."""
@@ -739,6 +802,101 @@ class Database:
             """,
             fetch="all",
         )
+
+    def crear_alerta(
+        self,
+        tipo: str,
+        severidad: str,
+        mensaje: str,
+        detalle: str = "",
+        usuario_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Persiste una notificación activa para Recursos Humanos."""
+        cursor = self._execute(
+            """
+            INSERT INTO alertas (tipo, severidad, mensaje, detalle, usuario_id)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id, creado_en
+            """,
+            (tipo, severidad, mensaje, detalle, usuario_id),
+        )
+        self.connection.commit()
+        fila = cursor.fetchone()
+        return {
+            "id": fila["id"],
+            "tipo": tipo,
+            "severidad": severidad,
+            "mensaje": mensaje,
+            "detalle": detalle,
+            "usuario_id": usuario_id,
+            "creado_en": fila["creado_en"],
+            "leida": False,
+        }
+
+    def listar_alertas(self, limite: int = 60, no_leidas: bool = False) -> List[Dict[str, Any]]:
+        """Lista las alertas activas, de la más reciente a la más antigua."""
+        consulta = (
+            "SELECT * FROM alertas WHERE leida = FALSE ORDER BY creado_en DESC LIMIT %s"
+            if no_leidas
+            else "SELECT * FROM alertas ORDER BY creado_en DESC LIMIT %s"
+        )
+        return self._execute(consulta, (limite,), fetch="all")
+
+    def marcar_alertas_leidas(self) -> int:
+        """Marca todas las alertas como leídas y devuelve la cantidad."""
+        cursor = self._execute(
+            "UPDATE alertas SET leida = TRUE WHERE leida = FALSE RETURNING id"
+        )
+        self.connection.commit()
+        return len(cursor.fetchall())
+
+    def limpiar_marcajes_prueba(self, user_id: int, desde: Any, hasta: Any) -> None:
+        """Helper de tests: elimina marcajes de un rango de fechas."""
+        self._execute(
+            "DELETE FROM marcajes WHERE user_id = %s "
+            "AND hora_entrada::date BETWEEN %s AND %s",
+            (user_id, desde, hasta),
+        )
+        self.connection.commit()
+
+    def guardar_foto(self, user_id: int, imagen_jpg: bytes) -> None:
+        """Almacena (o reemplaza) la foto biométrica del usuario en JPEG."""
+        self._execute(
+            """
+            INSERT INTO fotos (user_id, imagen) VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET imagen = EXCLUDED.imagen,
+                                                actualizado_en = NOW()
+            """,
+            (user_id, psycopg2.Binary(imagen_jpg)),
+        )
+        self.connection.commit()
+
+    def get_foto(self, user_id: int) -> Optional[bytes]:
+        """Retorna los bytes JPEG de la foto del usuario, si existe."""
+        fila = self._execute(
+            "SELECT imagen FROM fotos WHERE user_id = %s", (user_id,), fetch="one"
+        )
+        if not fila:
+            return None
+        return bytes(fila["imagen"]) if fila["imagen"] is not None else None
+
+    def tiene_foto(self, user_id: int) -> bool:
+        """Indica si el usuario tiene una foto biométrica registrada."""
+        fila = self._execute(
+            "SELECT 1 AS existe FROM fotos WHERE user_id = %s", (user_id,), fetch="one"
+        )
+        return fila is not None
+
+    def list_fotos(self) -> List[Dict[str, Any]]:
+        """Lista todas las fotos biométricas para entrenar el modelo facial."""
+        return self._execute(
+            "SELECT user_id, imagen FROM fotos ORDER BY user_id", fetch="all"
+        )
+
+    def eliminar_foto(self, user_id: int) -> None:
+        """Elimina la foto biométrica del usuario."""
+        self._execute("DELETE FROM fotos WHERE user_id = %s", (user_id,))
+        self.connection.commit()
 
     def get_horas_extra_year(self, anio: int) -> List[Dict[str, Any]]:
         """Acumula por empleado las horas extra del año (suma de INTERVAL)."""

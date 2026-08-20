@@ -24,10 +24,17 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 import auth
+import clock_engine
+import facial
+import notifications
 import reglamento
 import reports
+import sync_worker
 from clock_engine import ClockEngine
 from database import Database
+from offline_queue import ColaOffline
+
+import psycopg2
 
 FONT = "Segoe UI"
 MONO = "Consolas"
@@ -505,8 +512,10 @@ class MarcacionApp(ctk.CTk):
         self.panel_gestion: Optional[ctk.CTkFrame] = None
         self.variable_tema = ctk.BooleanVar(value=False)
         self._refrescos_tema: List[Callable] = []
+        self.cola = ColaOffline()
         self._configurar_ventana()
         self._construir_vista_publica()
+        sync_worker.iniciar_hilo(self.cola, db=self.db, al_aviso=self._alerta_desde_hilo)
         self._mostrar_dos_puntos = True
         self._actualizar_reloj()
         self.after(500, self._alternar_dos_puntos)
@@ -786,6 +795,9 @@ class MarcacionApp(ctk.CTk):
         ).grid(row=4, column=0, pady=(0, 14))
         self.lbl_estado = etiqueta(self.tarjeta_marcacion, "", 14, t("SUCCESS"))
         self.lbl_estado.grid(row=5, column=0, pady=(0, 18))
+        self.lbl_cola = etiqueta(self.tarjeta_marcacion, "", 12, t("MUTED"))
+        self.lbl_cola.grid(row=6, column=0, pady=(0, 14))
+        self._actualizar_lbl_cola()
 
     def _construir_tarjeta_ticket(self, master: ctk.CTkFrame) -> None:
         self.tarjeta_ticket = tarjeta(master)
@@ -836,6 +848,35 @@ class MarcacionApp(ctk.CTk):
         if not user:
             self._mostrar_estado("Empleado no encontrado. Verifique su cédula.", t("DANGER"))
             return
+        if facial.disponible() and self.db.tiene_foto(user["id"]):
+            frame = facial.capturar(segundos=1.0)
+            if frame is None:
+                self._mostrar_estado(
+                    "Cámara no disponible: no se pudo validar el rostro.", t("DANGER")
+                )
+                return
+            ok, detalle = facial.validar(self.db, user["id"], frame)
+            if not ok:
+                self.db.registrar_auditoria(
+                    user["id"],
+                    "FRAUDE",
+                    "users",
+                    user["id"],
+                    nuevos={
+                        "motivo": "intento de suplantación facial en el kiosco",
+                        "detalle": detalle,
+                    },
+                )
+                notifications.registrar_alerta(
+                    self.db,
+                    "fraude_facial",
+                    "alta",
+                    f"Intento de suplantación facial de {user['full_name']}.",
+                    detalle,
+                    usuario_id=user["id"],
+                )
+                self._mostrar_estado(detalle, t("DANGER"))
+                return
         engine = ClockEngine(self.db, user)
         try:
             entry_id, momento, tipo = engine.registrar_asistencia(
@@ -844,6 +885,9 @@ class MarcacionApp(ctk.CTk):
         except ValueError as error:
             self._mostrar_estado(str(error), t("DANGER"))
             return
+        except (psycopg2.Error, OSError):
+            self._marcar_offline(username)
+            return
         ticket = reports.comprobante_marcacion(entry_id, momento, tipo)
         self.ticket_box.delete("1.0", "end")
         self.ticket_box.insert("1.0", ticket)
@@ -851,7 +895,40 @@ class MarcacionApp(ctk.CTk):
         self._mostrar_estado(
             f"{user['full_name']}: {tipo.lower()} registrada correctamente.", t("SUCCESS")
         )
+        if user.get("email"):
+            notifications.enviar_correo_ticket(user["email"], ticket)
         self._mostrar_panel_exito(tipo, ticket)
+
+    def _marcar_offline(self, username: str) -> None:
+        """Guarda la marcación en la cola local cuando PostgreSQL no responde."""
+        momento = clock_engine.ahora_local()
+        self.cola.encolar(
+            username, momento, bool(self.dia_lluvioso.get())
+        )
+        self._mostrar_estado(
+            "Servidor central no disponible: la marcación quedó guardada "
+            "localmente y se sincronizará automáticamente.",
+            t("DANGER"),
+        )
+        self._actualizar_lbl_cola()
+
+    def _actualizar_lbl_cola(self) -> None:
+        """Refleja en el kiosco cuántas marcaciones esperan sincronizar."""
+        if not hasattr(self, "lbl_cola"):
+            return
+        pendientes = len(self.cola)
+        if pendientes:
+            self.lbl_cola.configure(
+                text=f"▲ {pendientes} marcaciones pendientes de sincronización",
+                text_color=t("DANGER"),
+            )
+        else:
+            self.lbl_cola.configure(text="", text_color=t("MUTED"))
+        self.after(5000, self._actualizar_lbl_cola)
+
+    def _alerta_desde_hilo(self, alerta: dict) -> None:
+        """Presenta en el kiosco las alertas generadas por el hilo de sync."""
+        self.after(0, lambda: self._mostrar_estado(alerta["mensaje"], t("DANGER")))
 
     def _mostrar_panel_exito(self, tipo: str, ticket: str) -> None:
         """Despliega el panel temporal de éxito con check verde y el ticket.
@@ -1231,6 +1308,7 @@ class PanelGestion(ctk.CTkFrame):
         ("✎", "Correcciones", "Solicitudes de Corrección"),
         ("◉", "Analítica", "Dashboard Analítico"),
         ("◈", "Auditoría", "Log JSONB de Auditoría"),
+        ("🔔", "Alertas", "Notificaciones en Tiempo Real"),
     ]
 
     def __init__(
@@ -1240,6 +1318,8 @@ class PanelGestion(ctk.CTkFrame):
         self.db = db
         self.actor = actor
         self.on_cerrar = on_cerrar
+        self._parpadeando = False
+        self.indice_activo = 0
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
@@ -1298,6 +1378,7 @@ class PanelGestion(ctk.CTkFrame):
         self.correcciones_tab = CorreccionesTab(contenido, self.db, self.actor)
         self.dashboard_tab = DashboardTab(contenido, self.db)
         self.auditoria_tab = AuditoriaTab(contenido, self.db)
+        self.alertas_tab = AlertasTab(contenido, self.db)
         self.pestanas = [
             self.personal_tab,
             self.justificaciones_tab,
@@ -1305,16 +1386,56 @@ class PanelGestion(ctk.CTkFrame):
             self.correcciones_tab,
             self.dashboard_tab,
             self.auditoria_tab,
+            self.alertas_tab,
         ]
         for pestana in self.pestanas:
             pestana.grid(row=0, column=0, sticky="nsew")
             pestana.grid_remove()
+        self._revision_alertas()
+        notifications.BUS.suscribir(self._alerta_entrante)
+
+    def _revision_alertas(self) -> None:
+        """Revisa alertas no leídas y activa el parpadeo de la campana."""
+        try:
+            pendientes = self.db.listar_alertas(no_leidas=True)
+            if pendientes and not self._parpadeando:
+                self._parpadeando = True
+                self._alternar_campana()
+            elif not pendientes and self._parpadeando:
+                self._detener_campana()
+        except Exception:
+            pass
+        self.after(4000, self._revision_alertas)
+
+    def _alerta_entrante(self, _alerta: dict) -> None:
+        """El bus de notificaciones avisa; se revisa en el hilo de la GUI."""
+        self.after(0, self._revision_alertas)
+
+    def _alternar_campana(self) -> None:
+        if not self._parpadeando:
+            return
+        boton = self.botones_seccion[-1]
+        color = t("DANGER") if boton.cget("fg_color") == "transparent" else "transparent"
+        boton.configure(fg_color=color)
+        self.after(600, self._alternar_campana)
+
+    def _detener_campana(self) -> None:
+        self._parpadeando = False
+        boton = self.botones_seccion[-1]
+        if self.indice_activo == len(self.SECCIONES) - 1:
+            boton.configure(fg_color=t("PRIMARY"), text_color="white")
+        else:
+            boton.configure(fg_color="transparent")
 
     def _seleccionar(self, indice: int) -> None:
         """Cambia la sección activa y estiliza el botón del menú lateral."""
+        self.indice_activo = indice
         for posicion, pestana in enumerate(self.pestanas):
             pestana.grid_remove()
         self.pestanas[indice].grid(row=0, column=0, sticky="nsew")
+        if indice == len(self.SECCIONES) - 1:
+            self.alertas_tab._refrescar()
+            self._detener_campana()
         for posicion, boton in enumerate(self.botones_seccion):
             seleccionado = posicion == indice
             boton.configure(
@@ -1325,6 +1446,80 @@ class PanelGestion(ctk.CTkFrame):
 
     def _refrescar_empleados(self) -> None:
         self.justificaciones_tab.refrescar_empleados()
+
+
+class AlertasTab(ctk.CTkFrame):
+    """Centro de notificaciones en vivo (cuota bloqueada, tardanzas, fraude)."""
+
+    def __init__(self, master, db: Database) -> None:
+        super().__init__(master, fg_color="transparent")
+        self.db = db
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        cabecera = tarjeta(self)
+        cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        cabecera.grid_columnconfigure(0, weight=1)
+        etiqueta(cabecera, "Notificaciones en Tiempo Real", 16, t("TEXT"), "bold").grid(
+            row=0, column=0, sticky="w", padx=20, pady=(14, 2)
+        )
+        etiqueta(
+            cabecera,
+            "Alertas de cuota bloqueada, tardanzas injustificadas y fraude facial",
+            12,
+            t("MUTED"),
+        ).grid(row=1, column=0, sticky="w", padx=20, pady=(0, 6))
+        boton_secundario(cabecera, "Marcar todas como leídas", self._marcar_leidas).grid(
+            row=2, column=0, sticky="w", padx=20, pady=(0, 14)
+        )
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
+        self.scroll.grid(row=1, column=0, sticky="nsew")
+        self._refrescar()
+
+    def _refrescar(self) -> None:
+        for hijo in self.scroll.winfo_children():
+            hijo.destroy()
+        alertas = self.db.listar_alertas(limite=60)
+        if not alertas:
+            etiqueta(self.scroll, "No hay notificaciones por el momento.", 13, t("MUTED")).pack(
+                pady=20
+            )
+            return
+        for alerta in alertas:
+            fila = tarjeta(self.scroll)
+            fila.pack(fill="x", pady=5)
+            fila.grid_columnconfigure(0, weight=1)
+            colores = {
+                "alta": t("DANGER"),
+                "media": t("ACCENTO"),
+                "baja": t("MUTED"),
+            }
+            color = colores.get(alerta["severidad"], t("MUTED"))
+            titulo = alerta["mensaje"]
+            if not alerta["leida"]:
+                titulo = "● " + titulo
+            etiqueta(
+                fila,
+                titulo,
+                13,
+                color,
+                "bold" if not alerta["leida"] else "normal",
+            ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+            if alerta.get("detalle"):
+                etiqueta(fila, alerta["detalle"], 11, t("MUTED")).grid(
+                    row=1, column=0, sticky="w", padx=14, pady=(2, 0)
+                )
+            etiqueta(
+                fila,
+                f"{alerta['tipo']} · {alerta['creado_en'].strftime('%d/%m/%Y %H:%M')}",
+                10,
+                t("MUTED"),
+            ).grid(row=2, column=0, sticky="w", padx=14, pady=(2, 10))
+
+    def _marcar_leidas(self) -> None:
+        self.db.marcar_alertas_leidas()
+        self._refrescar()
 
 
 class AuditoriaTab(ctk.CTkFrame):
@@ -1850,8 +2045,48 @@ class PersonalTab(ctk.CTkFrame):
                 command=partial(self._eliminar, usuario),
             )
             boton_eliminar.grid(row=0, column=2, padx=(0, 10))
+            tiene_foto = self.db.tiene_foto(usuario["id"])
+            boton_foto = ctk.CTkButton(
+                fila,
+                text="Foto ✓" if tiene_foto else "Foto",
+                width=70,
+                height=30,
+                font=(FONT, 12),
+                fg_color="transparent",
+                hover_color=t("ACCENTO"),
+                border_width=1,
+                border_color=t("ACCENTO") if tiene_foto else t("MUTED"),
+                text_color=t("ACCENTO") if tiene_foto else t("MUTED"),
+                corner_radius=8,
+                command=partial(self._registrar_foto, usuario),
+            )
+            boton_foto.grid(row=0, column=3, padx=(0, 10))
             if self.editando and self.editando["id"] == usuario["id"]:
                 self._construir_editor_inline(self.scroll)
+
+    def _registrar_foto(self, usuario: Dict) -> None:
+        """Captura y guarda la foto biométrica del empleado (kiosco webcam)."""
+        if not facial.disponible():
+            self.lbl_resultado.configure(
+                text="Visión por computadora no disponible en este equipo.",
+                text_color=t("DANGER"),
+            )
+            return
+        self.lbl_resultado.configure(
+            text=f"Mirando a la cámara… ({usuario['full_name']})", text_color=t("TEXT")
+        )
+        frame = facial.capturar(segundos=2.5)
+        if frame is None:
+            self.lbl_resultado.configure(
+                text="No se detectó un rostro o no hay cámara. Reintente.",
+                text_color=t("DANGER"),
+            )
+            return
+        ok, detalle = facial.registrar_foto(self.db, usuario["id"], frame)
+        self.lbl_resultado.configure(
+            text=detalle, text_color=t("SUCCESS") if ok else t("DANGER")
+        )
+        self._refrescar()
 
     def _construir_editor_inline(self, master) -> None:
         """Renderiza el editor embebido con salario, rol, vínculo y clave."""

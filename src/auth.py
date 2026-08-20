@@ -19,7 +19,7 @@ import jwt
 
 from clock_engine import calcular_horas_paraguay, es_feriado_o_domingo, es_tardanza
 from database import Database, load_dotenv
-
+import notifications
 import reglamento
 
 ROLE_ADMIN: str = "Administrador"
@@ -338,10 +338,30 @@ def crear_justificacion(
         detalle = f"{estado['usados']:g} {estado['unidad']} usados de {estado['cuota']:g}"
         if estado.get("usos_max"):
             detalle += f" y {estado['usos']:g} de {estado['usos_max']:g} usos"
+        notifications.registrar_alerta(
+            db,
+            "cuota_bloqueada",
+            "alta",
+            f"Intento bloqueado: cuota agotada de '{tipo_permiso}' "
+            f"para {empleado['full_name']}.",
+            f"{detalle} ({estado['periodo']}) · solicitó {horas_usadas:g} h · "
+            f"actor {actor['full_name']}",
+            usuario_id=empleado["id"],
+        )
         raise ValueError(
             f"Cuota agotada de '{tipo_permiso}': {detalle} ({estado['periodo']})."
         )
     if estado["restantes"] is not None and horas_usadas > estado["restantes"]:
+        notifications.registrar_alerta(
+            db,
+            "cuota_bloqueada",
+            "alta",
+            f"Intento bloqueado: cuota insuficiente de '{tipo_permiso}' "
+            f"para {empleado['full_name']}.",
+            f"Quedan {estado['restantes']:g} {estado['unidad']} y se solicitaron "
+            f"{horas_usadas:g} · actor {actor['full_name']}",
+            usuario_id=empleado["id"],
+        )
         raise ValueError(
             f"Solo quedan {estado['restantes']:g} horas disponibles de "
             f"'{tipo_permiso}' en el mes."

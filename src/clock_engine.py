@@ -22,6 +22,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from database import Database
+import notifications
 
 JORNADA_DIURNA: timedelta = timedelta(hours=8)
 JORNADA_NOCTURNA: timedelta = timedelta(hours=7)
@@ -111,6 +112,8 @@ def evaluar_asistencia_conatel(
     vinculo = (usuario.get("tipo_vinculo") or "Funcionario").strip()
     if vinculo not in ("Pasante", "Funcionario"):
         raise ValueError(f"Tipo de vínculo desconocido: '{vinculo}'.")
+    if hora_marca.tzinfo is not None:
+        hora_marca = hora_marca.replace(tzinfo=None)
     inicio = datetime.combine(hora_marca.date(), INICIO_JORNADA)
     retraso = max(timedelta(0), hora_marca - inicio)
     climatica = TOLERANCIA_CLIMATICA if es_dia_lluvioso else timedelta(0)
@@ -257,6 +260,15 @@ class ClockEngine:
             tolerancia_aplicada,
             condicion,
         )
+        if estado != "Normal":
+            notifications.registrar_alerta(
+                self.db,
+                "marcacion_incidente",
+                "media",
+                f"{incidencia} de {self.user['full_name']}.",
+                evaluacion["detalle"],
+                usuario_id=self.user["id"],
+            )
         return entry_id, ahora
 
     def clock_out(self) -> Tuple[int, datetime]:

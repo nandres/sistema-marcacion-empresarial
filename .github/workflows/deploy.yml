@@ -1,0 +1,109 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Pruebas (PostgreSQL + GUI virtual)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: marcacion_test
+          POSTGRES_USER: marcacion
+          POSTGRES_PASSWORD: marcacion
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marcacion -d marcacion_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_NAME: marcacion_test
+      DB_USER: marcacion
+      DB_PASSWORD: marcacion
+      JWT_SECRET_KEY: clave-de-ci-no-usar-en-produccion
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Dependencias del sistema (Tkinter + pantalla virtual)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-tk
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Compilación de todos los módulos
+        run: python -m py_compile src/*.py
+
+      - name: Preparar usuarios de prueba
+        run: python tests/setup_ci.py
+
+      - name: Reglas Art. 14 y reglamento (headless)
+        run: |
+          python tests/validar_art14.py
+          python tests/validar_reglamento.py
+
+      - name: Motor offline/online sync
+        run: python tests/smoke_sync.py
+
+      - name: Notificaciones WebSocket + API
+        run: python tests/smoke_alertas.py
+
+      - name: Reconocimiento facial
+        run: python tests/smoke_facial.py
+
+      - name: Servidor web (login + página)
+        run: |
+          timeout 25 python src/web_server.py &
+          sleep 6
+          curl -fsS http://127.0.0.1:8000/ | grep -q "Sistema de Marcación"
+          curl -fsS -X POST http://127.0.0.1:8000/api/login \
+            -H "Content-Type: application/json" \
+            -d '{"cedula":"admin","password":"admin123"}' | grep -q '"token"'
+          curl -fsS -X POST http://127.0.0.1:8000/api/alertas \
+            -H "Content-Type: application/json" \
+            -d '{"tipo":"ci","severidad":"baja","mensaje":"alerta CI","detalle":""}'
+
+      - name: GUI login / cambio de clave / temas (pantalla virtual)
+        run: xvfb-run -a python tests/smoke_login.py
+
+      - name: GUI justificaciones / dashboard (pantalla virtual)
+        run: xvfb-run -a python tests/smoke_reglamento_gui.py
+
+  deploy:
+    name: Construir imagen y desplegar
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir imagen Docker
+        run: docker build -t marcacion:latest .
+
+      - name: Publicar en GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag marcacion:latest ghcr.io/${{ github.repository }}:latest
+          docker push ghcr.io/${{ github.repository }}:latest
+
+      - name: Disparar despliegue en Render
+        if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"

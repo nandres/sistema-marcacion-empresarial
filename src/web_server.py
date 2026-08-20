@@ -16,17 +16,19 @@ Ejecución:
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import jwt
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 import auth
 import database
+import notifications
 import reports
 
 app = FastAPI(
@@ -141,6 +143,14 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
   .error {{ color:var(--peligro); text-align:center; margin-top:16px; }}
   .exito-texto {{ color:var(--exito); text-align:center; margin-top:14px; }}
   .pie {{ color:var(--mutado); font-size:.75rem; text-align:center; margin-top:4px; }}
+  #caja_toast {{ position:fixed; right:16px; bottom:16px; z-index:99; display:flex;
+    flex-direction:column; gap:8px; max-width:340px; }}
+  .toast {{ background:var(--card); border:1px solid var(--peligro); border-left:5px solid
+    var(--peligro); border-radius:10px; box-shadow:var(--sombra); padding:12px 14px;
+    font-size:.85rem; color:var(--texto); animation:aparecer .25s ease; }}
+  .toast b {{ display:block; margin-bottom:2px; }}
+  @keyframes aparecer {{ from {{ opacity:0; transform:translateY(8px); }}
+    to {{ opacity:1; transform:translateY(0); }} }}
   svg text {{ font-family:'Segoe UI', system-ui, sans-serif; }}
   @media (max-width: 480px) {{
     .tarjeta {{ padding:20px 16px; }}
@@ -150,6 +160,7 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
 </style>
 </head>
 <body>
+  <div id="caja_toast"></div>
   <div class="cabecera" id="cabecera" style="display:none">
     <b id="usuario_nombre">Sesión activa</b>
     <div style="display:flex; gap:8px; align-items:center">
@@ -236,6 +247,28 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
   }}
 
   function obtenerToken() {{ return localStorage.getItem('marcacion_jwt'); }}
+  var socketAlertas = null;
+  function conectarAlertas() {{
+    var token = obtenerToken();
+    if (!token) return;
+    if (socketAlertas) socketAlertas.close();
+    var protocolo = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    socketAlertas = new WebSocket(protocolo + location.host + '/ws/alertas?token=' + encodeURIComponent(token));
+    socketAlertas.onmessage = function (evento) {{
+      var alerta = JSON.parse(evento.data);
+      var caja = document.getElementById('caja_toast');
+      var aviso = document.createElement('div');
+      aviso.className = 'toast';
+      var icono = alerta.severidad === 'alta' ? '🔔 ' : (alerta.severidad === 'media' ? '⚠ ' : 'ℹ ');
+      aviso.innerHTML = '<b>' + icono + alerta.mensaje + '</b>' +
+        (alerta.detalle ? '<span>' + alerta.detalle + '</span>' : '');
+      caja.appendChild(aviso);
+      setTimeout(function () {{ aviso.remove(); }}, 8000);
+    }};
+    socketAlertas.onclose = function () {{
+      if (obtenerToken()) setTimeout(conectarAlertas, 5000);
+    }};
+  }}
   function mostrarLogin(mensaje) {{
     document.getElementById('vista_login').classList.remove('oculto');
     document.getElementById('vista_tablero').classList.add('oculto');
@@ -254,6 +287,7 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
   }}
   function cerrarSesion() {{
     localStorage.removeItem('marcacion_jwt');
+    if (socketAlertas) {{ socketAlertas.close(); socketAlertas = null; }}
     mostrarLogin('');
   }}
   async function iniciarSesion() {{
@@ -273,6 +307,7 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
     localStorage.setItem('marcacion_jwt', dato.token);
     document.getElementById('usuario_nombre').textContent = dato.nombre + ' · ' + dato.rol;
     mostrarApp();
+    conectarAlertas();
   }}
   async function peticionAutenticada(ruta, cuerpo) {{
     const opciones = {{
@@ -509,6 +544,122 @@ def _usuario_por_token_query(token: str) -> Dict[str, Any]:
         return usuario
     except (jwt.InvalidTokenError, ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Sesión inválida o expirada.")
+    finally:
+        db.cerrar()
+
+
+def _alerta_json(alerta: Dict[str, Any]) -> Dict[str, Any]:
+    """Convierte a JSON puro (send_json de WebSocket usa json.dumps plano)."""
+    salida = dict(alerta)
+    if isinstance(salida.get("creado_en"), datetime.datetime):
+        salida["creado_en"] = salida["creado_en"].isoformat()
+    return salida
+
+
+@app.websocket("/ws/alertas")
+async def ws_alertas(websocket: WebSocket, token: str = "") -> None:
+    """Push en tiempo real: cada alerta publicada en el bus llega al cliente.
+
+    Un empleado recibe solo sus propias alertas (marcación con incidencia);
+    las alertas globales (cuota bloqueada, fraude) llegan a todos los
+    conectados autenticados. Se entrega el historial no leído al conectar.
+    """
+    try:
+        usuario = _usuario_por_token_query(token)
+    except HTTPException:
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    db = _cliente()
+    try:
+        pendientes = db.listar_alertas(no_leidas=True, limite=20)
+        for alerta in pendientes:
+            if (
+                alerta.get("usuario_id") is None
+                or int(alerta.get("usuario_id") or 0) == int(usuario["id"])
+            ):
+                await websocket.send_json(_alerta_json(alerta))
+    finally:
+        db.cerrar()
+
+    def remitente(alerta: Dict[str, Any]) -> None:
+        if (
+            alerta.get("usuario_id") is None
+            or int(alerta.get("usuario_id") or 0) == int(usuario["id"])
+        ):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    websocket.send_json(_alerta_json(alerta)), loop
+                )
+            except Exception:
+                pass
+
+    loop = asyncio.get_running_loop()
+    notifications.BUS.suscribir(remitente)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        notifications.BUS.desuscribir(remitente)
+
+
+class AlertaRequest(BaseModel):
+    tipo: str
+    severidad: str = "media"
+    mensaje: str
+    detalle: str = ""
+    usuario_id: Optional[int] = None
+
+
+@app.post("/api/alertas")
+def api_publicar_alerta(
+    payload: AlertaRequest,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Publica una alerta desde el escritorio (kiosco u otro origen)."""
+    db = _cliente()
+    try:
+        return notifications.registrar_alerta(
+            db,
+            payload.tipo,
+            payload.severidad,
+            payload.mensaje.strip(),
+            payload.detalle.strip(),
+            payload.usuario_id,
+        )
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/alertas")
+def api_listar_alertas(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Lista de alertas para el Panel de Gestión (RRHH/Administrador)."""
+    if usuario["role_name"] not in ("Administrador", "Recursos Humanos"):
+        raise HTTPException(status_code=403, detail="Requiere rol de Recursos Humanos.")
+    db = _cliente()
+    try:
+        return {
+            "alertas": db.listar_alertas(limite=60),
+            "no_leidas": len(db.listar_alertas(no_leidas=True)),
+        }
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/alertas/leidas")
+def api_marcar_alertas_leidas(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Marca todas las alertas como leídas (Panel de Gestión)."""
+    if usuario["role_name"] not in ("Administrador", "Recursos Humanos"):
+        raise HTTPException(status_code=403, detail="Requiere rol de Recursos Humanos.")
+    db = _cliente()
+    try:
+        return {"marcadas": db.marcar_alertas_leidas()}
     finally:
         db.cerrar()
 
