@@ -3,7 +3,7 @@
 FastAPI con autenticación JWT (cédula + contraseña bcrypt, vigencia 8 horas),
 temas dinámicos Claro/Oscuro persistidos en ``localStorage`` y un tablero
 personal que resume vacaciones (Art. 23), permisos del mes (Art. 25) y horas
-extra. Cada permiso aprobado puede descargarse como PDF oficial CONATEL con
+extra. Cada permiso aprobado puede descargarse como PDF oficial con
 hash SHA-256 (Res. 3028/2024).
 
 La identidad del empleado se resuelve exclusivamente desde el token; la
@@ -33,7 +33,7 @@ import reports
 
 app = FastAPI(
     title="Sistema de Marcación · Portal del Empleado",
-    description="Tablero personal, historial de marcas y PDFs de permisos CONATEL.",
+    description="Tablero personal, historial de marcas y PDFs de permisos.",
     version="3.1.0",
 )
 
@@ -171,7 +171,7 @@ PAGINA_HTML: str = f"""<!DOCTYPE html>
 
   <div class="tarjeta" id="vista_login">
     <h1>Sistema de Marcación</h1>
-    <p class="subtitulo">Portal del Empleado · CONATEL · tokens con vigencia de 8 horas</p>
+    <p class="subtitulo">Portal del Empleado · tokens con vigencia de 8 horas</p>
     <label for="cedula_login">Tu cédula o usuario</label>
     <input id="cedula_login" placeholder="Ej. 1234567 o juan" autocomplete="username">
     <label for="password_login">Contraseña</label>

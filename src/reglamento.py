@@ -1,8 +1,8 @@
-"""Catálogo reglamentario de permisos y licencias de la CONATEL.
+"""Catálogo reglamentario de permisos y licencias de la empresa.
 
 Codifica los artículos aplicables de los dos reglamentos vigentes:
 
-- **Reglamento Interno de la CONATEL** (Res. Directorio N.º 1307/2010,
+- **Reglamento Interno de la empresa** (Res. Directorio N.º 1307/2010,
   homologado por la SFP) para funcionarios y personal contratado:
   Art. 18 (salidas por motivos personales), Art. 29 (vacaciones) y
   Art. 34 (permisos con y sin goce de sueldo).

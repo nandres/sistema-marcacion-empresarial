@@ -30,11 +30,11 @@ flowchart LR
 | `src/app.py` | Punto de entrada: menú interactivo adaptado al rol, flujo de sesión y orquestación |
 | `src/auth.py` | Autenticación (bcrypt) y control de accesos RBAC: [[Control de Roles y Permisos RBAC]] y [[Seguridad y Cifrado de Comunicaciones]] |
 | `src/database.py` | Conexión PostgreSQL (psycopg2), esquema de roles, usuarios, marcajes y `logs_auditoria` |
-| `src/clock_engine.py` | Reglas de negocio (Ley 213): entrada/salida, tardanzas y horas extra; cumplimiento CONATEL Res. 3028/2024: [[Reglamento de Asistencia y Disciplina CONATEL]] |
-| `src/reports.py` | Exportación mensual de asistencia (xlsx/csv), aguinaldos y PDFs oficiales CONATEL: [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] |
+| `src/clock_engine.py` | Reglas de negocio (Ley 213): entrada/salida, tardanzas y horas extra; cumplimiento Res. 3028/2024: [[Reglamento de Asistencia y Disciplina]] |
+| `src/reports.py` | Exportación mensual de asistencia (xlsx/csv), aguinaldos y PDFs oficiales: [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] |
 | `src/gui.py` | Interfaz premium en CustomTkinter con temas Claro/Oscuro: [[Diseño de Interfaz Premium UI-UX]], [[Panel de Analítica Visual y UX Premium]] y [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] |
 | `src/web_server.py` | Autoservicio web FastAPI con tablero personal y descarga de PDFs: [[Estructura Web y Conexión Biométrica]] y [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] |
-| `src/reglamento.py` | Catálogo reglamentario de permisos y licencias (Res. 1307/2010 y 3028/2024) con cuotas y disponibilidad: [[Catálogo de Permisos y Licencias CONATEL]] |
+| `src/reglamento.py` | Catálogo reglamentario de permisos y licencias (Res. 1307/2010 y 3028/2024) con cuotas y disponibilidad: [[Catálogo de Permisos y Licencias]] |
 | `src/biometric_sync.py` | Sincronización TCP/IP con relojes ZKTeco (puerto 4370) |
 | `Dockerfile` | Contenedor de producción (gunicorn + uvicorn): [[Despliegue en la Nube e Infraestructura SaaS]] |
 | `solicitudes_correccion` | Tabla de reclamos de marcación fallida (Pendiente/Aprobado/Rechazado) |
@@ -43,7 +43,7 @@ flowchart LR
 
 1. `app.py` inicia `Database` y crea la base y el esquema (tablas `roles`, `users`, `marcajes`, `logs_auditoria`).
 2. `auth.py` valida credenciales (bcrypt) contra la tabla `users` y verifica el rol.
-3. `clock_engine.py` registra entradas/salidas en `marcajes` con el desglose de la Ley 213 y las reglas de tolerancia de la Res. 3028/2024 de CONATEL.
+3. `clock_engine.py` registra entradas/salidas en `marcajes` con el desglose de la Ley 213 y las reglas de tolerancia de la Res. 3028/2024.
 4. `database.py` persiste todo en PostgreSQL y audita las operaciones de RRHH/Admin.
 
 ## Documentación vinculada
@@ -59,9 +59,9 @@ flowchart LR
 - [[Seguridad y Cifrado de Comunicaciones]]
 - [[Panel de Analítica Visual y UX Premium]]
 - [[Despliegue en la Nube e Infraestructura SaaS]]
-- [[Reglamento de Asistencia y Disciplina CONATEL]]
+- [[Reglamento de Asistencia y Disciplina]]
 - [[Manual de Diseño UI-UX Simplificado y Reportes PDF]]
-- [[Catálogo de Permisos y Licencias CONATEL]]
+- [[Catálogo de Permisos y Licencias]]
 
 ## Vinculación con el repositorio
 

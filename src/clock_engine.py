@@ -7,8 +7,8 @@ y feriados oficiales se liquidan íntegros con recargo del 100%. Incluye la
 gracia de tolerancia de 10 minutos en la entrada antes de considerarla
 llegada tardía y soporta turnos nocturnos que cruzan la medianoche.
 
-Desde la Resolución de Directorio N.º 3028/2024 de la CONATEL, el
-``evaluar_asistencia_conatel`` distingue el vínculo del empleado: los
+Desde la Resolución de Directorio N.º 3028/2024, el
+``evaluar_asistencia`` distingue el vínculo del empleado: los
 pasantes gozan de tolerancia ordinaria limitada a tres veces al mes y de
 la tolerancia climática legal de 30 minutos en días de lluvia intensa
 (con corte a ``Ausencia Injustificada`` a los 30 minutos de retraso),
@@ -82,13 +82,13 @@ def es_tardanza(hora_entrada: datetime) -> bool:
     return hora_entrada.time() > LIMITE_TARDANZA
 
 
-def evaluar_asistencia_conatel(
+def evaluar_asistencia(
     db: Database,
     usuario_id: int,
     hora_marca: datetime,
     es_dia_lluvioso: bool = False,
 ) -> Dict[str, Any]:
-    """Evalúa una entrada según la Res. 3028/2024 de CONATEL.
+    """Evalúa una entrada según la Res. 3028/2024.
 
     Para pasantes:
     - Tolerancia ordinaria de 10 minutos, consumible como máximo 3 veces
@@ -224,7 +224,7 @@ class ClockEngine:
         self.user = user
 
     def clock_in(self, es_dia_lluvioso: bool = False) -> Tuple[int, datetime]:
-        """Registra la entrada aplicando la Res. 3028/2024 de CONATEL.
+        """Registra la entrada aplicando la Res. 3028/2024.
 
         La evaluación distingue pasantes de funcionarios: consume la
         tolerancia ordinaria (10 o 15 minutos), activa la climática de
@@ -239,7 +239,7 @@ class ClockEngine:
         if open_entry:
             raise ValueError("Ya hay una entrada abierta sin salida registrada.")
         ahora = ahora_local()
-        evaluacion = evaluar_asistencia_conatel(
+        evaluacion = evaluar_asistencia(
             self.db, self.user["id"], ahora, es_dia_lluvioso
         )
         estado = evaluacion["estado"]
@@ -343,7 +343,7 @@ class ClockEngine:
 
         Una sola acción para el kiosco de recepción: consulta internamente
         PostgreSQL y decide si corresponde abrir la jornada (con las reglas
-        CONATEL vigentes según el vínculo) o cerrarla con el desglose legal
+        vigentes según el vínculo) o cerrarla con el desglose legal
         de horas extraordinarias.
 
         Returns:

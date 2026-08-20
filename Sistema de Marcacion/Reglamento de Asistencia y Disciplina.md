@@ -1,6 +1,6 @@
-# Reglamento de Asistencia y Disciplina CONATEL
+# Reglamento de Asistencia y Disciplina
 
-> Cumplimiento de la Resolución de Directorio N.º 3028/2024 de la CONATEL sobre asistencia de pasantes y funcionarios. Implementado en el motor de reglas del [[Ecosistema Sistema de Marcación|Sistema de Marcación]].
+> Cumplimiento de la Resolución de Directorio N.º 3028/2024 sobre asistencia de pasantes y funcionarios. Implementado en el motor de reglas del [[Ecosistema Sistema de Marcación|Sistema de Marcación]].
 
 ## Reglas vigentes por tipo de vínculo
 
@@ -22,7 +22,7 @@
 ## Implementación técnica
 
 - `src/database.py`: columnas `users.tipo_vinculo` (`Pasante`/`Funcionario`), `marcajes.tolerancia_aplicada` y `marcajes.condicion_climatica`; método `contar_tardanzas_mes()`.
-- `src/clock_engine.py`: `evaluar_asistencia_conatel()` (tolerancias, cuota mensual, corte de ausencia) integrado en `ClockEngine.clock_in()` y `registrar_asistencia(es_dia_lluvioso=...)`.
+- `src/clock_engine.py`: `evaluar_asistencia()` (tolerancias, cuota mensual, corte de ausencia) integrado en `ClockEngine.clock_in()` y `registrar_asistencia(es_dia_lluvioso=...)`.
 - `src/auth.py`: `TIPOS_VINCULO`, alta/edición con vínculo validado y auditoría; `TIPOS_PERMISO` incluye **Permiso por Examen** para pasantes.
 - `src/gui.py`: interruptor de lluvia en el kiosco, selector de vínculo en Personal y en el modal de edición.
 - `src/reports.py` y `src/web_server.py`: el vínculo y la condición climática viajan en los resúmenes de consulta e historial.

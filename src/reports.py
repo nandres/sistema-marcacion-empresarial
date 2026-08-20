@@ -599,7 +599,7 @@ def resumen_empleado(
     alimentan las tarjetas informativas del empleado:
 
     - Vacaciones devengadas, usufructuadas y disponibles en el año en curso
-      (Art. 23 de la Res. 3028/2024 de CONATEL).
+      (Art. 23 de la Res. 3028/2024).
     - Contador de permisos del mes en curso, discriminado por tipo
       (salud, exámenes, lactancia, etc. — Art. 25).
     - Marcas mensuales con horas ordinarias por día y el acumulado de horas
@@ -694,7 +694,7 @@ def resumen_empleado(
 def _canonico_permiso(justificacion: Dict[str, Any]) -> str:
     """Serie canónica de bytes que el PDF autentica con SHA-256."""
     return (
-        f"CONATEL|3028/2024|{justificacion['id']}|{justificacion['username']}|"
+        f"EMPRESA|3028/2024|{justificacion['id']}|{justificacion['username']}|"
         f"{justificacion['tipo_permiso']}|{justificacion['fecha_inicio'].isoformat()}|"
         f"{justificacion['fecha_fin'].isoformat()}|{justificacion['aprobador']}"
     )
@@ -703,7 +703,7 @@ def _canonico_permiso(justificacion: Dict[str, Any]) -> str:
 def generar_pdf_permiso(solicitud_id: int) -> str:
     """Genera el PDF oficial de un permiso aprobado (Res. 3028/2024).
 
-    Documento formal con membrete institucional simulado de la CONATEL,
+    Documento formal con membrete institucional simulado,
     los datos del pasante o funcionario, el período del permiso, las
     firmas electrónicas del tutor y el hash SHA-256 de validación legal,
     que queda persistido en ``justificaciones.hash_legal``.
@@ -740,7 +740,7 @@ def generar_pdf_permiso(solicitud_id: int) -> str:
 
     carpeta = Path("reportes")
     carpeta.mkdir(parents=True, exist_ok=True)
-    ruta = carpeta / f"permiso_{solicitud_id:04d}_CONATEL.pdf"
+    ruta = carpeta / f"permiso_{solicitud_id:04d}.pdf"
 
     estilos = getSampleStyleSheet()
     normal = ParagraphStyle(
@@ -806,7 +806,7 @@ def generar_pdf_permiso(solicitud_id: int) -> str:
         str(ruta), pagesize=A4, topMargin=20 * mm, bottomMargin=16 * mm
     )
     elemento = [
-        Paragraph("CONATEL · Comisión Nacional de Telecomunicaciones", institucion),
+        Paragraph("Sistema de Marcación · Gestión de Asistencia", institucion),
         Paragraph("Dirección de Talento Humano", subtitulo),
         Paragraph(
             "Permiso aprobado en el marco de la Resolución de Directorio "

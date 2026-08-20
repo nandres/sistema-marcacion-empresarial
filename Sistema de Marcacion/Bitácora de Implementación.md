@@ -1,10 +1,10 @@
 # Bitácora de Implementación
 
-> Historial cronológico de todo lo construido en el proyecto **Sistema de Marcación · CONATEL Paraguay**, con los commits de referencia y las validaciones ejecutadas. Las notas temáticas profundizan cada módulo (ver [[Ecosistema Sistema de Marcación]]).
+> Historial cronológico de todo lo construido en el proyecto **Sistema de Marcación Empresarial**, con los commits de referencia y las validaciones ejecutadas. Las notas temáticas profundizan cada módulo (ver [[Ecosistema Sistema de Marcación]]).
 
 ## Resumen general
 
-Sistema completo de control de asistencia para CONATEL: **PostgreSQL** como base, **CustomTkinter** como interfaz de escritorio (kiosco + gestión), **FastAPI** como autoservicio web, **ZKTeco** como fuente biométrica y **Docker** para despliegue. Cumple la **Ley 213** (horas extra), la **Ley 6380/2019** (aguinaldo), la **Res. Directorio 3028/2024** (tolerancias y reglas para pasantes/funcionarios) y el **Reglamento Interno de Personal Res. 1307/2010** (catálogo de permisos y licencias).
+Sistema completo de control de asistencia para la empresa: **PostgreSQL** como base, **CustomTkinter** como interfaz de escritorio (kiosco + gestión), **FastAPI** como autoservicio web, **ZKTeco** como fuente biométrica y **Docker** para despliegue. Cumple la **Ley 213** (horas extra), la **Ley 6380/2019** (aguinaldo), la **Res. Directorio 3028/2024** (tolerancias y reglas para pasantes/funcionarios) y el **Reglamento Interno de Personal Res. 1307/2010** (catálogo de permisos y licencias).
 
 ## Fases construidas
 
@@ -54,17 +54,17 @@ Sistema completo de control de asistencia para CONATEL: **PostgreSQL** como base
 - **Sincronización TCP/IP con reloj ZKTeco** (puerto 4370) y columna `biometrico_id`: [[Estructura Web y Conexión Biométrica]].
 - **Dockerfile** (gunicorn + uvicorn) y variables de entorno para producción 24/7: [[Despliegue en la Nube e Infraestructura SaaS]].
 
-### 8. Cumplimiento CONATEL · Res. 3028/2024
+### 8. Cumplimiento · Res. 3028/2024
 *Commit: `a575d99`*
 
-- Adaptación para **pasantes y funcionarios**: columna `tipo_vinculo`, reglas de tolerancia, **día de lluvia intensa** (30 min) y ausencias injustificadas: [[Reglamento de Asistencia y Disciplina CONATEL]].
+- Adaptación para **pasantes y funcionarios**: columna `tipo_vinculo`, reglas de tolerancia, **día de lluvia intensa** (30 min) y ausencias injustificadas: [[Reglamento de Asistencia y Disciplina]].
 
 ### 9. UX simplificada + PDFs oficiales
 *Commit: `56c7501`*
 
 - **Tema claro/oscuro** al instante (tokens `TEMAS`, `_recolorear`, refresco de gráficos matplotlib).
 - Panel de Gestión de **dos columnas** (accesos a la izquierda, paneles en línea), **edición inline** de personal, consulta local con botón **Hoy**.
-- **PDFs oficiales CONATEL** de permisos (firma de comprobante, `generar_pdf_permiso` sin DDL para evitar locks): [[Manual de Diseño UI-UX Simplificado y Reportes PDF]].
+- **PDFs oficiales** de permisos (firma de comprobante, `generar_pdf_permiso` sin DDL para evitar locks): [[Manual de Diseño UI-UX Simplificado y Reportes PDF]].
 
 ### 10. Catálogo reglamentario de permisos
 *Commit: `ea33463`*
@@ -72,7 +72,7 @@ Sistema completo de control de asistencia para CONATEL: **PostgreSQL** como base
 - `src/reglamento.py`: catálogo de **15 artículos para funcionarios y 18 para pasantes** (Res. 1307/2010 + 3028/2024) con cuotas por período (horas, días o veces), `usos_max` y `disponibilidad_permisos`.
 - `auth.crear_justificacion` valida artículo por vínculo, fechas ≤ hoy y cuota; las justificaciones admiten `horas_usadas`.
 - GUI: `JustificacionesTab` con artículos según vínculo, panel de disponibilidad y campo de horas; `EmployeeDashboard` con histórico **enero-cualquier-año → hoy**; `reports.py` con `resumen_empleado` y `resumen_historico`.
-- Nota: [[Catálogo de Permisos y Licencias CONATEL]].
+- Nota: [[Catálogo de Permisos y Licencias]].
 
 ### 11. Acceso, calendarios y tema (última fase)
 *Commit: `e60bc94`*
@@ -128,6 +128,6 @@ Los scripts de humo viven en `tests/` del repositorio (antes en la carpeta tempo
 
 ## Enlaces
 
-- [[Ecosistema Sistema de Marcación]] · [[Catálogo de Permisos y Licencias CONATEL]] · [[Reglamento de Asistencia y Disciplina CONATEL]]
+- [[Ecosistema Sistema de Marcación]] · [[Catálogo de Permisos y Licencias]] · [[Reglamento de Asistencia y Disciplina]]
 - [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Motor de Reglas de Horas Extra]]
 - [[Módulo de Gestión de Usuarios]] · [[Control de Roles y Permisos RBAC]] · [[Panel de Reportes y Auditoría]] · [[Seguridad y Cifrado de Comunicaciones]]
