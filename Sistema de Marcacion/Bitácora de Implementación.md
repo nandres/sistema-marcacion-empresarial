@@ -83,6 +83,14 @@ Sistema completo de control de asistencia para CONATEL: **PostgreSQL** como base
 - **Calendario popup** con botón **Hoy** en los 4 campos de fecha (inicio/fin de justificación e histórico del empleado).
 - **Art. 14 · Salidas por motivos personales** para pasantes: 4 h/mes con **máximo 3 usos/mes** (el primer intento de un 4.º uso se bloquea con mensaje de cuota).
 
+### 12. Motor offline/online, notificaciones y facial
+*Commits: sin commitear (listos para `git add`)*
+
+- **M1 · Robustez offline/online**: cola local SQLite (`src/offline_queue.py`) + worker de fondo (`src/sync_worker.py`) que reinserta entrada/salida con el **timestamp original** y `sync_id` único (`ON CONFLICT ... DO NOTHING`); sin duplicados ni pérdida de hora. El kiosco guarda localmente si PostgreSQL no responde y muestra cuántas marcas esperan sincronizar.
+- **M2 · Notificaciones en tiempo real**: `src/notifications.py` con bus pub/sub en memoria, persistencia en tabla `alertas` y **SMTP opcional** (`SMTP_HOST/PORT/USER/PASSWORD/FROM`). Hooks de alerta en cuota agotada (Art. 14), llegada tardía injustificada y fraude facial. **WebSocket** `/ws/alertas?token=` en `web_server.py` + endpoints `POST/GET /api/alertas` y `/api/alertas/leidas`; el panel de gestión **parpadea la campana** con la sección 🔔 **Alertas**.
+- **M3 · Reconocimiento facial**: `src/facial.py` (OpenCV, Haar cascade en `data/`, LBPH con aumento sintético para entrenar con 1 foto). El kiosco valida el rostro contra la foto registrada en `PersonalTab`; si no coincide, bloquea la marcación y **audita FRAUDE** + alerta de alta severidad.
+- **M4 · CI/CD**: `.github/workflows/deploy.yml` corre py_compile + smokes (headless y GUI bajo `xvfb-run`) contra un **PostgreSQL 16** de servicio, construye la imagen Docker y la publica en **GHCR** con disparo opcional a **Render**. Los smokes viven ahora en `tests/` con ruta relativa + `tests/setup_ci.py` que siembra admin/juan.
+
 ## Cómo ejecutar
 
 | Componente | Comando |
@@ -96,12 +104,15 @@ Usuarios de demostración: **admin/admin123** (Administrador · Funcionario), **
 
 ## Validaciones ejecutadas
 
-Los scripts de humo viven en `C:\Users\PC\AppData\Local\Temp\opencode\`:
+Los scripts de humo viven en `tests/` del repositorio (antes en la carpeta temporal):
 
 - `validar_art14.py` — cuota y usos del Art. 14 (pasante) con limpieza. **OK**
 - `smoke_login.py` — login (usuario inexistente/contraseña/roles), cambio de clave (4 validaciones + auditoría) y tema con dashboard abierto (gráfico reconstruido). **OK**
 - `validar_reglamento.py` — catálogo, cuotas por horas, fechas futuras, vínculo, períodos anuales, resúmenes. **OK**
 - `smoke_reglamento_gui.py` — JustificacionesTab + EmployeeDashboard + bloqueo por cuota en la GUI. **OK**
+- `smoke_sync.py` — cola offline → PostgreSQL: timestamps preservados, sin duplicados (reinserción descartada), alerta de tardanza con `usuario_id`. **OK**
+- `smoke_alertas.py` — API de alertas (401/200/leídas) + WebSocket con filtro por usuario. **OK**
+- `smoke_facial.py` — sin rostro rechazado, foto registrada, verificación OK (confianza < 80) y bloqueo ante rostro distinto (217). **OK**
 - `smoke_panel.py`, `prueba_dashboard.py`, `prueba_conatel_gui.py`, `diag_tema*.py`, `pdf_e2e.py`, `web_reglamento.py` — regresiones de UX, analítica, PDF y web. **OK**
 
 ## Lecciones registradas
@@ -110,6 +121,10 @@ Los scripts de humo viven en `C:\Users\PC\AppData\Local\Temp\opencode\`:
 - **PowerShell cp1252**: no usar heredocs ni reescribir archivos UTF-8 vía PowerShell (corrompe acentos); los scripts de prueba van en la carpeta temporal.
 - **`except ... as e` en Python 3**: la variable `e` se borra al salir del bloque; capturarla con `mensaje = str(e)` dentro.
 - **Tema**: los widgets con `_rol = "plano"` deben actualizar `hover_color`; los gráficos matplotlib requieren refresco registrado (`registrar_refresco_tema`).
+- **LBPH no entrena con 1 muestra**: la validación facial requiere ≥2 muestras; se resuelve con aumento sintético (desplazamientos de ±6 px) para entrenar con una sola foto por usuario.
+- **OpenCV 5.0** ya no empaqueta el cascade Haar en `cv2.data`; el modelo vive en `data/haarcascade_frontalface_default.xml` (commit de 930 KB) y `facial.py` lo carga desde ahí.
+- **Worker de sincronización**: no debe correr `initialize()` (DDL) en cada ciclo; una conexión larga con transacciones de lectura bloquea los `CREATE INDEX`. El hilo reutiliza la conexión ya inicializada de la app (`iniciar_hilo(..., db=...)`).
+- **`ON CONFLICT (sync_id)`** con índice parcial requiere el predicado: `ON CONFLICT (sync_id) WHERE sync_id IS NOT NULL DO NOTHING`.
 
 ## Enlaces
 
