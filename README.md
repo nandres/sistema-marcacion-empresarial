@@ -134,4 +134,4 @@ La bóveda de documentación vive en [`Sistema de Marcacion/`](Sistema%20de%20Ma
 
 ---
 
-*Sistema desarrollado para cumplir la normativa laboral y reglamentaria de CONATEL Paraguay. Los datos de empleados son confidenciales: no subir `.env` ni reportes generados (ambos ignorados por git).*
+*Sistema desarrollado para cumplir la normativa laboral y reglamentaria envase a la CONATEL Paraguay. Los datos de empleados son confidenciales: no subir `.env` ni reportes generados (ambos ignorados por git).*
