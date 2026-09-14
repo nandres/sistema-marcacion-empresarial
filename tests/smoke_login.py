@@ -145,6 +145,10 @@ assert not app.frame_publico.winfo_ismapped(), "frame publico oculto durante ges
 print("OK admin entra a PanelGestion")
 
 app._volver_publico()
+# Destruir el panel de gestión y volver a mapear el frame público son dos
+# pasos del gestor de geometría: un solo `update()` a veces devuelve antes de
+# que el segundo haya ocurrido, y la comprobación falla sin que nada esté mal.
+app.update_idletasks()
 app.update()
 assert app.frame_publico.winfo_ismapped() and hasattr(app, "entrada_usuario"), "volver al login tras gestion"
 print("OK volver al login tras gestion")

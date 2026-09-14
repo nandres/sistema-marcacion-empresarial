@@ -19,7 +19,7 @@ Doce tablas la llevan: `users`, `marcajes`, `justificaciones`, `alertas`, `fotos
 
 Lo que era único en toda la base pasó a serlo dentro de la empresa: el nombre de usuario, el nombre del turno, el turno predeterminado y la condición declarada de un día. Dos clientes pueden tener su turno "Mañana" y la misma persona puede trabajar en los dos.
 
-## Las tres capas que lo sostienen
+## Las cuatro capas que lo sostienen
 
 Una sola consulta sin acotar basta para mostrarle a un cliente la planilla de otro. Son más de setenta consultas, así que el aislamiento no puede depender de que nadie se olvide.
 
@@ -51,6 +51,37 @@ La primera versión aceptaba un atajo: filtrar por la clave del padre (`user_id`
 `tests/test_multiempresa.py` aloja dos empresas con los datos **deliberadamente superpuestos** —la misma cédula, el mismo nombre de turno, la misma fecha con condición declarada— e intenta cruzar por todos los caminos que existen: listados, búsquedas por id, ediciones, borrados, login, token forjado, bus de alertas y los informes.
 
 No comprueba que el aislamiento esté implementado; comprueba que **no se pueda cruzar**.
+
+### 4. La base lo impone por su cuenta
+
+Las tres capas anteriores viven en el código de la aplicación. La cuarta vive en PostgreSQL: cada tabla de datos de cliente tiene una política de seguridad por fila que la acota a la empresa publicada en `app.empresa_id`.
+
+```sql
+CREATE POLICY users_empresa ON users
+USING      (empresa_id = NULLIF(current_setting('app.empresa_id', true), '')::int)
+WITH CHECK (empresa_id = NULLIF(current_setting('app.empresa_id', true), '')::int);
+```
+
+Con eso, una consulta a la que se le olvidó el `WHERE` no devuelve las filas de los demás clientes: devuelve ninguna. El contexto vacío se compara contra `NULL`, así que una conexión que no declaró su empresa no ve nada — la misma postura que toma la aplicación con `SinEmpresa`, sostenida un piso más abajo.
+
+La empresa llega a la sesión desde el mismo lugar donde se fija en Python: asignar `db.empresa_id` publica `app.empresa_id` en la conexión.
+
+> [!warning] Un superusuario las esquiva
+> PostgreSQL exceptúa siempre a los superusuarios, así que con `DB_USER=postgres` las políticas quedan instaladas pero **inertes**. Por eso el proceso que atiende tráfico tiene que correr con un rol restringido, y por eso `migrate.py` dice en voz alta si el aislamiento está en vigor o no: una política instalada pero inerte se parece demasiado a una que protege.
+
+```bash
+python src/migrate.py rol-app     # crea marcacion_app: sin DDL, sin superusuario, sin BYPASSRLS
+```
+
+Imprime el `DB_USER` y el `DB_PASSWORD` que van en el `.env` **del servicio**. El rol administrador se sigue usando solo para migrar, que es el único momento en que hace falta alterar tablas.
+
+### La excepción escrita en el esquema
+
+El login cruza empresas a propósito y las políticas lo bloquearían, así que la búsqueda de credenciales vive en `credenciales_por_usuario`, una función `SECURITY DEFINER`: corre con los privilegios de su dueño, que es el camino que PostgreSQL ofrece para una excepción acotada.
+
+Devuelve lo mínimo para decidir un login —identificador, empresa, hash, y si el legajo y la empresa están activos—. Ni el nombre, ni el rol, ni el salario. Resuelta la empresa, el legajo completo se lee por el camino normal, ya acotado.
+
+Dejar la excepción escrita en el esquema, y no repartida por el código, es lo que permite auditarla: es una función, se ve quién puede ejecutarla y se ve exactamente qué devuelve.
 
 ## El acceso
 
@@ -90,9 +121,24 @@ Pide nombre corto, razón social y RUC, y enseguida crea el primer administrador
 
 En la web, la empresa activa va sellada en el membrete junto al nombre. Con varios clientes alojados no es un adorno: es lo que evita dar de baja al empleado del cliente equivocado.
 
+## Cómo se verifica
+
+`tests/test_multiempresa.py` no se conforma con leer las políticas: crea el rol restringido, conecta con él y lanza consultas **deliberadamente sin acotar**.
+
+| Lo que intenta | Lo que pasa |
+| --- | --- |
+| `SELECT id, empresa_id FROM users` con sesión en Norte | Solo filas de Norte |
+| La misma consulta con sesión en Sur | Solo filas de Sur |
+| La misma consulta sin empresa declarada | Ninguna fila |
+| `INSERT` de una fila con la empresa ajena | Rechazado por la política |
+| Login con el rol restringido | Funciona: la función acotada sigue disponible |
+
+Es la única forma de saber si la política protege de verdad o si el código se protege solo a sí mismo. Si el entorno no permite crear roles, la prueba lo informa en lugar de aprobar en silencio.
+
+Además el servidor web completo se corrió bajo el rol restringido con la suite entera en verde: el aislamiento no es una configuración teórica que rompe la aplicación al activarse.
+
 ## Lo que falta
 
-- **Aislamiento en la base misma (RLS)**. Hoy lo garantiza la aplicación, con el verificador estático y la prueba de dos empresas como red. PostgreSQL puede imponerlo con *row-level security* y una política por tabla, que resiste incluso a una consulta mal escrita. El obstáculo concreto: la búsqueda de credenciales cruza empresas a propósito, así que necesitaría una función `SECURITY DEFINER` propia; y las políticas son inertes si el proceso conecta como superusuario, que es como conecta hoy. **Una política que no se aplica es peor que no tenerla**, porque parece protección, así que se documenta el paso en lugar de dejarlo a medias.
 - **Subdominio por cliente** (`acme.miapp.com`). Hoy la empresa la resuelve la contraseña; un subdominio la resolvería antes y dejaría el campo plegado sin razón de existir.
 - **Cuotas por cliente** (cantidad de empleados, retención de datos). La tabla `empresas` tiene dónde ponerlas, pero nada las mira.
 - **Facturación**. Fuera del alcance del producto.

@@ -18,7 +18,7 @@ El núcleo de cálculo del sistema (`clock_engine.py`) procesa las marcas abstra
 *   **Res. Directorio 3028/2024:** Tolerancia climática y diferenciación estricta de reglas entre pasantes y funcionarios. La condición excepcional del día (lluvia intensa, corte de rutas, paro de transporte) la **declara Recursos Humanos** para toda la plantilla, con firma y auditoría: no es una casilla que marque quien llega tarde.
 *   **Reglamento Interno (Res. 1307/2010):** Catálogo automatizado de permisos, licencias y control estricto de cuotas mensuales por horas o usos (bloqueo automático al 4.° uso del Art. 14).
 
-Una misma instalación puede alojar a **varias empresas** sin que ninguna vea los datos de otra: doce tablas llevan `empresa_id`, la conexión falla si no tiene empresa activa, un verificador estático impide que una consulta nueva quede sin acotar y una prueba aloja dos clientes con los datos superpuestos a propósito para intentar cruzarlos. Ninguna sesión puede ver dos clientes a la vez.
+Una misma instalación puede alojar a **varias empresas** sin que ninguna vea los datos de otra. Cuatro capas lo sostienen: doce tablas llevan `empresa_id`; la conexión falla si no tiene empresa activa; un verificador estático impide que una consulta nueva quede sin acotar; y PostgreSQL lo impone con políticas de seguridad por fila, de modo que una consulta a la que se le olvidó el `WHERE` no devuelve ninguna fila en lugar de devolver las de todos. Ninguna sesión puede ver dos clientes a la vez.
 
 La hora contra la que se mide cada llegada sale del **turno** del empleado: cada turno tiene su horario (una franja, o dos si la jornada es partida), los días de la semana que cubre y, si hace falta, su propia tolerancia. La rotación se programa con vigencia, así que al vencer la persona vuelve sola a su horario de contrato, y los días que su turno no cubre figuran como **franco** en lugar de contarse como ausencia.
 
@@ -142,6 +142,16 @@ PORT=8000
 > ```bash
 > python -c "import secrets; print(secrets.token_urlsafe(48))"
 > ```
+
+### Rol del servicio (aislamiento en vigor)
+
+Las políticas de aislamiento por fila **no alcanzan a un superusuario**: PostgreSQL lo exceptúa siempre. El proceso que atiende tráfico debe correr con un rol restringido, que se crea una sola vez:
+
+```bash
+python src/migrate.py rol-app
+```
+
+Imprime el `DB_USER` y el `DB_PASSWORD` que van en el `.env` del servicio. El rol administrador se sigue usando solo para migrar. `python src/migrate.py` informa en cada corrida si el aislamiento está activo o inerte.
 
 ### Inicialización de Componentes
 El esquema se aplica en un paso explícito, previo a levantar cualquier proceso que atienda tráfico. Las migraciones toman locks exclusivos de tabla, así que no pueden correr dentro del ciclo de una petición:

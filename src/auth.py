@@ -193,11 +193,19 @@ def authenticate(
     validos = [c for c in candidatos if verify_password(password, c["password_hash"])]
     if len(validos) != 1:
         return None
-    user = validos[0]
-    if user.get("activo") is False or not user.get("empresa_activa", True):
+    credencial = validos[0]
+    if credencial["activo"] is False or credencial["empresa_activa"] is False:
         return None
-    db.empresa_id = user["empresa_id"]
-    return user
+    # Resuelta la empresa, el legajo completo se lee por el camino normal, ya
+    # acotado: la excepción que cruza empresas se limita a decidir quién entra.
+    db.empresa_id = credencial["empresa_id"]
+    usuario = db.get_user_by_id(credencial["id"])
+    if not usuario:
+        return None
+    alojada = db.get_empresa(credencial["empresa_id"])
+    usuario["empresa_slug"] = alojada["slug"]
+    usuario["empresa_nombre"] = alojada["razon_social"]
+    return usuario
 
 
 def prompt_login(db: Database) -> Optional[Dict]:

@@ -45,11 +45,17 @@ python src/migrate.py
 # 4. Primer administrador
 python src/app.py        # el menú ofrece crearlo si la tabla está vacía
 
-# 5. Servidor
+# 5. Rol restringido del servicio (imprime DB_USER y DB_PASSWORD)
+python src/migrate.py rol-app
+
+# 6. Servidor, ya con ese rol en el .env
 python src/web_server.py
 ```
 
-El `migrate.py` avisa si `BIOMETRIA_CLAVE` falta y cifra las fotos que hayan quedado en claro de una instalación anterior.
+El `migrate.py` avisa si `BIOMETRIA_CLAVE` falta y cifra las fotos que hayan quedado en claro de una instalación anterior. También dice si el aislamiento entre empresas está en vigor: con el rol administrador las políticas quedan instaladas pero inertes, porque PostgreSQL exceptúa siempre a los superusuarios.
+
+> [!important] Dos roles, dos momentos
+> El rol **administrador** solo migra. El rol **restringido** (`marcacion_app`) es el que atiende tráfico: no puede alterar tablas y no puede saltear el aislamiento por fila. Es la diferencia entre que el aislamiento entre clientes lo prometa la aplicación y que lo imponga la base. Ver [[Multiempresa · Aislamiento entre Clientes]].
 
 ## Los tres secretos
 
@@ -87,6 +93,7 @@ Encenderla con la plantilla a medio cargar deja gente sin poder marcar.
 
 | Situación | Quién la resuelve | Dónde |
 | --- | --- | --- |
+| Alojar un cliente nuevo en la misma instalación | Quien instala | `python src/app.py alta-empresa` |
 | Alguien cambia de horario por un tiempo | RRHH programa una rotación con vigencia | *Gestión → Turnos* |
 | Alguien olvidó marcar la salida | Se libera solo a las 18 h y avisa a RRHH | *Gestión → Pendientes* |
 | Lluvia, paro de transporte, corte de rutas | RRHH declara la condición del día | *Gestión → Condiciones del día* |
@@ -107,7 +114,6 @@ Decirlo por adelantado evita una venta mal hecha.
 | **Prueba de vida en el reconocimiento facial** | Una foto en la pantalla de un celular pasa la verificación | P1-2, parte de fondo |
 | **Bus de alertas fuera del proceso** | Con varios workers, una alerta en vivo llega solo a los clientes conectados a ese worker | P3-4 |
 | **Cookie `HttpOnly` para la sesión** | El token vive en `localStorage` | P3-2 |
-| **Aislamiento impuesto por la base (RLS)** | El aislamiento entre clientes lo garantiza la aplicación, verificada por prueba; PostgreSQL todavía no lo impone | [[Multiempresa · Aislamiento entre Clientes]] |
 | **Pool de conexiones** | Cada petición abre y cierra su conexión; irrelevante para una empresa, relevante para muchas | — |
 | **Calendario de rotación automática** | La rotación semana A / semana B se carga a mano, tramo por tramo | [[Turnos y Rotación de Horarios]] |
 

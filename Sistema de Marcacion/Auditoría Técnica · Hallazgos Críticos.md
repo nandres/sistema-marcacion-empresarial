@@ -405,7 +405,7 @@ El `Dockerfile` no crea usuario sin privilegios. Cualquier ejecución de código
 | 7 | `fecha_ingreso` y baja lógica | P3-6 | ✅ hecho |
 | 8 | Biometría cifrada, freno de intentos y contenedor sin privilegios | P3-1, P3-3, P3-11 | ✅ hecho |
 | 9 | Entidad `turnos` (multi-turno, jornada partida, rotación) | P2-4, P2-5 | ✅ hecho |
-| 10 | Aislamiento multiempresa: `empresa_id`, fallo cerrado y guardia estática | — | ✅ hecho (falta RLS en la base) |
+| 10 | Aislamiento multiempresa: `empresa_id`, fallo cerrado, guardia estática y RLS en PostgreSQL | — | ✅ hecho |
 | 11 | Cookie `HttpOnly` y bus de alertas fuera del proceso | P3-2, P3-4 | pendiente |
 
 El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].

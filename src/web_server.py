@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -1451,18 +1452,36 @@ def main() -> None:
     Respeta ``HOST`` y ``PORT`` del entorno para adaptarse a los proxies
     de plataformas cloud (Render, Railway) sin modificar el código.
 
-    Aplica el esquema antes de levantar el proceso para que el arranque en
-    desarrollo siga siendo un solo comando. En producción esa migración es
-    un paso propio del despliegue (ver el ``CMD`` del Dockerfile), porque
-    con varios workers el DDL concurrente se bloquea entre sí.
+    Sobre una base sin migrar aplica el esquema, para que el arranque en
+    desarrollo siga siendo un solo comando. Sobre una ya migrada no toca
+    nada: en producción la migración es un paso propio del despliegue (ver
+    el ``CMD`` del Dockerfile) y el rol que atiende tráfico no tiene —ni
+    debe tener— permiso para alterar tablas.
     """
     import os
 
+    import psycopg2
     import uvicorn
 
     import migrate
 
-    migrate.aplicar()
+    db = database.Database()
+    try:
+        db.connect()
+        listo = db.esquema_listo()
+    finally:
+        db.cerrar()
+    if not listo:
+        try:
+            migrate.aplicar()
+        except psycopg2.errors.InsufficientPrivilege:
+            print(
+                "El esquema no está aplicado y este rol no puede crearlo.\n"
+                "Corré la migración con el rol administrador:\n"
+                "  python src/migrate.py",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
 
     uvicorn.run(
         app,

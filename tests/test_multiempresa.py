@@ -293,6 +293,81 @@ aguinaldos_a = {f["id"] for f in db.get_proyeccion_aguinaldos()}
 verificar("la proyección de aguinaldos no incluye a la otra plantilla",
           not (aguinaldos_a & ids_b), f"{len(aguinaldos_a)} empleados")
 
+# --------------------------------- 10. La base impone el aislamiento (RLS)
+print("\n10) PostgreSQL impone el aislamiento, no solo la aplicación")
+
+# Se prueba con el rol restringido y con consultas DELIBERADAMENTE sin acotar:
+# es la única forma de saber si la política protege de verdad o si el código
+# se protege solo a sí mismo. Bajo un superusuario las políticas son inertes
+# por diseño de PostgreSQL, así que ese caso se informa en lugar de aprobarse.
+CLAVE_ROL = "prueba_rls_" + str(empresa_a["id"])
+try:
+    db.crear_rol_de_aplicacion("marcacion_prueba_rls", CLAVE_ROL)
+    restringido = Database(dict(db.config, user="marcacion_prueba_rls",
+                                password=CLAVE_ROL))
+    restringido.connect()
+except Exception as error:  # sin permiso para crear roles
+    restringido = None
+    print(f"  (no verificable: {str(error).splitlines()[0][:80]})")
+
+if restringido is not None:
+    estado = restringido.rls_efectiva()
+    verificar("las políticas alcanzan al rol del servicio",
+              estado["activa"], f"{estado['politicas']} políticas · rol {estado['rol']}")
+
+    restringido.empresa_id = empresa_a["id"]
+    crudo = restringido._execute(
+        "SELECT id, empresa_id FROM users", fetch="all"
+    )
+    verificar("una consulta sin WHERE solo ve la empresa de la sesión",
+              crudo and all(f["empresa_id"] == empresa_a["id"] for f in crudo),
+              f"{len(crudo)} filas")
+
+    restringido.empresa_id = empresa_b["id"]
+    crudo = restringido._execute(
+        "SELECT id, empresa_id FROM marcajes", fetch="all"
+    )
+    verificar("y al cambiar de empresa, ve la otra y solo la otra",
+              all(f["empresa_id"] == empresa_b["id"] for f in crudo))
+
+    restringido.empresa_id = None
+    sin_contexto = restringido._execute("SELECT id FROM users", fetch="all")
+    verificar("sin empresa declarada, la base no devuelve ninguna fila",
+              sin_contexto == [], f"{len(sin_contexto)} filas")
+
+    # Escribir en la empresa ajena tampoco: la política también gobierna el
+    # INSERT, así que ni siquiera hace falta que la consulta esté bien escrita.
+    restringido.empresa_id = empresa_a["id"]
+    try:
+        restringido._execute(
+            """
+            INSERT INTO alertas (tipo, severidad, mensaje, detalle, empresa_id)
+            VALUES ('intruso', 'baja', 'ajena', '', %s)
+            """,
+            (empresa_b["id"],),
+        )
+        restringido.connection.commit()
+        verificar("insertar una fila en la empresa ajena se rechaza", False)
+    except Exception as error:
+        restringido.connection.rollback()
+        verificar("insertar una fila en la empresa ajena se rechaza", True,
+                  type(error).__name__)
+
+    # El login tiene que seguir funcionando: cruza empresas a propósito y por
+    # eso vive en una función con los privilegios de su dueño.
+    restringido.empresa_id = None
+    entra = auth.authenticate(restringido, CEDULA, "clave-norte")
+    verificar("el login sigue funcionando con el rol restringido",
+              entra is not None and entra["empresa_id"] == empresa_a["id"],
+              entra["full_name"] if entra else "no entró")
+
+    restringido.cerrar()
+    # Un rol no se puede borrar mientras queden permisos que lo nombren, así
+    # que primero se sueltan los que se le concedieron.
+    db._execute("DROP OWNED BY marcacion_prueba_rls")
+    db._execute("DROP ROLE IF EXISTS marcacion_prueba_rls")
+    db.connection.commit()
+
 # ------------------------------------------------------------- Limpieza
 for empresa in (empresa_a, empresa_b):
     db._execute("DELETE FROM empresas WHERE id = %s", (empresa["id"],))

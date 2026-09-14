@@ -201,7 +201,13 @@ El rediseño de la fase 14 arregló la **jerarquía** pero conservó la **forma*
 
 **Lo que atajó cada capa.** La primera versión del verificador aceptaba un atajo —filtrar por `user_id` parecía suficiente, porque un marcaje pertenece a la empresa de su empleado— hasta que quedó claro que ese id llega por URL: RRHH de un cliente podía editar el legajo de otro probando números. Se quitó el atajo y se acotaron las 56 consultas que dependían de él. El fallo cerrado, apenas encendido, destapó que `generar_pdf_permiso` abría su propia conexión sin empresa. Y el DDL de arrendamiento, que corre en cada arranque, tomaba locks exclusivos incluso sin nada que migrar: ahora pregunta primero al catálogo.
 
-**Cobertura nueva**: `test_multiempresa.py` (34 verificaciones) y `guardia_arrendamiento.py`, que además corre solo en CI. La suite pasó de 19 a 20 conjuntos.
+**La cuarta capa: la base lo impone.** Las tres anteriores viven en el código. Cada tabla de datos de cliente quedó además con una política de seguridad por fila acotada a `app.empresa_id`, que la conexión publica al fijar la empresa. Una consulta sin `WHERE` deja de devolver las filas de todos y pasa a devolver ninguna; sin empresa declarada, tampoco.
+
+Dos obstáculos concretos, los dos resueltos: el login cruza empresas a propósito, así que vive en `credenciales_por_usuario`, una función `SECURITY DEFINER` que devuelve lo mínimo para decidir un acceso; y las políticas son inertes bajo un superusuario, así que `migrate.py rol-app` crea el rol restringido con el que corre el servicio y `migrate.py` dice en cada corrida si el aislamiento está en vigor o no.
+
+Se verificó con el rol restringido y consultas **deliberadamente sin acotar** —es la única forma de saber si la política protege o si el código se protege a sí mismo—, y después corriendo el servidor web completo bajo ese rol con la suite entera en verde.
+
+**Cobertura nueva**: `test_multiempresa.py` (40 verificaciones, seis de ellas contra la base con el rol restringido) y `guardia_arrendamiento.py`, que además corre solo en CI. La suite pasó de 19 a 20 conjuntos.
 
 ## Cómo ejecutar
 
@@ -280,7 +286,9 @@ Las dos primeras filas son la brecha de mayor valor: el motor horario es lógica
 - **Un atajo de seguridad se evalúa contra el atacante, no contra el flujo feliz.** Filtrar por `user_id` acota correctamente cuando el id viene de una consulta propia; no acota nada cuando viene de una URL que el atacante escribe.
 - **El orden de las preguntas en un login es parte del diseño.** Pedir la empresa antes de la contraseña convierte la pantalla de acceso en un directorio de qué cédulas trabajan en qué cliente. Se busca primero y decide la clave.
 - **Un bus en memoria no lo protege ninguna consulta.** El aislamiento de la base no alcanza para lo que nunca pasa por la base: las alertas en vivo se filtran en el proceso, y una alerta sin empresa no se entrega a nadie.
-- **Una política que no se aplica es peor que no tenerla.** Las políticas RLS de PostgreSQL son inertes bajo un superusuario; dejarlas instaladas sin verificar habría dado una sensación de protección que la instalación no tiene. Se documentó el paso en lugar de simularlo.
+- **Una política que no se aplica es peor que no tenerla.** Las políticas RLS de PostgreSQL son inertes bajo un superusuario. Instalarlas no alcanza: hay que crear el rol restringido, correr el servicio con él, y que la herramienta de migración diga en voz alta cuál de los dos casos es el actual.
+- **Una defensa se prueba atacándola, no leyéndola.** Comprobar que la política existe en `pg_policies` no dice nada. Lo que lo dice es conectar con el rol restringido y lanzar un `SELECT` sin `WHERE`.
+- **Una capa de seguridad que rompe la aplicación no se va a activar.** Por eso el servidor completo se corrió bajo el rol restringido con la suite entera: hizo falta separar `initialize()` de `migrar()`, porque el rol que atiende tráfico no puede —ni debe— alterar tablas.
 
 ## Enlaces
 

@@ -145,7 +145,33 @@ class Database:
     ) -> None:
         self.config: Dict[str, str] = config or load_config()
         self.connection: Optional[psycopg2.connection] = None
-        self.empresa_id: Optional[int] = empresa_id
+        self._empresa_id: Optional[int] = empresa_id
+
+    @property
+    def empresa_id(self) -> Optional[int]:
+        """Empresa a la que apunta la conexión, o ``None`` si no se fijó."""
+        return self._empresa_id
+
+    @empresa_id.setter
+    def empresa_id(self, valor: Optional[int]) -> None:
+        """Fija la empresa y la propaga a la sesión de PostgreSQL.
+
+        El valor no se queda en Python: viaja a ``app.empresa_id``, que es lo
+        que leen las políticas de seguridad por fila. Así el aislamiento no
+        depende solo de que la consulta esté bien escrita.
+        """
+        self._empresa_id = valor
+        self._publicar_empresa()
+
+    def _publicar_empresa(self) -> None:
+        """Deja la empresa activa en el contexto de la sesión de la base."""
+        if self.connection is None or self.connection.closed:
+            return
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT set_config('app.empresa_id', %s, false)",
+                ("" if self._empresa_id is None else str(self._empresa_id),),
+            )
 
     @property
     def empresa(self) -> int:
@@ -155,17 +181,18 @@ class Database:
         fijó, la alternativa sería devolver las filas de todos los clientes,
         así que el acceso falla en lugar de ampliarse.
         """
-        if self.empresa_id is None:
+        if self._empresa_id is None:
             raise SinEmpresa(
                 "La conexión no tiene empresa activa. Fijala con "
                 "`db.empresa_id` antes de leer o escribir datos de cliente."
             )
-        return self.empresa_id
+        return self._empresa_id
 
     def connect(self) -> psycopg2.connection:
-        """Abre y retorna la conexión con la base configurada."""
+        """Abre la conexión y le publica la empresa activa, si ya la tiene."""
         self.connection = psycopg2.connect(client_encoding="UTF8", **self.config)
         self.connection.autocommit = False
+        self._publicar_empresa()
         return self.connection
 
     def cerrar(self) -> None:
@@ -220,9 +247,27 @@ class Database:
             ) from error
 
     def initialize(self) -> None:
-        """Garantiza la base de datos y construye todo el esquema relacional."""
+        """Conecta y, solo si hace falta, construye el esquema relacional.
+
+        Sobre una base ya migrada no se toca el esquema. Hay dos motivos y
+        los dos importan: el DDL pide locks exclusivos aunque no tenga nada
+        que hacer, y el rol con el que corre el servicio no tiene —ni debe
+        tener— permiso para alterar tablas.
+
+        La migración explícita vive en ``migrar()``, que es lo que ejecuta
+        ``migrate.py`` como paso de despliegue.
+        """
         self.ensure_database()
         self.connect()
+        if self.esquema_listo() and self._adoptar_empresa_base():
+            return
+        self.migrar()
+
+    def migrar(self) -> None:
+        """Aplica el esquema completo. Paso de despliegue, no de arranque."""
+        if self.connection is None or self.connection.closed:
+            self.ensure_database()
+            self.connect()
         cursor = self.connection.cursor()
         # Una petición de lock exclusivo en espera bloquea también a los
         # lectores que llegan detrás. Si otra sesión mantiene una transacción
@@ -630,6 +675,7 @@ class Database:
             )
         empresa_base = self._aplicar_arrendamiento(cursor)
         self._sembrar_turno_predeterminado(cursor, empresa_base)
+        self._aplicar_politicas_rls(cursor)
         self.connection.commit()
         self._adoptar_empresa_base()
 
@@ -765,6 +811,136 @@ class Database:
             (turno_id, tramo.entrada, tramo.salida, empresa_id),
         )
 
+    def _aplicar_politicas_rls(self, cursor: Any) -> None:
+        """Hace que PostgreSQL imponga el aislamiento, no solo la aplicación.
+
+        Cada tabla de datos de cliente queda con una política que la acota a
+        la empresa publicada en ``app.empresa_id``. Con eso, una consulta a
+        la que se le olvidó el ``WHERE`` no devuelve las filas de los demás
+        clientes: devuelve ninguna.
+
+        El contexto vacío se compara contra ``NULL``, así que una conexión
+        que no declaró su empresa no ve nada. Es la misma postura que toma la
+        aplicación con ``SinEmpresa``, sostenida un piso más abajo.
+
+        ``FORCE`` extiende la política al dueño de las tablas. A un
+        superusuario no lo alcanza —PostgreSQL lo exceptúa siempre—, y por eso
+        el proceso que atiende tráfico tiene que conectar con el rol
+        restringido que crea ``migrate.py rol-app``.
+        """
+        contexto = "NULLIF(current_setting('app.empresa_id', true), '')::int"
+        for tabla in TABLAS_DE_EMPRESA:
+            cursor.execute(f"ALTER TABLE {tabla} ENABLE ROW LEVEL SECURITY")
+            cursor.execute(f"ALTER TABLE {tabla} FORCE ROW LEVEL SECURITY")
+            cursor.execute(f"DROP POLICY IF EXISTS {tabla}_empresa ON {tabla}")
+            cursor.execute(
+                f"""
+                CREATE POLICY {tabla}_empresa ON {tabla}
+                USING (empresa_id = {contexto})
+                WITH CHECK (empresa_id = {contexto})
+                """
+            )
+
+        # La búsqueda de credenciales es la única lectura que cruza empresas
+        # a propósito: la pantalla de acceso todavía no sabe de qué cliente es
+        # quien escribe. Va en una función con los privilegios de su dueño,
+        # que es el camino que PostgreSQL ofrece para una excepción acotada,
+        # y devuelve lo mínimo para decidir el login: ni el nombre, ni el
+        # rol, ni el salario. El resto se lee ya acotado a la empresa que
+        # resultó ganadora.
+        cursor.execute(
+            """
+            CREATE OR REPLACE FUNCTION credenciales_por_usuario(p_username text)
+            RETURNS TABLE (
+                id integer,
+                empresa_id integer,
+                password_hash text,
+                activo boolean,
+                empresa_slug text,
+                empresa_activa boolean
+            )
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path = public
+            AS $fn$
+                SELECT u.id, u.empresa_id, u.password_hash::text, u.activo,
+                       e.slug::text, e.activa
+                FROM users u
+                JOIN empresas e ON e.id = u.empresa_id
+                WHERE lower(u.username) = lower(p_username)
+                ORDER BY u.id
+            $fn$
+            """
+        )
+
+    def rls_efectiva(self) -> Dict[str, Any]:
+        """Informa si las políticas de la base realmente alcanzan a esta conexión.
+
+        Un superusuario las esquiva por diseño de PostgreSQL. Decirlo es
+        parte del control: una política instalada pero inerte se parece
+        demasiado a una que protege.
+        """
+        fila = self._execute(
+            """
+            SELECT rolsuper, rolbypassrls, current_user AS rol
+            FROM pg_roles WHERE rolname = current_user
+            """,
+            fetch="one",
+        )
+        politicas = self._execute(
+            "SELECT COUNT(*) AS total FROM pg_policies WHERE schemaname = 'public'",
+            fetch="one",
+        )
+        esquiva = bool(fila["rolsuper"] or fila["rolbypassrls"])
+        return {
+            "rol": fila["rol"],
+            "politicas": int(politicas["total"]),
+            "esquiva": esquiva,
+            "activa": not esquiva and int(politicas["total"]) > 0,
+        }
+
+    def crear_rol_de_aplicacion(self, nombre: str, password: str) -> None:
+        """Crea (o actualiza) el rol restringido con el que corre el servicio.
+
+        Es un rol sin DDL y sin ``BYPASSRLS``: puede leer y escribir los datos
+        de la empresa que declare en su sesión, y nada más. El esquema lo
+        sigue aplicando el rol administrador desde ``migrate.py``.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (nombre,))
+        existe = cursor.fetchone() is not None
+        verbo = "ALTER" if existe else "CREATE"
+        cursor.execute(
+            f'{verbo} ROLE "{nombre}" LOGIN PASSWORD %s '
+            f"NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS",
+            (password,),
+        )
+        base = self.config["dbname"]
+        cursor.execute(f'GRANT CONNECT ON DATABASE "{base}" TO "{nombre}"')
+        cursor.execute(f'GRANT USAGE ON SCHEMA public TO "{nombre}"')
+        cursor.execute(
+            f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES "
+            f'IN SCHEMA public TO "{nombre}"'
+        )
+        cursor.execute(
+            f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "{nombre}"'
+        )
+        cursor.execute(
+            f'GRANT EXECUTE ON FUNCTION credenciales_por_usuario(text) TO "{nombre}"'
+        )
+        # Las tablas que se creen después también quedan alcanzadas, para que
+        # agregar una no obligue a acordarse de repetir los permisos.
+        cursor.execute(
+            f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+            f'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{nombre}"'
+        )
+        cursor.execute(
+            f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+            f'GRANT USAGE, SELECT ON SEQUENCES TO "{nombre}"'
+        )
+        self.connection.commit()
+
     # --- Empresas ----------------------------------------------------------
 
     def usar_empresa(self, referencia: Any) -> Dict[str, Any]:
@@ -860,28 +1036,26 @@ class Database:
     def buscar_credenciales(self, username: str) -> List[Dict[str, Any]]:
         """Candidatos de login para una cédula, en todas las empresas.
 
-        Es la única consulta que cruza empresas a propósito, y no puede ser de
+        Es la única lectura que cruza empresas a propósito, y no puede ser de
         otra forma: la pantalla de acceso todavía no sabe de qué cliente es
-        quien escribe. Devuelve los candidatos sin decidir nada; quién entra
-        lo resuelve ``auth.authenticate`` comparando la contraseña, de modo
-        que nadie pueda averiguar en qué empresas existe una cédula sin tener
-        además su clave.
+        quien escribe. Por eso vive en ``credenciales_por_usuario``, una
+        función con los privilegios de su dueño: es la excepción acotada que
+        PostgreSQL ofrece para que las políticas por fila no la bloqueen, y
+        deja la excepción escrita en el esquema en lugar de repartida por el
+        código.
+
+        Devuelve lo mínimo para decidir un login —ni el nombre, ni el rol, ni
+        el salario— y no decide nada: quién entra lo resuelve
+        ``auth.authenticate`` comparando la contraseña, de modo que nadie
+        pueda averiguar en qué empresas existe una cédula sin tener su clave.
         """
         return self._execute(
-            """
-            SELECT u.*, r.nombre AS role_name, e.slug AS empresa_slug,
-                   e.razon_social AS empresa_nombre, e.activa AS empresa_activa
-            FROM users u
-            JOIN roles r ON r.id = u.role_id
-            JOIN empresas e ON e.id = u.empresa_id
-            WHERE lower(u.username) = lower(%s)
-            ORDER BY u.id
-            """,
+            "SELECT * FROM credenciales_por_usuario(%s)",
             (username,),
             fetch="all",
         )
 
-    def _adoptar_empresa_base(self) -> None:
+    def _adoptar_empresa_base(self) -> bool:
         """Deja la conexión apuntando a la empresa que vino con la instalación.
 
         Las herramientas que aplican el esquema —migraciones, siembra de
@@ -895,6 +1069,7 @@ class Database:
         )
         if fila:
             self.empresa_id = fila["id"]
+        return fila is not None
 
     def esquema_listo(self) -> bool:
         """Indica si las tablas base ya existen sobre la conexión activa.

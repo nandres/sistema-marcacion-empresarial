@@ -36,8 +36,10 @@ TABLAS_DE_EMPRESA: Set[str] = {
 }
 
 EXCEPCIONES: Dict[str, str] = {
-    "initialize": "DDL: crea el esquema antes de que exista ninguna empresa.",
-    "_crear_esquema": "DDL puro.",
+    "initialize": "Conecta y delega; no consulta datos de cliente.",
+    "migrar": "DDL: crea el esquema antes de que exista ninguna empresa.",
+    "_aplicar_politicas_rls": "DDL de las políticas por fila.",
+    "crear_rol_de_aplicacion": "Concede permisos; no lee datos de cliente.",
     "_aplicar_arrendamiento": "Es la migración que instala el arrendamiento.",
     "_sembrar_turno_predeterminado": "Recibe la empresa como parámetro explícito.",
     "buscar_credenciales": "Búsqueda de login: es la única que cruza empresas a propósito.",
