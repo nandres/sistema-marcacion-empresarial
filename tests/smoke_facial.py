@@ -91,9 +91,56 @@ verificar("con biometría obligatoria la marca se bloquea", not estricta.permiti
           estricta.motivo)
 os.environ.pop("BIOMETRIA_OBLIGATORIA", None)
 
+# 8) Prueba de vida: una foto quieta frente a la cámara no pasa el desafío.
+# La cascada Haar no encuentra rostros en imágenes sintéticas, así que se
+# sustituye la detección por trayectorias conocidas: lo que se fija acá es el
+# criterio de decisión, no la detección, que ya cubren los puntos anteriores.
+trayectoria_real = facial._trayectoria
+cambio_real = facial._cambio_medio
+cuadros = [np.full((480, 640, 3), 100, dtype=np.uint8)] * 10
+
+
+def simular(camino, cambio):
+    facial._trayectoria = lambda _: camino
+    facial._cambio_medio = lambda _: cambio
+
+
+simular([(100.0, 100.0, 180.0)] * 8, 0.4)
+quieta = facial.prueba_de_vida(cuadros, facial.GIRAR_DERECHA)
+verificar("una foto quieta no supera la prueba de vida",
+          quieta.estado == facial.SUPLANTADA, quieta.detalle)
+verificar("y la suplantación bloquea la marca",
+          not facial.decidir(quieta).permitir)
+verificar("se trata como fraude, no como falta de datos", quieta.rechazada)
+
+simular([(100.0 + i * 4, 100.0, 180.0) for i in range(8)], 7.5)
+viva = facial.prueba_de_vida(cuadros, facial.GIRAR_DERECHA)
+verificar("un rostro que reacciona al pedido sí la supera",
+          viva.verificada, viva.detalle)
+
+simular([(100.0, 100.0, 160.0 + i * 5) for i in range(8)], 6.0)
+verificar("acercarse cumple el desafío de acercarse",
+          facial.prueba_de_vida(cuadros, facial.ACERCARSE).verificada)
+verificar("pero no el de girar: el gesto pedido es el que cuenta",
+          facial.prueba_de_vida(cuadros, facial.GIRAR_DERECHA).estado
+          == facial.SUPLANTADA)
+
+simular([(100.0, 100.0, 180.0)] * 2, 8.0)
+escasa = facial.prueba_de_vida(cuadros, facial.ACERCARSE)
+verificar("con pocos cuadros no se decide: no verificable",
+          escasa.estado == facial.NO_VERIFICABLE, escasa.detalle)
+
+facial._trayectoria = trayectoria_real
+facial._cambio_medio = cambio_real
+
+verificar("el desafío se sortea en cada marcación",
+          len({facial.desafio_al_azar() for _ in range(40)}) > 1)
+verificar("y la prueba de vida viene apagada por defecto",
+          not facial.con_prueba_de_vida())
+
 db.cerrar()
 print()
 if fallos:
     print(f"SMOKE FACIAL: {fallos} problema(s)")
     raise SystemExit(1)
-print("SMOKE FACIAL OK · tres estados y política verificados")
+print("SMOKE FACIAL OK · estados, política y prueba de vida verificados")

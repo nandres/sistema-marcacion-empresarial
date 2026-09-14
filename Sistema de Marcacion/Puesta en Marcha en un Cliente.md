@@ -11,7 +11,7 @@ Cuatro datos condicionan todo lo demás y conviene tenerlos antes de tocar un se
 | ¿Qué turnos tiene la empresa? | *Gestión → Turnos* | Las tardanzas se miden contra la hora equivocada |
 | ¿Hay pasantes o solo funcionarios? | `tipo_vinculo` de cada legajo | Se aplica el reglamento que no corresponde (Res. 3028/2024 vs 1307/2010) |
 | ¿Desde cuándo trabaja cada persona? | `fecha_ingreso` del legajo | Vacaciones y aguinaldo mal liquidados |
-| ¿Va a usar reconocimiento facial? | `BIOMETRIA_OBLIGATORIA` | Ver más abajo |
+| ¿Va a usar reconocimiento facial? | `BIOMETRIA_OBLIGATORIA` y `BIOMETRIA_PRUEBA_VIDA` | Ver más abajo |
 
 El `.env` conserva `JORNADA_INICIO` para sembrar el turno inicial de la instalación. Es un valor de arranque, no la configuración: a partir de ahí los horarios se administran desde la pantalla de turnos (ver [[Turnos y Rotación de Horarios]]).
 
@@ -89,6 +89,8 @@ El orden importa porque cada paso depende del anterior:
 
 Encenderla con la plantilla a medio cargar deja gente sin poder marcar.
 
+`BIOMETRIA_PRUEBA_VIDA` es aparte y también viene apagada. Encendida, el kiosco sortea un gesto —acercarse, girar— y lo pide antes de capturar, de modo que una foto sostenida frente a la cámara no pase. **Avisale a la plantilla antes de encenderla**: cambia lo que hay que hacer para marcar, y un kiosco que de golpe pide algo que nadie explicó genera una cola de gente confundida.
+
 ## Operación diaria
 
 | Situación | Quién la resuelve | Dónde |
@@ -111,12 +113,12 @@ Decirlo por adelantado evita una venta mal hecha.
 
 | Falta | Consecuencia | Detalle |
 | --- | --- | --- |
-| **Prueba de vida en el reconocimiento facial** | Una foto en la pantalla de un celular pasa la verificación | P1-2, parte de fondo |
+| **Prueba de vida a prueba de video** | El gesto que pide el kiosco deja afuera una foto quieta, pero no a quien mueva el teléfono siguiendo la consigna. Lo cierra una cámara con infrarrojo o un modelo anti-suplantación | P1-2b |
 | **Bus de alertas fuera del proceso** | Con varios workers, una alerta en vivo llega solo a los clientes conectados a ese worker | P3-4 |
 | **Pool de conexiones** | Cada petición abre y cierra su conexión; irrelevante para una empresa, relevante para muchas | — |
 | **Calendario de rotación automática** | La rotación semana A / semana B se carga a mano, tramo por tramo | [[Turnos y Rotación de Horarios]] |
 
-Lo primero de esa lista es lo que más se va a pedir: **prueba de vida** en el reconocimiento facial. Sin ella, la biometría disuade pero no prueba.
+Lo primero de esa lista es lo que más se va a pedir: el **bus de alertas fuera del proceso**, porque con varios workers RRHH pierde tres de cada cuatro avisos en vivo sin enterarse.
 
 ## Verificación post-instalación
 

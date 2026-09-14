@@ -315,6 +315,23 @@ Tampoco hay política de retención: la foto sobrevive a la baja del empleado.
 
 Sigue pendiente lo de fondo del reconocimiento: LBPH no tiene prueba de vida y una foto en la pantalla de un celular pasa la verificación.
 
+### P1-2b · Sin prueba de vida, una foto pasa el control facial ⚠️ mitigado
+
+> Mitigado el 2026-09-14. No cerrado: ver el límite al final.
+
+El reconocimiento comparaba un rostro contra la foto de referencia y nada más. Una foto impresa, o la pantalla de un teléfono con la cara del compañero, pasaba el control: es exactamente lo que el control existe para impedir.
+
+**Mitigación aplicada**: con `BIOMETRIA_PRUEBA_VIDA` encendida, el kiosco **sortea un gesto** —acercarse, girar a un lado— y lo pide antes de capturar. La secuencia tiene que mostrar ese gesto: que el rostro se desplace o cambie de tamaño, y que la imagen varíe entre cuadros. Una foto quieta no hace ninguna de las dos cosas, y el veredicto es `Suplantada`, que se trata como fraude y bloquea.
+
+El gesto se sortea en cada marcación a propósito: uno fijo se graba una vez en video y se reproduce siempre.
+
+El orden también importa. Si la prueba de vida no pasa, la identidad **no se evalúa**: que la cara sea la correcta es justamente lo que una foto garantiza.
+
+> [!warning] Es un disuasivo, no una prueba
+> Quien mueva el teléfono siguiendo la consigna pasa igual. Cerrar el hueco de verdad pide una cámara con infrarrojo o profundidad, o un modelo de anti-suplantación entrenado: hardware y datos que este sistema no tiene. La cascada de ojos, que permitiría exigir un parpadeo, dejó de venir con OpenCV 5 y traerla al repositorio es una decisión de dependencias que corresponde tomar aparte.
+>
+> Lo que sí hace es dejar afuera el ataque habitual —una foto sostenida quieta frente a la cámara— y obligar a que el intento sea deliberado en lugar de trivial.
+
 ### P3-2 · El token viaja en la query string ✅ corregido
 
 `src/web_server.py:465` y `:726` — la descarga de PDF pasa el JWT como parámetro de URL:

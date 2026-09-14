@@ -122,6 +122,11 @@ EMPRESA_NOMBRE=Empresa
 # apagada: una plantilla recién migrada no tiene fotos cargadas.
 BIOMETRIA_OBLIGATORIA=0
 
+# Pide un gesto al azar (acercarse, girar) antes de aceptar la marca, para
+# que una foto sostenida frente a la cámara no pase. Viene apagada porque
+# cambia lo que la persona tiene que hacer para marcar.
+BIOMETRIA_PRUEBA_VIDA=0
+
 # Cifra las plantillas faciales en reposo (Ley 6534/2020). Si se pierde,
 # las fotos registradas quedan ilegibles y hay que volver a tomarlas.
 # Generar con:

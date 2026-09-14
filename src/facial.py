@@ -20,6 +20,7 @@ Requiere ``opencv-python`` + ``opencv-contrib-python`` (cv2.face).
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
@@ -46,8 +47,12 @@ class Resultado:
 
     @property
     def rechazada(self) -> bool:
-        """Hubo identidad comprobable y no coincidió: es fraude, no falta de datos."""
-        return self.estado == RECHAZADA
+        """Hubo identidad comprobable y no coincidió: es fraude, no falta de datos.
+
+        Una suplantación por foto también lo es: la cara podía ser la correcta,
+        pero quien la puso delante de la cámara no estaba ahí.
+        """
+        return self.estado in (RECHAZADA, SUPLANTADA)
 
     def marca(self) -> str:
         """Etiqueta que viaja con el marcaje en ``marcajes.verificacion_facial``."""
@@ -73,7 +78,23 @@ def obligatoria() -> bool:
     pero queda registrada como no verificada y Recursos Humanos recibe el
     aviso — que es lo contrario de darla por buena en silencio.
     """
-    return os.getenv("BIOMETRIA_OBLIGATORIA", "").strip().lower() in (
+    return _encendida("BIOMETRIA_OBLIGATORIA")
+
+
+def con_prueba_de_vida() -> bool:
+    """Indica si el kiosco pide un gesto antes de aceptar la marca.
+
+    Se controla con ``BIOMETRIA_PRUEBA_VIDA`` y viene desactivada, porque
+    cambia lo que la persona tiene que hacer para marcar: encenderla sin
+    avisar deja a la plantilla frente a un kiosco que le pide algo que nadie
+    le explicó.
+    """
+    return _encendida("BIOMETRIA_PRUEBA_VIDA")
+
+
+def _encendida(variable: str) -> bool:
+    """Lee un interruptor del entorno tolerando cómo lo escriba cada quien."""
+    return os.getenv(variable, "").strip().lower() in (
         "1", "true", "si", "sí", "on",
     )
 
@@ -270,3 +291,149 @@ def validar(db: Any, user_id: int, frame_bgr) -> Resultado:
         f"El rostro no coincide con la foto de la cédula "
         f"(confianza {confianza:.0f}).",
     )
+
+
+# --- Prueba de vida ---------------------------------------------------------
+
+SUPLANTADA = "Suplantada"
+"""La cara coincide pero no dio señales de estar viva: es una foto."""
+
+MOVIMIENTO_MINIMO: float = 0.06
+"""Cuánto tiene que desplazarse el rostro, en anchos de cara, para aceptar el
+desafío. Un 6 % son unos diez píxeles en una cara de 180: por debajo de eso
+está el temblor de una mano sosteniendo un teléfono."""
+
+CAMBIO_MINIMO: float = 3.0
+"""Diferencia media de píxeles entre cuadros dentro del rostro. Una imagen
+plana —impresa o en pantalla— apenas varía; una cara viva cambia siempre."""
+
+CUADROS_MINIMOS: int = 6
+"""Cuadros con rostro que hacen falta para tener algo que comparar."""
+
+ACERCARSE = "acercarse"
+ALEJARSE = "alejarse"
+GIRAR_IZQUIERDA = "girar a la izquierda"
+GIRAR_DERECHA = "girar a la derecha"
+
+DESAFIOS: Tuple[str, ...] = (ACERCARSE, GIRAR_IZQUIERDA, GIRAR_DERECHA)
+
+
+def desafio_al_azar() -> str:
+    """Elige el gesto que el kiosco va a pedir.
+
+    Se sortea en cada marcación: un desafío fijo se graba una vez en video y
+    se reproduce siempre, que es exactamente lo que hay que evitar.
+    """
+    return secrets.choice(DESAFIOS)
+
+
+def _trayectoria(cuadros: List[Any]) -> List[Tuple[float, float, float]]:
+    """Centro y tamaño del rostro en cada cuadro donde se lo detecta."""
+    camino: List[Tuple[float, float, float]] = []
+    for cuadro in cuadros:
+        rostros = _detectar_rostros(cuadro)
+        if not rostros:
+            continue
+        x, y, w, h = max(rostros, key=lambda r: r[2] * r[3])
+        camino.append((x + w / 2.0, y + h / 2.0, float(w)))
+    return camino
+
+
+def _cambio_medio(cuadros: List[Any]) -> float:
+    """Diferencia media entre cuadros consecutivos dentro del rostro."""
+    import cv2
+
+    grises = []
+    for cuadro in cuadros:
+        rostros = _detectar_rostros(cuadro)
+        if not rostros:
+            continue
+        grises.append(_recortar_rostro(cuadro, max(rostros, key=lambda r: r[2] * r[3])))
+    if len(grises) < 2:
+        return 0.0
+    diferencias = [
+        float(np.mean(cv2.absdiff(anterior, siguiente)))
+        for anterior, siguiente in zip(grises, grises[1:])
+    ]
+    return float(np.mean(diferencias)) if diferencias else 0.0
+
+
+def prueba_de_vida(cuadros: List[Any], desafio: str) -> Resultado:
+    """Comprueba que frente a la cámara haya una persona y no una imagen.
+
+    El kiosco pide un gesto sorteado y mira si la secuencia lo muestra: el
+    rostro tiene que desplazarse —o cambiar de tamaño, si el gesto fue
+    acercarse— y además variar entre cuadros. Una foto impresa o un teléfono
+    con una foto en pantalla no hacen ninguna de las dos cosas.
+
+    **Es un disuasivo, no una prueba.** Quien mueva el teléfono siguiendo la
+    consigna pasa igual. Cerrar el hueco de verdad pide una cámara con
+    infrarrojo o profundidad, o un modelo de anti-suplantación entrenado, que
+    es hardware y datos que este sistema no tiene. Lo que sí hace es dejar
+    afuera el ataque habitual: una foto sostenida quieta frente a la cámara.
+
+    Returns:
+        ``VERIFICADA`` si la secuencia muestra el gesto; ``SUPLANTADA`` si hay
+        un rostro que no se mueve; ``NO_VERIFICABLE`` si no hubo cuadros
+        suficientes para decidir.
+    """
+    if not disponible():
+        return Resultado(NO_VERIFICABLE, "El motor de visión no está instalado.")
+    camino = _trayectoria(cuadros or [])
+    if len(camino) < CUADROS_MINIMOS:
+        return Resultado(
+            NO_VERIFICABLE,
+            f"Solo {len(camino)} cuadro(s) con rostro: se necesitan "
+            f"{CUADROS_MINIMOS} para evaluar el movimiento.",
+        )
+
+    ancho = max(c[2] for c in camino) or 1.0
+    xs = [c[0] for c in camino]
+    anchos = [c[2] for c in camino]
+    desplazamiento = (max(xs) - min(xs)) / ancho
+    acercamiento = (max(anchos) - min(anchos)) / ancho
+    cambio = _cambio_medio(cuadros)
+
+    if desafio == ACERCARSE:
+        cumplio = acercamiento >= MOVIMIENTO_MINIMO
+        medida = f"acercamiento {acercamiento:.0%}"
+    else:
+        cumplio = desplazamiento >= MOVIMIENTO_MINIMO
+        medida = f"desplazamiento {desplazamiento:.0%}"
+
+    if cumplio and cambio >= CAMBIO_MINIMO:
+        return Resultado(
+            VERIFICADA,
+            f"Prueba de vida superada: {medida}, variación {cambio:.1f}.",
+        )
+    return Resultado(
+        SUPLANTADA,
+        f"El rostro no reaccionó al pedido de {desafio}: {medida}, "
+        f"variación {cambio:.1f}. Puede ser una foto frente a la cámara.",
+    )
+
+
+def capturar_secuencia(
+    segundos: float = 2.5, camara: int = 0
+) -> List[Any]:
+    """Toma una ráfaga de cuadros para evaluar el gesto pedido.
+
+    Devuelve todos los cuadros y no el mejor: la prueba de vida necesita la
+    secuencia entera, que es precisamente el dato que una foto no tiene.
+    """
+    if not disponible():
+        return []
+    import cv2
+
+    captura = cv2.VideoCapture(camara)
+    if not captura.isOpened():
+        return []
+    cuadros: List[Any] = []
+    try:
+        for _ in range(max(CUADROS_MINIMOS * 2, int(segundos * 10))):
+            ok, cuadro = captura.read()
+            if ok:
+                cuadros.append(cuadro)
+    finally:
+        captura.release()
+    return cuadros

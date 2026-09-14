@@ -911,6 +911,27 @@ class MarcacionApp(ctk.CTk):
             notifications.enviar_correo_ticket(user["email"], ticket)
         self._mostrar_panel_exito(tipo, ticket)
 
+    def _verificar_con_gesto(self, user: Dict) -> facial.Resultado:
+        """Pide un gesto, captura la secuencia y recién ahí compara la identidad.
+
+        El orden importa: si la prueba de vida no pasa, la identidad no se
+        evalúa. Que la cara sea la correcta es justamente lo que una foto
+        garantiza, así que confirmarlo primero no aporta nada.
+        """
+        desafio = facial.desafio_al_azar()
+        self._mostrar_estado(
+            f"Mirá la cámara y {desafio}…", t("ACCENTO")
+        )
+        self.update()
+        cuadros = facial.capturar_secuencia()
+        vida = facial.prueba_de_vida(cuadros, desafio)
+        if not vida.verificada:
+            return vida
+        conmarca = next(
+            (c for c in reversed(cuadros) if facial._detectar_rostros(c)), None
+        )
+        return facial.validar(self.db, user["id"], conmarca)
+
     def _verificar_rostro(self, user: Dict) -> facial.Decision:
         """Corre el control biométrico y traduce el veredicto en una decisión.
 
@@ -922,6 +943,8 @@ class MarcacionApp(ctk.CTk):
             resultado = facial.Resultado(
                 facial.NO_VERIFICABLE, "El motor de visión no está instalado."
             )
+        elif facial.con_prueba_de_vida():
+            resultado = self._verificar_con_gesto(user)
         else:
             resultado = facial.validar(
                 self.db, user["id"], facial.capturar(segundos=1.0)
