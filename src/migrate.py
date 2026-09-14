@@ -77,14 +77,29 @@ def informar_aislamiento() -> None:
 def crear_rol_app() -> int:
     """Crea el rol restringido con el que debería correr el servicio."""
     nombre = os.getenv("DB_APP_USER", ROL_APLICACION)
-    password = os.getenv("DB_APP_PASSWORD") or secrets.token_urlsafe(24)
     db = Database()
     try:
         db.connect()
+        existia = db._execute(
+            "SELECT 1 AS hay FROM pg_roles WHERE rolname = %s", (nombre,),
+            fetch="one",
+        )
+        # Sobre un rol que ya está, la contraseña solo se cambia si se pide:
+        # rotarla sola dejaría sin base al servicio que esté corriendo.
+        password = os.getenv("DB_APP_PASSWORD") or (
+            None if existia else secrets.token_urlsafe(24)
+        )
         db.crear_rol_de_aplicacion(nombre, password)
     finally:
         db.cerrar()
     print(f"Rol '{nombre}' listo: sin DDL, sin superusuario, sin BYPASSRLS.")
+    if password is None:
+        print(
+            "El rol ya existía: se repasaron sus permisos y se dejó la "
+            "contraseña como estaba.\n"
+            "Para cambiarla: DB_APP_PASSWORD=... python src/migrate.py rol-app"
+        )
+        return 0
     print("Poné esto en el .env del proceso que atiende tráfico:")
     print(f"  DB_USER={nombre}")
     print(f"  DB_PASSWORD={password}")

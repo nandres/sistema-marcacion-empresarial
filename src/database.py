@@ -900,22 +900,35 @@ class Database:
             "activa": not esquiva and int(politicas["total"]) > 0,
         }
 
-    def crear_rol_de_aplicacion(self, nombre: str, password: str) -> None:
-        """Crea (o actualiza) el rol restringido con el que corre el servicio.
+    def crear_rol_de_aplicacion(
+        self, nombre: str, password: Optional[str] = None
+    ) -> bool:
+        """Crea (o repasa) el rol restringido con el que corre el servicio.
 
         Es un rol sin DDL y sin ``BYPASSRLS``: puede leer y escribir los datos
         de la empresa que declare en su sesión, y nada más. El esquema lo
         sigue aplicando el rol administrador desde ``migrate.py``.
+
+        Sobre un rol que ya existe, ``password`` en ``None`` **no toca la
+        contraseña**. Rotarla sola dejaría sin base al servicio en marcha, y
+        volver a correr una orden de instalación tiene que poder hacerse sin
+        miedo.
+
+        Returns:
+            ``True`` si se fijó una contraseña nueva; ``False`` si solo se
+            repasaron los permisos del rol que ya estaba.
         """
         cursor = self.connection.cursor()
         cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (nombre,))
         existe = cursor.fetchone() is not None
-        verbo = "ALTER" if existe else "CREATE"
-        cursor.execute(
-            f'{verbo} ROLE "{nombre}" LOGIN PASSWORD %s '
-            f"NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS",
-            (password,),
-        )
+        atributos = "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS"
+        if existe and password is None:
+            cursor.execute(f'ALTER ROLE "{nombre}" {atributos}')
+        else:
+            verbo = "ALTER" if existe else "CREATE"
+            cursor.execute(
+                f'{verbo} ROLE "{nombre}" {atributos} PASSWORD %s', (password,)
+            )
         base = self.config["dbname"]
         cursor.execute(f'GRANT CONNECT ON DATABASE "{base}" TO "{nombre}"')
         cursor.execute(f'GRANT USAGE ON SCHEMA public TO "{nombre}"')
@@ -940,6 +953,7 @@ class Database:
             f'GRANT USAGE, SELECT ON SEQUENCES TO "{nombre}"'
         )
         self.connection.commit()
+        return password is not None
 
     # --- Empresas ----------------------------------------------------------
 

@@ -79,16 +79,46 @@ except ValueError as e:
     assert "no aplica" in str(e)
 print("OK artículo por vínculo")
 
-# --- Días: licencia de pasante (2 días) y conteo anual ---
+# --- Días: licencia de pasante y conteo anual ---
 anio_pasado = hoy.replace(year=hoy.year - 1)
 auth.crear_justificacion(db, admin, p2["id"], "Licencia de Pasante", anio_pasado, anio_pasado + timedelta(days=1))
 d2d = disponibilidad(p2)
 assert d2d["Licencia de Pasante"]["usados"] == 0, "no debe contar del año pasado"
-auth.crear_justificacion(db, admin, p2["id"], "Licencia de Pasante", hoy - timedelta(days=2), hoy - timedelta(days=1))
+
+# El Art. 23 se cuenta en días HÁBILES, así que el rango se ancla a un lunes:
+# tomado de otra forma, el resultado dependería del día en que corra la prueba.
+lunes = hoy - timedelta(days=7)
+while lunes.weekday() != 0:
+    lunes -= timedelta(days=1)
+auth.crear_justificacion(db, admin, p2["id"], "Licencia de Pasante", lunes, lunes + timedelta(days=1))
 d2e = disponibilidad(p2)
-assert d2e["Licencia de Pasante"]["usados"] == 2
+assert d2e["Licencia de Pasante"]["usados"] == 2, d2e["Licencia de Pasante"]["usados"]
 assert d2e["Licencia de Pasante"]["restantes"] == 8
 print("OK conteo de días por período")
+
+# Un fin de semana no consume cuota de un artículo definido en días hábiles.
+sabado = lunes + timedelta(days=5)
+auth.crear_justificacion(db, admin, p2["id"], "Licencia de Pasante", sabado, sabado + timedelta(days=1))
+d2f = disponibilidad(p2)
+assert d2f["Licencia de Pasante"]["usados"] == 2, d2f["Licencia de Pasante"]["usados"]
+print("OK sábado y domingo no consumen días hábiles (P3-7)")
+
+# Y un permiso a caballo entre dos años le imputa a cada uno los suyos.
+fin_de_anio = date(hoy.year - 1, 12, 28)
+auth.crear_justificacion(db, admin, p1["id"], "Motivos Particulares",
+                         fin_de_anio, date(hoy.year, 1, 3))
+d1a = disponibilidad(p1)
+assert d1a["Motivos Particulares"]["usados"] == 3, d1a["Motivos Particulares"]["usados"]
+print("OK el permiso entre dos años imputa a cada uno lo suyo (P3-8)")
+
+# P1-6: el rango pedido se valida contra lo que queda, no solo las horas.
+try:
+    auth.crear_justificacion(db, admin, p1["id"], "Motivos Particulares",
+                             hoy - timedelta(days=60), hoy - timedelta(days=1))
+    raise SystemExit("FALLO: emitió 60 días contra una cuota de 5")
+except ValueError as e:
+    assert "quedan" in str(e), str(e)
+print("OK el rango en días se valida contra la cuota (P1-6)")
 
 # --- Funcionario: vacaciones dinámicas + permisos del mes ---
 auth.crear_justificacion(db, admin, p1["id"], "Salidas Personales", hoy, hoy, 2)

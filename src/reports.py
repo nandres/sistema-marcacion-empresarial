@@ -815,12 +815,18 @@ def resumen_empleado(
     antiguedad = reglamento.antiguedad_anios(user, hoy)
     justificaciones = db.list_justificaciones(user["id"])
     tipo_vacaciones = "Vacaciones" if vinculo == "Funcionario" else "Licencia de Pasante"
+    # Los días consumidos los cuenta el catálogo y no este tablero. Tenía su
+    # propia copia —días corridos, imputados al año de la fecha de inicio— y
+    # así la pantalla del empleado mostraba un saldo distinto del que aplicaba
+    # la cuota al momento de aprobar.
+    articulo_vacaciones = reglamento.encontrar_articulo(tipo_vacaciones, vinculo)
     vacaciones_usadas = sum(
-        (j["fecha_fin"] - j["fecha_inicio"]).days + 1
+        reglamento.dias_de_cuota(
+            articulo_vacaciones, j["fecha_inicio"], j["fecha_fin"], hoy
+        )
         for j in justificaciones
         if j["tipo_permiso"] == tipo_vacaciones
-        and j["fecha_inicio"].year == hoy.year
-    )
+    ) if articulo_vacaciones else 0
     permisos_mes = [
         j
         for j in justificaciones

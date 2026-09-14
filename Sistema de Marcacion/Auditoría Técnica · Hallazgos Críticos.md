@@ -210,13 +210,15 @@ Las seis horas trabajadas en domingo (00:00–06:00) se liquidan sin el recargo 
 
 **Corrección**: segmentar el turno por día calendario y aplicar el recargo por tramo, igual que ya se hace con la frontera diurno/nocturno.
 
-### P1-6 · La cuota por días no valida el rango solicitado
+### P1-6 · La cuota por días no valida el rango solicitado ✅ corregido
+
+> Cerrado el 2026-09-14 junto con P3-7 y P3-8: los tres vivían en el mismo cálculo.
 
 `src/auth.py:354` solo compara `horas_usadas` contra `restantes`, y ese camino existe únicamente para permisos medidos en horas. Para los permisos en **días** basta con que `disponible` sea `True`.
 
 "Motivos Particulares" tiene cuota de 5 días al año. Con cero usos, `disponible = True`, y nada impide emitir una justificación del 1 de enero al 31 de diciembre: 365 días de una sola vez. La cuota recién bloquea el **siguiente** intento.
 
-**Corrección**: calcular los días que consume el rango y validarlos contra `restantes` antes de insertar, con la misma lógica que ya existe para horas.
+**Corrección aplicada**: `reglamento.dias_de_cuota` calcula lo que consume un rango y `crear_justificacion` lo valida contra lo que queda, igual que ya hacía con las horas. El camino de autoservicio ya lo validaba; el que faltaba era la carga directa de RRHH, donde alcanzaba con tipear mal una fecha de fin.
 
 ---
 
@@ -357,13 +359,19 @@ El día que se migre la plantilla real, **todos** los empleados nacen con antig�
 
 Falta el campo `fecha_ingreso`, que es un dato de negocio independiente de cuándo se creó la fila.
 
-### P3-7 · Días corridos donde el reglamento dice hábiles
+### P3-7 · Días corridos donde el reglamento dice hábiles ✅ corregido
 
-`reglamento._usados` (línea 498) computa `(fecha_fin - fecha_inicio).days + 1` para todos los permisos por días. Pero el catálogo define varios artículos en **días hábiles**: Art. 23 de pasantes ("diez (10) días hábiles") y Fuerza Mayor ("5 días hábiles al año"). Una licencia que cruza un fin de semana consume dos días de cuota que el reglamento no consume.
+`reglamento._usados` computaba `(fecha_fin - fecha_inicio).days + 1` para todos los permisos por días. Pero el catálogo define varios artículos en **días hábiles**: Art. 23 de pasantes ("diez (10) días hábiles") y Fuerza Mayor ("5 días hábiles al año"). Una licencia que cruzaba un fin de semana consumía dos días de cuota que el reglamento no consume.
 
-### P3-8 · Imputación de cuota por fecha de inicio
+**Corrección aplicada**: esos dos artículos llevan la marca `habiles` en el catálogo y `dias_de_cuota` descuenta sábados, domingos y feriados. El calendario sale de `clock_engine`, importado dentro de la función porque el módulo depende de `database`, que depende del catálogo.
 
-`reglamento._en_periodo` (línea 477) imputa el permiso completo al período de su `fecha_inicio`. Una licencia del 28 de diciembre al 10 de enero descuenta trece días del año que termina y cero del que empieza.
+### P3-8 · Imputación de cuota por fecha de inicio ✅ corregido
+
+`reglamento._en_periodo` imputaba el permiso completo al período de su `fecha_inicio`. Una licencia del 28 de diciembre al 10 de enero descontaba trece días del año que terminaba y cero del que empezaba.
+
+**Corrección aplicada**: el permiso pertenece a todo período que **solape**, y cada uno cuenta solo los días que le tocan. El mismo ejemplo reparte ahora cuatro días a un año y diez al otro.
+
+De paso quedó a la vista que `resumen_empleado` tenía su **propia copia** del conteo —corridos, imputados por fecha de inicio—, así que el saldo que veía el empleado en su portal no era el que aplicaba la cuota al aprobar. Ahora los dos llaman al catálogo.
 
 ### P3-9 · Escaneo completo de justificaciones por consulta ✅ corregido
 

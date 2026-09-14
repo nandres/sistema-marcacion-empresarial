@@ -471,7 +471,16 @@ def crear_justificacion(
         raise ValueError(
             f"Cuota agotada de '{tipo_permiso}': {detalle} ({estado['periodo']})."
         )
-    if estado["restantes"] is not None and horas_usadas > estado["restantes"]:
+    # Lo que consume el permiso se mide antes de emitirlo, tanto si se cuenta
+    # en horas como en días. Validando solo las horas, un artículo de cinco
+    # días al año admitía una justificación de enero a diciembre: la cuota
+    # recién frenaba el intento **siguiente**, con los 365 días ya emitidos.
+    pedido = (
+        float(horas_usadas)
+        if articulo["unidad"] == reglamento.UNIDAD_HORAS
+        else reglamento.dias_de_cuota(articulo, fecha_inicio, fecha_fin, hoy)
+    )
+    if estado["restantes"] is not None and pedido > estado["restantes"]:
         notifications.registrar_alerta(
             db,
             "cuota_bloqueada",
@@ -479,12 +488,12 @@ def crear_justificacion(
             f"Intento bloqueado: cuota insuficiente de '{tipo_permiso}' "
             f"para {empleado['full_name']}.",
             f"Quedan {estado['restantes']:g} {estado['unidad']} y se solicitaron "
-            f"{horas_usadas:g} · actor {actor['full_name']}",
+            f"{pedido:g} · actor {actor['full_name']}",
             usuario_id=empleado["id"],
         )
         raise ValueError(
-            f"Solo quedan {estado['restantes']:g} horas disponibles de "
-            f"'{tipo_permiso}' en el mes."
+            f"Solo quedan {estado['restantes']:g} {estado['unidad']} disponibles "
+            f"de '{tipo_permiso}' ({estado['periodo']}) y se pidieron {pedido:g}."
         )
 
     justificacion_id = db.crear_justificacion(

@@ -18,12 +18,15 @@ ser consumido por ``database``, ``auth``, ``reports``, la GUI y la web.
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Any, Dict, List, Optional
+from datetime import date, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 UNIDAD_DIAS = "dias"
 UNIDAD_HORAS = "horas"
 UNIDAD_VECES = "veces"
+
+DIAS_HABILES = "habiles"
+"""Clave del artículo cuya cuota el reglamento cuenta en días hábiles."""
 
 PERIODO_ANUAL = "anual"
 PERIODO_MENSUAL = "mensual"
@@ -230,6 +233,7 @@ PERMISOS_PASANTES: List[Dict[str, Any]] = [
         "vinculos": ("Pasante",),
         "cuota": 10,
         "unidad": UNIDAD_DIAS,
+        DIAS_HABILES: True,
         "periodo": PERIODO_ANUAL,
         "condiciones": "Diez (10) días hábiles, sin sanciones disciplinarias en "
         "los últimos 12 meses, no acumulable, al cumplirse el año desde el "
@@ -402,6 +406,7 @@ PERMISOS_PASANTES: List[Dict[str, Any]] = [
         "vinculos": ("Pasante",),
         "cuota": 5,
         "unidad": UNIDAD_DIAS,
+        DIAS_HABILES: True,
         "periodo": PERIODO_ANUAL,
         "condiciones": "Máximo 5 días hábiles al año, con visto bueno del tutor "
         "y refrendado por la Gerencia de Capital Humano. Para extensiones "
@@ -494,18 +499,94 @@ def articulos_aplicables(vinculo: str) -> List[Dict[str, Any]]:
     return [p for p in CATALOGO_PERMISOS if vinculo in p["vinculos"]]
 
 
-def _en_periodo(justificacion: Dict[str, Any], periodo: str, hoy: date) -> bool:
-    """Indica si una justificación cae dentro del período de cómputo."""
-    inicio = justificacion["fecha_inicio"]
+def ventana_del_periodo(periodo: str, hoy: date) -> Optional[Tuple[date, date]]:
+    """Primer y último día del período de cómputo vigente.
+
+    ``None`` para los artículos que se computan por evento: ahí no hay
+    ventana que recortar porque la cuota no se renueva con el calendario.
+    """
     if periodo == PERIODO_MENSUAL:
-        return inicio.year == hoy.year and inicio.month == hoy.month
+        inicio = hoy.replace(day=1)
+        fin = (inicio + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+        return inicio, fin
     if periodo == PERIODO_ANUAL:
-        return inicio.year == hoy.year
-    return True
+        return date(hoy.year, 1, 1), date(hoy.year, 12, 31)
+    return None
+
+
+def es_habil(dia: date) -> bool:
+    """Indica si una fecha es día hábil: ni sábado, ni domingo, ni feriado.
+
+    El calendario de feriados vive en ``clock_engine`` y se importa acá
+    adentro a propósito: ese módulo depende de ``database``, que depende de
+    este, así que importarlo arriba cerraría el círculo. Es la única
+    dependencia que este catálogo tiene del resto del proyecto.
+    """
+    if dia.weekday() >= 5:
+        return False
+    import clock_engine
+
+    return dia not in clock_engine.feriados_de(dia.year)
+
+
+def dias_de_cuota(
+    articulo: Dict[str, Any],
+    fecha_inicio: date,
+    fecha_fin: date,
+    hoy: Optional[date] = None,
+) -> float:
+    """Días de cuota que consume un rango de fechas para ese artículo.
+
+    Tres cosas que el conteo ingenuo hacía mal:
+
+    - **Recorta al período vigente.** Una licencia del 28 de diciembre al 10
+      de enero le descontaba trece días al año que termina y ninguno al que
+      empieza. Cada año se lleva los suyos.
+    - **Cuenta hábiles cuando el reglamento dice hábiles.** El Art. 23 de
+      pasantes y la fuerza mayor del Art. 25 están definidos en días
+      hábiles; contarlos corridos consumía cuota los fines de semana.
+    - **Nunca devuelve menos de cero.** Un rango enteramente fuera del
+      período vigente consume cero, no un número negativo.
+    """
+    hoy = hoy or date.today()
+    ventana = ventana_del_periodo(articulo.get("periodo", PERIODO_EVENTO), hoy)
+    if ventana is not None:
+        fecha_inicio = max(fecha_inicio, ventana[0])
+        fecha_fin = min(fecha_fin, ventana[1])
+    if fecha_fin < fecha_inicio:
+        return 0.0
+    if not articulo.get(DIAS_HABILES):
+        return float((fecha_fin - fecha_inicio).days + 1)
+    dias = (fecha_fin - fecha_inicio).days + 1
+    return float(
+        sum(1 for n in range(dias) if es_habil(fecha_inicio + timedelta(days=n)))
+    )
+
+
+def solapa_periodo(
+    fecha_inicio: date, fecha_fin: date, periodo: str, hoy: date
+) -> bool:
+    """Indica si un rango toca el período de cómputo vigente."""
+    ventana = ventana_del_periodo(periodo, hoy)
+    if ventana is None:
+        return True
+    return fecha_inicio <= ventana[1] and fecha_fin >= ventana[0]
+
+def _en_periodo(justificacion: Dict[str, Any], periodo: str, hoy: date) -> bool:
+    """Indica si una justificación toca el período de cómputo vigente.
+
+    Se mira el solapamiento y no la fecha de inicio: un permiso a caballo
+    entre dos años pertenece a los dos, y cada uno cuenta los días suyos.
+    """
+    return solapa_periodo(
+        justificacion["fecha_inicio"], justificacion["fecha_fin"], periodo, hoy
+    )
 
 
 def _usados(
-    articulo: Dict[str, Any], justificaciones: List[Dict[str, Any]]
+    articulo: Dict[str, Any],
+    justificaciones: List[Dict[str, Any]],
+    hoy: Optional[date] = None,
 ) -> float:
     """Suma los días, horas o veces consumidos del artículo en el período."""
     filas = [j for j in justificaciones if j["tipo_permiso"] == articulo["tipo"]]
@@ -517,14 +598,16 @@ def _usados(
         return float(len(filas))
     return float(
         sum(
-            (j["fecha_fin"] - j["fecha_inicio"]).days + 1
+            dias_de_cuota(articulo, j["fecha_inicio"], j["fecha_fin"], hoy)
             for j in filas
         )
     )
 
 
 def _reservado(
-    articulo: Dict[str, Any], solicitudes: List[Dict[str, Any]]
+    articulo: Dict[str, Any],
+    solicitudes: List[Dict[str, Any]],
+    hoy: Optional[date] = None,
 ) -> float:
     """Cuota que ya comprometen las solicitudes pendientes del empleado.
 
@@ -540,7 +623,10 @@ def _reservado(
     if articulo["unidad"] == UNIDAD_VECES:
         return float(len(filas))
     return float(
-        sum((s["fecha_fin"] - s["fecha_inicio"]).days + 1 for s in filas)
+        sum(
+            dias_de_cuota(articulo, s["fecha_inicio"], s["fecha_fin"], hoy)
+            for s in filas
+        )
     )
 
 
@@ -583,8 +669,8 @@ def disponibilidad_permisos(
             cuota = _vacaciones_funcionario(antiguedad)
         else:
             cuota = articulo["cuota"]
-        usados = _usados(articulo, en_periodo)
-        pendiente = _reservado(articulo, reservadas)
+        usados = _usados(articulo, en_periodo, hoy)
+        pendiente = _reservado(articulo, reservadas, hoy)
         usos = float(
             sum(1 for j in en_periodo if j["tipo_permiso"] == articulo["tipo"])
         )
