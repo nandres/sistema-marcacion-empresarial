@@ -607,6 +607,7 @@ class PersonalNuevo(BaseModel):
     salario_mensual: float = 0.0
     tipo_vinculo: str = "Funcionario"
     fecha_ingreso: Optional[str] = None
+    turno_id: Optional[int] = None
 
 
 class PersonalEditar(BaseModel):
@@ -616,6 +617,7 @@ class PersonalEditar(BaseModel):
     salario_mensual: Optional[float] = None
     tipo_vinculo: Optional[str] = None
     fecha_ingreso: Optional[str] = None
+    turno_id: Optional[int] = None
 
 
 class JustificacionRRHH(BaseModel):
@@ -647,6 +649,8 @@ def _personal_publico(fila: Dict[str, Any]) -> Dict[str, Any]:
             "fecha_ingreso",
             "fecha_baja",
             "creado_en",
+            "turno_id",
+            "turno_nombre",
         )
         if k in fila
     }
@@ -764,10 +768,17 @@ def api_panel_personal(
     _exigir_rrhh(usuario)
     db = _cliente()
     try:
+        vigentes = db.turnos_vigentes_de_la_plantilla(datetime.date.today())
         return {
             "roles": [r["nombre"] for r in db.list_roles()],
+            "turnos": auth.listar_turnos(db, usuario),
             "personal": [
-                _personal_publico(u) for u in db.list_users(incluir_bajas=True)
+                dict(
+                    _personal_publico(u),
+                    turno_hoy=(vigentes.get(u["id"]) or {}).get("turno_nombre"),
+                    turno_origen=(vigentes.get(u["id"]) or {}).get("origen"),
+                )
+                for u in db.list_users(incluir_bajas=True)
             ],
         }
     finally:
@@ -795,6 +806,7 @@ def api_panel_personal_crear(
                 payload.tipo_vinculo,
                 _fecha(payload.fecha_ingreso, "Fecha de ingreso")
                 if payload.fecha_ingreso else None,
+                payload.turno_id,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error))
@@ -825,6 +837,11 @@ def api_panel_personal_editar(
                 tipo_vinculo=payload.tipo_vinculo or None,
                 fecha_ingreso=_fecha(payload.fecha_ingreso, "Fecha de ingreso")
                 if payload.fecha_ingreso else None,
+                turno_id=(
+                    payload.turno_id
+                    if "turno_id" in payload.model_fields_set
+                    else auth.SIN_CAMBIO
+                ),
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error))
@@ -1144,6 +1161,235 @@ def api_panel_auditoria(
     db = _cliente()
     try:
         return db.listar_auditoria(limite=100)
+    finally:
+        db.cerrar()
+
+
+class TramoHorario(BaseModel):
+    entrada: str
+    salida: str
+
+
+class TurnoNuevo(BaseModel):
+    nombre: str
+    tramos: List[TramoHorario]
+    dias: str = "1111100"
+    sucursal: str = "Casa Central"
+    tolerancia_min: Optional[int] = None
+
+
+class TurnoEditar(BaseModel):
+    nombre: Optional[str] = None
+    tramos: Optional[List[TramoHorario]] = None
+    dias: Optional[str] = None
+    sucursal: Optional[str] = None
+    tolerancia_min: Optional[int] = None
+    borrar_tolerancia: bool = False
+
+
+class TurnoBase(BaseModel):
+    turno_id: Optional[int] = None
+
+
+class RotacionTurno(BaseModel):
+    turno_id: int
+    desde: str
+    hasta: Optional[str] = None
+    motivo: str = ""
+
+
+@app.get("/api/turno")
+def api_turno_propio(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Horario del empleado autenticado, con sus rotaciones vigentes."""
+    db = _cliente()
+    try:
+        return auth.turno_de_empleado(db, usuario, usuario["id"])
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/panel/turnos")
+def api_panel_turnos(
+    incluir_inactivos: bool = False,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> List[Dict[str, Any]]:
+    """Catálogo de turnos con su horario, sus días y su dotación."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        return auth.listar_turnos(db, usuario, incluir_inactivos)
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/turnos")
+def api_panel_turnos_crear(
+    payload: TurnoNuevo,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Da de alta un turno."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            return auth.crear_turno(
+                db,
+                usuario,
+                payload.nombre,
+                [t.model_dump() for t in payload.tramos],
+                payload.dias,
+                payload.sucursal,
+                payload.tolerancia_min,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+    finally:
+        db.cerrar()
+
+
+@app.put("/api/panel/turnos/{turno_id}")
+def api_panel_turnos_editar(
+    turno_id: int,
+    payload: TurnoEditar,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Modifica un turno; el cambio rige hacia adelante."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            return auth.actualizar_turno(
+                db,
+                usuario,
+                turno_id,
+                nombre=payload.nombre,
+                tramos=(
+                    [t.model_dump() for t in payload.tramos]
+                    if payload.tramos is not None
+                    else None
+                ),
+                dias=payload.dias,
+                sucursal=payload.sucursal,
+                tolerancia_min=(
+                    None if payload.borrar_tolerancia
+                    else (payload.tolerancia_min
+                          if payload.tolerancia_min is not None
+                          else auth.SIN_CAMBIO)
+                ),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/turnos/{turno_id}/predeterminado")
+def api_panel_turnos_predeterminado(
+    turno_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Designa el turno que rige para quien no tiene ninguno asignado."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            return auth.designar_turno_predeterminado(db, usuario, turno_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+    finally:
+        db.cerrar()
+
+
+@app.delete("/api/panel/turnos/{turno_id}")
+def api_panel_turnos_retirar(
+    turno_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Retira un turno de circulación, o lo borra si nunca se usó."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            resultado = auth.retirar_turno(db, usuario, turno_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"mensaje": f"Turno {resultado}."}
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/panel/personal/{user_id}/turno")
+def api_panel_turno_empleado(
+    user_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Horario vigente de un empleado con sus rotaciones programadas."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            return auth.turno_de_empleado(db, usuario, user_id)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error))
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/personal/{user_id}/turno")
+def api_panel_turno_base(
+    user_id: int,
+    payload: TurnoBase,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Fija el turno de contrato de un legajo."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            return auth.asignar_turno_base(db, usuario, user_id, payload.turno_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/personal/{user_id}/rotacion")
+def api_panel_rotacion(
+    user_id: int,
+    payload: RotacionTurno,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Programa una rotación con vigencia sobre el turno de contrato."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            return auth.rotar_turno(
+                db, usuario, user_id, payload.turno_id,
+                payload.desde, payload.hasta, payload.motivo,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+    finally:
+        db.cerrar()
+
+
+@app.delete("/api/panel/rotaciones/{asignacion_id}")
+def api_panel_rotacion_revocar(
+    asignacion_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Cancela una rotación; el empleado vuelve a su turno de contrato."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            auth.revocar_rotacion(db, usuario, asignacion_id)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error))
+        return {"mensaje": "Rotación cancelada."}
     finally:
         db.cerrar()
 

@@ -158,7 +158,20 @@ section { margin-bottom: 40px; }
 .parte.es-cerrada { border-top-color: var(--tinta); }
 .parte.es-sin_marcar { border-top-color: var(--tardanza); }
 .parte.es-sin_cierre { border-top-color: var(--ausente); }
-.parte.es-descanso { border-top-color: var(--regla-fuerte); }
+.parte.es-descanso, .parte.es-franco { border-top-color: var(--regla-fuerte); }
+
+/* El horario vigente cuelga del parte como el pie de un formulario: es un
+   dato de referencia, no un titular. */
+.turno-linea {
+  display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline;
+  padding: 9px 0 0; font-size: .75rem; color: var(--tinta-suave);
+}
+.turno-linea .turno-nombre {
+  font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--tinta-media);
+}
+.turno-linea .turno-horario { font-family: var(--mono); color: var(--tinta); }
+.turno-linea .turno-nota { font-style: italic; }
 
 .parte-estado {
   font-family: var(--serif); font-size: 1.375rem; font-weight: 600; line-height: 1.2;
@@ -234,7 +247,8 @@ section { margin-bottom: 40px; }
 .sello.t-ausente, .sello.t-sin_cierre { color: var(--ausente); }
 .sello.t-justificado { color: var(--justificado); }
 .sello.t-en_curso { color: var(--curso); }
-.sello.t-normal, .sello.t-descanso, .sello.t-futuro { border-bottom-color: transparent; }
+.sello.t-normal, .sello.t-descanso, .sello.t-futuro,
+.sello.t-franco { border-bottom-color: transparent; }
 
 .raya { color: var(--regla-fuerte); }
 
@@ -304,6 +318,24 @@ textarea { min-height: 80px; resize: vertical; font-size: .9375rem; }
 input[type="checkbox"] { width: auto; accent-color: var(--tinta); }
 .campo { margin-bottom: 15px; }
 .rejilla-campos { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 15px; }
+
+/* Los días de un turno se eligen como en una planilla de asistencia: siete
+   casillas en fila con la abreviatura debajo, no un desplegable por día. */
+.dias-fila { display: flex; gap: 4px; flex-wrap: wrap; }
+.dia-casilla {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  border: 1px solid var(--regla-fuerte); padding: 6px 9px; cursor: pointer;
+  font-size: .6875rem; text-transform: uppercase; letter-spacing: .08em;
+  font-weight: 700; color: var(--tinta-suave); min-width: 42px;
+}
+.dia-casilla:has(input:checked) {
+  border-color: var(--tinta); color: var(--tinta); background: var(--superficie);
+}
+.dia-casilla input { margin: 0; }
+
+/* Una hora se compara con otra hora: en la columna van en cifras de ancho
+   fijo para que 08:00 y 14:30 arranquen en la misma vertical. */
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 /* El color del texto sobre el acento viaja en una variable: un selector de
    tema sobre `button` pisaría a las variantes por especificidad. */

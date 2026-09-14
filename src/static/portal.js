@@ -345,12 +345,34 @@
       "</div>";
   }
 
+  /* El empleado tiene que poder responder "a qué hora entro" sin preguntar.
+     La línea dice el turno, su horario y de dónde salió: una rotación no
+     puede aplicarse sin que quien la cumple se entere. */
+  function pintarTurno(turno) {
+    if (!turno) { $("parte-turno").innerHTML = ""; return; }
+    var partes = [
+      '<span class="turno-nombre">' + esc(turno.nombre) + "</span>",
+      '<span class="turno-horario">' + esc(turno.horario) + "</span>",
+      "<span>" + esc(turno.dias_texto) + "</span>"
+    ];
+    if (turno.origen === "asignacion") {
+      partes.push('<span class="turno-nota">Rotación vigente</span>');
+    }
+    if (!turno.trabaja_hoy) {
+      partes.push('<span class="turno-nota">Hoy no tenés turno</span>');
+    }
+    if (turno.partida) {
+      partes.push('<span class="turno-nota">Jornada partida</span>');
+    }
+    $("parte-turno").innerHTML = partes.join("");
+  }
+
   // ---------------------------------------------------- portal · registro
 
   var NOVEDAD = {
     tardanza: "Tardanza", ausente: "Sin marcar", justificado: "Justificado",
     descanso: "Descanso", en_curso: "En curso", sin_cierre: "Sin cierre",
-    normal: "", futuro: ""
+    franco: "Franco", normal: "", futuro: ""
   };
 
   /* El mes se lee como una planilla: una fila por día, la novedad al margen
@@ -664,6 +686,7 @@
     return pedir("/api/resumen").then(function (datos) {
       sesion.resumen = datos;
       pintarParte(datos.hoy);
+      pintarTurno(datos.turno);
       pintarRegistro(datos.dias_mes || [], datos.mes_nombre);
       pintarCuentasMes(datos.extras_mes || {});
       pintarSaldos(datos);
@@ -697,7 +720,8 @@
   var ETIQUETA_DIA = {
     normal: "Normal", tardanza: "Llegada tardía", ausente: "Sin marcar",
     justificado: "Justificado", descanso: "Descanso", en_curso: "En curso",
-    sin_cierre: "Salida no registrada", futuro: "Pendiente"
+    sin_cierre: "Salida no registrada", franco: "Día franco",
+    futuro: "Pendiente"
   };
 
   function abrirDia(fecha) {
@@ -833,8 +857,8 @@
 
   // -------------------------------------------------------------- gestión
 
-  var PANELES = ["pendientes", "personal", "justificaciones", "condiciones",
-                 "alertas", "auditoria"];
+  var PANELES = ["pendientes", "personal", "turnos", "justificaciones",
+                 "condiciones", "alertas", "auditoria"];
 
   function abrirPestana(nombre) {
     PANELES.forEach(function (p) {
@@ -845,6 +869,7 @@
     });
     if (nombre === "pendientes") cargarPendientes();
     if (nombre === "personal") cargarPersonal();
+    if (nombre === "turnos") cargarTurnos();
     if (nombre === "justificaciones") cargarJustificaciones();
     if (nombre === "condiciones") cargarCondiciones();
     if (nombre === "alertas") cargarAlertas();
@@ -969,6 +994,351 @@
 
   /* Reemplaza a la casilla que el empleado marcaba en el kiosco: la
      tolerancia la reconoce la empresa, queda firmada y alcanza a todos. */
+  // ------------------------------------------------------ gestión · turnos
+
+  var DIAS_SEMANA = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+
+  /* Los turnos se editan como se dictan: un nombre, una o dos franjas y los
+     días en que rigen. La segunda franja es la jornada partida del comercio
+     y aparece solo si se la pide, para no cargar el formulario del caso
+     común con campos que casi nadie completa. */
+  function cargarTurnos() {
+    $("g-turnos").innerHTML = '<div class="vacio">Cargando…</div>';
+    Promise.all([
+      pedir("/api/panel/turnos?incluir_inactivos=true"),
+      pedir("/api/panel/personal")
+    ]).then(function (r) {
+      sesion.turnos = r[0] || [];
+      sesion.personal = (r[1] || {}).personal || [];
+      pintarTurnos();
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("g-turnos", error.message);
+    });
+  }
+
+  function casillasDias(mascara) {
+    return DIAS_SEMANA.map(function (dia, i) {
+      var marcado = mascara.charAt(i) === "1" ? " checked" : "";
+      return '<label class="dia-casilla"><input type="checkbox" data-dia="' + i +
+        '"' + marcado + "><span>" + dia + "</span></label>";
+    }).join("");
+  }
+
+  function pintarTurnos() {
+    var filas = sesion.turnos.map(function (t) {
+      var marcas = [];
+      if (t.predeterminado) marcas.push('<span class="sello t-justificado">Predeterminado</span>');
+      if (t.partida) marcas.push('<span class="sello t-normal">Partida</span>');
+      if (t.nocturno) marcas.push('<span class="sello t-justificado">Nocturno</span>');
+      if (!t.activo) marcas.push('<span class="sello t-ausente">Retirado</span>');
+      var dotacion = Math.max(t.dotacion || 0, t.asignados || 0);
+
+      return '<tr' + (t.activo ? "" : ' class="futuro"') + "><td><b>" + esc(t.nombre) + "</b>" +
+          (marcas.length ? "<br>" + marcas.join(" ") : "") +
+          '<br><span class="apunte">' + esc(t.sucursal) + "</span></td>" +
+        '<td class="num mono">' + esc(t.horario) + "</td>" +
+        "<td>" + esc(t.dias_texto) + "</td>" +
+        '<td class="num">' + esc(t.horas_previstas) + " h</td>" +
+        '<td class="num">' + (t.tolerancia_min === null ? "según vínculo"
+                                                        : esc(t.tolerancia_min) + " min") + "</td>" +
+        '<td class="num">' + esc(dotacion) + "</td>" +
+        '<td><div class="acciones fin">' +
+          (t.predeterminado || !t.activo ? ""
+            : '<button class="btn-suave btn-chico" data-turno-predeterminado="' + esc(t.id) +
+              '">Hacer predeterminado</button>') +
+          '<button class="btn-suave btn-chico" data-turno-editar="' + esc(t.id) + '">Editar</button>' +
+          (t.predeterminado ? ""
+            : '<button class="btn-riesgo btn-chico" data-turno-retirar="' + esc(t.id) +
+              '">Retirar</button>') +
+        "</div></td></tr>";
+    }).join("");
+
+    var plantilla = sesion.personal.filter(function (p) { return p.activo !== false; });
+    var dotacion = plantilla.map(function (p) {
+      return "<tr><td><b>" + esc(p.full_name) + "</b>" +
+          '<br><span class="apunte">' + esc(p.username) + "</span></td>" +
+        "<td>" + esc(p.turno_hoy || "Turno predeterminado") +
+          (p.turno_origen === "asignacion"
+            ? ' <span class="sello t-justificado">Rotación</span>'
+            : "") +
+          (p.turno_origen === "predeterminado"
+            ? '<br><span class="apunte">Sin turno propio en el legajo</span>'
+            : "") + "</td>" +
+        '<td><div class="acciones fin">' +
+          '<button class="btn-suave btn-chico" data-turno-asignar="' + esc(p.id) + '">Cambiar turno</button>' +
+          '<button class="btn-suave btn-chico" data-turno-rotar="' + esc(p.id) + '">Rotar</button>' +
+        "</div></td></tr>";
+    }).join("");
+
+    $("g-turnos").innerHTML =
+      '<div class="bloque"><div class="rubro"><h3>Nuevo turno</h3>' +
+        '<span class="apunte">El horario contra el que se miden las tardanzas</span></div>' +
+        '<div class="rejilla-campos">' +
+          '<div><label for="t-nombre">Nombre</label><input id="t-nombre" placeholder="Mañana, Noche, Mostrador…"></div>' +
+          '<div><label for="t-sucursal">Sucursal</label><input id="t-sucursal" value="Casa Central"></div>' +
+          '<div><label for="t-entrada">Entrada</label><input id="t-entrada" type="time" value="08:00"></div>' +
+          '<div><label for="t-salida">Salida</label><input id="t-salida" type="time" value="16:00"></div>' +
+          '<div><label for="t-tolerancia">Tolerancia propia (min)</label>' +
+            '<input id="t-tolerancia" type="number" min="0" max="60" placeholder="según vínculo"></div>' +
+        "</div>" +
+        '<div class="rejilla-campos" style="margin-top:12px">' +
+          '<div><label>Días</label><div class="dias-fila" id="t-dias">' +
+            casillasDias("1111100") + "</div></div>" +
+        "</div>" +
+        '<label class="casilla" style="margin-top:12px">' +
+          '<input type="checkbox" id="t-partida"> Jornada partida (dos franjas)</label>' +
+        '<div class="rejilla-campos oculto" id="t-segundo-tramo" style="margin-top:8px">' +
+          '<div><label for="t-entrada2">Segunda entrada</label><input id="t-entrada2" type="time" value="14:00"></div>' +
+          '<div><label for="t-salida2">Segunda salida</label><input id="t-salida2" type="time" value="18:00"></div>' +
+        "</div>" +
+        '<div class="acciones fin" style="margin-top:16px"><button id="t-crear">Crear turno</button></div>' +
+        '<div id="t-aviso"></div></div>' +
+      '<div class="bloque"><div class="rubro"><h3>Turnos definidos</h3></div>' +
+        (filas ? '<div class="marco"><table><thead><tr><th>Turno</th><th class="num">Horario</th>' +
+          '<th>Días</th><th class="num">Previstas</th><th class="num">Tolerancia</th>' +
+          '<th class="num">Dotación</th><th></th></tr></thead><tbody>' + filas + "</tbody></table></div>"
+               : '<div class="vacio">Todavía no hay turnos definidos.</div>') +
+      "</div>" +
+      '<div class="bloque"><div class="rubro"><h3>Quién trabaja en qué turno</h3>' +
+        '<span class="apunte">Cambiar turno fija el del contrato; rotar lo desplaza por un período</span></div>' +
+        (dotacion ? '<div class="marco"><table><thead><tr><th>Empleado</th><th>Turno de hoy</th>' +
+          "<th></th></tr></thead><tbody>" + dotacion + "</tbody></table></div>"
+                  : '<div class="vacio">Sin personal activo.</div>') +
+      "</div>";
+
+    $("t-partida").addEventListener("change", function () {
+      $("t-segundo-tramo").classList.toggle("oculto", !$("t-partida").checked);
+    });
+    $("t-crear").addEventListener("click", crearTurno);
+  }
+
+  function mascaraDe(contenedor) {
+    var casillas = $(contenedor).querySelectorAll("input[data-dia]");
+    var mascara = "";
+    for (var i = 0; i < 7; i++) mascara += casillas[i].checked ? "1" : "0";
+    return mascara;
+  }
+
+  function tramosDe(prefijo, partida) {
+    var tramos = [{ entrada: $(prefijo + "-entrada").value, salida: $(prefijo + "-salida").value }];
+    if (partida) {
+      tramos.push({ entrada: $(prefijo + "-entrada2").value, salida: $(prefijo + "-salida2").value });
+    }
+    return tramos;
+  }
+
+  function crearTurno() {
+    var mascara = mascaraDe("t-dias");
+    if (mascara.indexOf("1") < 0) {
+      avisar("t-aviso", "Marcá al menos un día de la semana."); return;
+    }
+    var tolerancia = $("t-tolerancia").value;
+    pedir("/api/panel/turnos", {
+      cuerpo: {
+        nombre: $("t-nombre").value.trim(),
+        tramos: tramosDe("t", $("t-partida").checked),
+        dias: mascara,
+        sucursal: $("t-sucursal").value.trim() || "Casa Central",
+        tolerancia_min: tolerancia === "" ? null : Number(tolerancia)
+      }
+    }).then(function (t) {
+      notificar("Turno creado", t.nombre + " · " + t.horario, "baja");
+      cargarTurnos();
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("t-aviso", error.message);
+    });
+  }
+
+  function editarTurno(id) {
+    var turno = sesion.turnos.filter(function (t) { return t.id === id; })[0];
+    if (!turno) return;
+    var segundo = turno.tramos[1] || { entrada: "14:00", salida: "18:00" };
+    abrirModal(
+      "<h3>" + esc(turno.nombre) + "</h3>" +
+      '<p class="apunte">El cambio rige hacia adelante: los días ya liquidados ' +
+        "conservan la incidencia que se calculó con el horario de entonces.</p>" +
+      '<div class="rejilla-campos">' +
+        '<div><label for="m-nombre">Nombre</label><input id="m-nombre" value="' + esc(turno.nombre) + '"></div>' +
+        '<div><label for="m-sucursal">Sucursal</label><input id="m-sucursal" value="' + esc(turno.sucursal) + '"></div>' +
+        '<div><label for="m-entrada">Entrada</label><input id="m-entrada" type="time" value="' +
+          esc(turno.tramos[0].entrada) + '"></div>' +
+        '<div><label for="m-salida">Salida</label><input id="m-salida" type="time" value="' +
+          esc(turno.tramos[0].salida) + '"></div>' +
+        '<div><label for="m-tolerancia">Tolerancia propia (min)</label>' +
+          '<input id="m-tolerancia" type="number" min="0" max="60" value="' +
+          (turno.tolerancia_min === null ? "" : esc(turno.tolerancia_min)) +
+          '" placeholder="según vínculo"></div>' +
+      "</div>" +
+      '<div class="rejilla-campos" style="margin-top:12px"><div><label>Días</label>' +
+        '<div class="dias-fila" id="m-dias">' + casillasDias(turno.dias) + "</div></div></div>" +
+      '<label class="casilla" style="margin-top:12px"><input type="checkbox" id="m-partida"' +
+        (turno.partida ? " checked" : "") + "> Jornada partida (dos franjas)</label>" +
+      '<div class="rejilla-campos' + (turno.partida ? "" : " oculto") + '" id="m-segundo-tramo">' +
+        '<div><label for="m-entrada2">Segunda entrada</label><input id="m-entrada2" type="time" value="' +
+          esc(segundo.entrada) + '"></div>' +
+        '<div><label for="m-salida2">Segunda salida</label><input id="m-salida2" type="time" value="' +
+          esc(segundo.salida) + '"></div>' +
+      "</div>" +
+      '<div id="m-aviso"></div>' +
+      '<div class="acciones fin" style="margin-top:16px">' +
+        '<button class="btn-suave" data-cerrar="1">Cancelar</button>' +
+        '<button data-turno-guardar="' + esc(id) + '">Guardar</button></div>'
+    );
+    $("m-partida").addEventListener("change", function () {
+      $("m-segundo-tramo").classList.toggle("oculto", !$("m-partida").checked);
+    });
+  }
+
+  function guardarTurno(id) {
+    var mascara = mascaraDe("m-dias");
+    if (mascara.indexOf("1") < 0) {
+      avisar("m-aviso", "Marcá al menos un día de la semana."); return;
+    }
+    var tolerancia = $("m-tolerancia").value;
+    pedir("/api/panel/turnos/" + id, {
+      metodo: "PUT",
+      cuerpo: {
+        nombre: $("m-nombre").value.trim(),
+        tramos: tramosDe("m", $("m-partida").checked),
+        dias: mascara,
+        sucursal: $("m-sucursal").value.trim() || "Casa Central",
+        tolerancia_min: tolerancia === "" ? null : Number(tolerancia),
+        borrar_tolerancia: tolerancia === ""
+      }
+    }).then(function (t) {
+      cerrarModal();
+      notificar("Turno actualizado", t.nombre + " · " + t.horario, "baja");
+      cargarTurnos();
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("m-aviso", error.message);
+    });
+  }
+
+  function retirarTurno(id) {
+    var turno = sesion.turnos.filter(function (t) { return t.id === id; })[0];
+    pedir("/api/panel/turnos/" + id, { metodo: "DELETE" }).then(function (d) {
+      notificar("Turno " + esc((turno || {}).nombre || ""), d.mensaje, "media");
+      cargarTurnos();
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("g-turnos", error.message);
+    });
+  }
+
+  function hacerPredeterminado(id) {
+    pedir("/api/panel/turnos/" + id + "/predeterminado", { cuerpo: {} })
+      .then(function (t) {
+        notificar("Turno predeterminado", t.nombre, "baja");
+        cargarTurnos();
+      }).catch(function (error) {
+        if (error.message !== "sesion") avisar("g-turnos", error.message);
+      });
+  }
+
+  function opcionesTurno(elegido) {
+    var activos = sesion.turnos.filter(function (t) { return t.activo; });
+    return '<option value="">Turno predeterminado de la empresa</option>' +
+      activos.map(function (t) {
+        return '<option value="' + esc(t.id) + '"' + (t.id === elegido ? " selected" : "") +
+          ">" + esc(t.nombre) + " · " + esc(t.horario) + "</option>";
+      }).join("");
+  }
+
+  function abrirAsignacionTurno(usuarioId) {
+    var persona = sesion.personal.filter(function (p) { return p.id === usuarioId; })[0];
+    if (!persona) return;
+    abrirModal(
+      "<h3>Turno de " + esc(persona.full_name) + "</h3>" +
+      '<p class="apunte">Es el horario de contrato: rige mientras no haya una rotación vigente.</p>' +
+      '<div><label for="a-turno">Turno</label><select id="a-turno">' +
+        opcionesTurno(persona.turno_id) + "</select></div>" +
+      '<div id="a-aviso"></div>' +
+      '<div class="acciones fin" style="margin-top:16px">' +
+        '<button class="btn-suave" data-cerrar="1">Cancelar</button>' +
+        '<button data-turno-base="' + esc(usuarioId) + '">Guardar</button></div>'
+    );
+  }
+
+  function guardarTurnoBase(usuarioId) {
+    var elegido = $("a-turno").value;
+    pedir("/api/panel/personal/" + usuarioId + "/turno", {
+      cuerpo: { turno_id: elegido === "" ? null : Number(elegido) }
+    }).then(function (t) {
+      cerrarModal();
+      notificar("Turno asignado", t.nombre + " · " + t.horario, "baja");
+      cargarTurnos();
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("a-aviso", error.message);
+    });
+  }
+
+  function abrirRotacion(usuarioId) {
+    var persona = sesion.personal.filter(function (p) { return p.id === usuarioId; })[0];
+    if (!persona) return;
+    pedir("/api/panel/personal/" + usuarioId + "/turno").then(function (actual) {
+      var vigentes = (actual.rotaciones || []).map(function (r) {
+        return "<tr><td>" + esc(r.turno) + "</td>" +
+          '<td class="num mono">' + esc(r.desde) + " → " + esc(r.hasta || "sin fin") + "</td>" +
+          "<td>" + esc(r.motivo || "—") + "</td>" +
+          '<td><button class="btn-riesgo btn-chico" data-rotacion-revocar="' + esc(r.id) +
+            '">Cancelar</button></td></tr>';
+      }).join("");
+
+      abrirModal(
+        "<h3>Rotar a " + esc(persona.full_name) + "</h3>" +
+        '<p class="apunte">Vigente hoy: <b>' + esc(actual.nombre) + " · " + esc(actual.horario) +
+          "</b>. Al vencer la rotación vuelve solo a su turno de contrato.</p>" +
+        '<div class="rejilla-campos">' +
+          '<div><label for="r-turno">Turno</label><select id="r-turno">' +
+            sesion.turnos.filter(function (t) { return t.activo; }).map(function (t) {
+              return '<option value="' + esc(t.id) + '">' + esc(t.nombre) + " · " +
+                esc(t.horario) + "</option>";
+            }).join("") + "</select></div>" +
+          '<div><label for="r-desde">Desde</label><input id="r-desde" type="date" value="' +
+            iso(new Date()) + '"></div>' +
+          '<div><label for="r-hasta">Hasta (opcional)</label><input id="r-hasta" type="date"></div>' +
+          '<div><label for="r-motivo">Motivo</label><input id="r-motivo" placeholder="Relevo, licencia de un compañero…"></div>' +
+        "</div>" +
+        (vigentes ? '<div class="marco" style="margin-top:16px"><table><thead><tr>' +
+          '<th>Turno</th><th class="num">Vigencia</th><th>Motivo</th><th></th>' +
+          "</tr></thead><tbody>" + vigentes + "</tbody></table></div>" : "") +
+        '<div id="r-aviso"></div>' +
+        '<div class="acciones fin" style="margin-top:16px">' +
+          '<button class="btn-suave" data-cerrar="1">Cancelar</button>' +
+          '<button data-rotacion-guardar="' + esc(usuarioId) + '">Programar rotación</button></div>'
+      );
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("g-turnos", error.message);
+    });
+  }
+
+  function guardarRotacion(usuarioId) {
+    if (!$("r-desde").value) { avisar("r-aviso", "Indicá desde cuándo rige."); return; }
+    pedir("/api/panel/personal/" + usuarioId + "/rotacion", {
+      cuerpo: {
+        turno_id: Number($("r-turno").value),
+        desde: $("r-desde").value,
+        hasta: $("r-hasta").value || null,
+        motivo: $("r-motivo").value.trim()
+      }
+    }).then(function (t) {
+      cerrarModal();
+      notificar("Rotación programada", t.nombre + " · " + t.horario, "baja");
+      cargarTurnos();
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("r-aviso", error.message);
+    });
+  }
+
+  function revocarRotacion(id) {
+    pedir("/api/panel/rotaciones/" + id, { metodo: "DELETE" }).then(function (d) {
+      cerrarModal();
+      notificar("Rotación cancelada", d.mensaje, "baja");
+      cargarTurnos();
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("r-aviso", error.message);
+    });
+  }
+
   function cargarCondiciones() {
     $("g-condiciones").innerHTML = '<div class="vacio">Cargando…</div>';
     pedir("/api/panel/condiciones").then(function (lista) {
@@ -1056,6 +1426,7 @@
     pedir("/api/panel/personal").then(function (d) {
       sesion.personal = d.personal || [];
       sesion.roles = d.roles || [];
+      sesion.turnos = d.turnos || [];
       pintarPersonal(null);
     }).catch(function (error) {
       if (error.message !== "sesion") avisar("g-personal", error.message);
@@ -1071,7 +1442,7 @@
   function pintarPersonal(editando) {
     var filas = sesion.personal.map(function (p) {
       if (p.id === editando) {
-        return '<tr><td colspan="6"><div class="rejilla-campos">' +
+        return '<tr><td colspan="7"><div class="rejilla-campos">' +
           '<div><label>Nombre</label><input id="e-nombre" value="' + esc(p.full_name) + '"></div>' +
           "<div><label>Rol</label><select id=\"e-rol\">" + opciones(sesion.roles, p.role_name) + "</select></div>" +
           "<div><label>Vínculo</label><select id=\"e-vinculo\">" +
@@ -1080,6 +1451,7 @@
             esc(p.salario_mensual || 0) + '"></div>' +
           '<div><label>Fecha de ingreso</label><input id="e-ingreso" type="date" value="' +
             esc(p.fecha_ingreso || "") + '"></div>' +
+          '<div><label>Turno</label><select id="e-turno">' + opcionesTurno(p.turno_id) + "</select></div>" +
           '<div><label>Nueva contraseña</label><input id="e-clave" type="password" placeholder="dejar vacío = sin cambio"></div>' +
           '</div><div class="acciones fin" style="margin-top:14px">' +
             '<button class="btn-suave btn-chico" data-cancelar="1">Cancelar</button>' +
@@ -1092,6 +1464,11 @@
         '<br><span class="apunte">' + esc(p.username) + "</span></td>" +
         "<td>" + esc(p.role_name) + "</td>" +
         "<td>" + esc(p.tipo_vinculo || "—") + "</td>" +
+        "<td>" + (p.turno_nombre ? esc(p.turno_nombre)
+                                 : '<span class="apunte">Predeterminado</span>') +
+          (p.turno_origen === "asignacion"
+            ? '<br><span class="apunte">Hoy: ' + esc(p.turno_hoy) + "</span>"
+            : "") + "</td>" +
         '<td class="num">' + esc(p.fecha_ingreso || "—") + "</td>" +
         '<td class="num">' + esc(guaranies(p.salario_mensual)) + "</td>" +
         '<td><div class="acciones fin">' +
@@ -1116,12 +1493,13 @@
             opciones(["Funcionario", "Pasante"], "Funcionario") + "</select></div>" +
           '<div><label>Salario mensual</label><input id="n-salario" type="number" min="0" step="100000" value="0"></div>' +
           '<div><label>Fecha de ingreso</label><input id="n-ingreso" type="date" value="' + iso(new Date()) + '"></div>' +
+          '<div><label>Turno</label><select id="n-turno">' + opcionesTurno(null) + "</select></div>" +
         "</div>" +
         '<div class="acciones fin" style="margin-top:16px"><button id="n-crear">Crear empleado</button></div>' +
         '<div id="n-aviso"></div></div>' +
       '<div class="bloque"><div class="rubro"><h3>Personal registrado</h3></div>' +
         '<div class="marco"><table><thead><tr><th>Nombre</th><th>Rol</th><th>Vínculo</th>' +
-        '<th class="num">Ingreso</th><th class="num">Salario</th><th></th></tr></thead>' +
+        '<th>Turno</th><th class="num">Ingreso</th><th class="num">Salario</th><th></th></tr></thead>' +
         "<tbody>" + filas + "</tbody></table></div></div>";
     $("n-crear").addEventListener("click", crearPersonal);
   }
@@ -1134,7 +1512,8 @@
       role_name: $("n-rol").value,
       tipo_vinculo: $("n-vinculo").value,
       salario_mensual: parseFloat($("n-salario").value) || 0,
-      fecha_ingreso: $("n-ingreso").value || null
+      fecha_ingreso: $("n-ingreso").value || null,
+      turno_id: $("n-turno").value === "" ? null : Number($("n-turno").value)
     };
     if (!cuerpo.username || !cuerpo.password || !cuerpo.full_name) {
       avisar("n-aviso", "Completá usuario, contraseña y nombre."); return;
@@ -1153,7 +1532,8 @@
       role_name: $("e-rol").value,
       tipo_vinculo: $("e-vinculo").value,
       salario_mensual: parseFloat($("e-salario").value) || 0,
-      fecha_ingreso: $("e-ingreso").value || null
+      fecha_ingreso: $("e-ingreso").value || null,
+      turno_id: $("e-turno").value === "" ? null : Number($("e-turno").value)
     };
     if ($("e-clave").value) cuerpo.password = $("e-clave").value;
     pedir("/api/panel/personal/" + id, { cuerpo: cuerpo, metodo: "PUT" }).then(function () {
@@ -1348,10 +1728,22 @@
       "[data-pdf-panel],[data-cerrar],[data-reclamar],[data-aprobar],[data-rechazar]," +
       "[data-editar],[data-guardar],[data-borrar],[data-cancelar],[data-confirmar-borrado]," +
       "[data-permiso-ok],[data-permiso-no],[data-revocar],[data-extras]," +
-      "[data-baja],[data-reincorporar]");
+      "[data-baja],[data-reincorporar],[data-turno-editar],[data-turno-guardar]," +
+      "[data-turno-retirar],[data-turno-predeterminado],[data-turno-asignar]," +
+      "[data-turno-base],[data-turno-rotar],[data-rotacion-guardar]," +
+      "[data-rotacion-revocar]");
     if (!objetivo) return;
     var d = objetivo.dataset;
 
+    if (d.turnoEditar) { editarTurno(parseInt(d.turnoEditar, 10)); return; }
+    if (d.turnoGuardar) { guardarTurno(d.turnoGuardar); return; }
+    if (d.turnoRetirar) { retirarTurno(d.turnoRetirar); return; }
+    if (d.turnoPredeterminado) { hacerPredeterminado(d.turnoPredeterminado); return; }
+    if (d.turnoAsignar) { abrirAsignacionTurno(parseInt(d.turnoAsignar, 10)); return; }
+    if (d.turnoBase) { guardarTurnoBase(d.turnoBase); return; }
+    if (d.turnoRotar) { abrirRotacion(parseInt(d.turnoRotar, 10)); return; }
+    if (d.rotacionGuardar) { guardarRotacion(d.rotacionGuardar); return; }
+    if (d.rotacionRevocar) { revocarRotacion(d.rotacionRevocar); return; }
     if (d.baja) { confirmarBaja(d.baja); return; }
     if (d.reincorporar) { reincorporar(d.reincorporar); return; }
     if (d.permisoOk) { resolverPermiso(d.permisoOk, true); return; }

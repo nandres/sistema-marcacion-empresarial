@@ -18,6 +18,8 @@ El núcleo de cálculo del sistema (`clock_engine.py`) procesa las marcas abstra
 *   **Res. Directorio 3028/2024:** Tolerancia climática y diferenciación estricta de reglas entre pasantes y funcionarios. La condición excepcional del día (lluvia intensa, corte de rutas, paro de transporte) la **declara Recursos Humanos** para toda la plantilla, con firma y auditoría: no es una casilla que marque quien llega tarde.
 *   **Reglamento Interno (Res. 1307/2010):** Catálogo automatizado de permisos, licencias y control estricto de cuotas mensuales por horas o usos (bloqueo automático al 4.° uso del Art. 14).
 
+La hora contra la que se mide cada llegada sale del **turno** del empleado: cada turno tiene su horario (una franja, o dos si la jornada es partida), los días de la semana que cubre y, si hace falta, su propia tolerancia. La rotación se programa con vigencia, así que al vencer la persona vuelve sola a su horario de contrato, y los días que su turno no cubre figuran como **franco** en lugar de contarse como ausencia.
+
 ---
 
 ## 🛠️ Stack Tecnológico y Módulos Core
@@ -53,6 +55,7 @@ src/
 ├── database.py       # Capa de datos PostgreSQL, esquema y auditorías JSONB
 ├── auth.py           # Autenticación unificada, Control de Acceso Basado en Roles (RBAC) y JWT
 ├── clock_engine.py   # Motor de evaluación horaria y desglose legal paraguayo
+├── turnos.py         # Horarios por empleado: tramos, días, rotación con vigencia
 ├── reglamento.py     # Lógica e interpretación de cuotas del catálogo de permisos
 ├── reports.py        # Módulo generador de reportes (PDF, XLSX, CSV, Aguinaldos)
 ├── offline_queue.py  # Gestor de cola transaccional local (SQLite)
@@ -98,8 +101,12 @@ DB_NAME=marcacion
 DB_USER=tu_usuario
 DB_PASSWORD=tu_contraseña
 JWT_SECRET_KEY=usa_un_token_seguro_hex
-JORNADA_INICIO=08:00
 COMPROBANTE_CLAVE=clave_firma_comprobantes
+
+# Hora con la que se siembra el turno inicial de la instalación. A partir de
+# ahí los horarios se administran desde Gestión -> Turnos, uno por cada
+# horario real de la empresa.
+JORNADA_INICIO=08:00
 
 # Bloquea toda marca que el motor biométrico no pueda verificar. Viene
 # apagada: una plantilla recién migrada no tiene fotos cargadas.
@@ -160,6 +167,7 @@ python tests/test_condicion_dia.py   # Antifraude: la tolerancia la declara RRHH
 python tests/smoke_permisos_autoservicio.py  # Pedido, cuota reservada, aprobación y PDF
 python tests/test_planilla_extras.py # Planilla de horas extra y constancia de asistencia
 python tests/test_turno_nocturno.py  # Turnos que cruzan la medianoche y jornadas sin cierre
+python tests/test_turnos.py          # Horarios por empleado, rotación, jornada partida y francos
 python tests/test_antiguedad_y_bajas.py  # Antigüedad desde el contrato y baja lógica
 python tests/test_seguridad_datos.py # Biometría cifrada y freno de intentos fallidos
 python tests/validar_art14.py        # Límites de cuota y usos del Art. 14

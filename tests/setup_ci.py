@@ -19,5 +19,15 @@ if not db.get_user_by_username("juan"):
         2500000, "Funcionario",
     )
 
+# El turno decide cuántas veces se puede marcar en el día, así que dejarlo
+# indefinido hace que el resultado de una prueba dependa de lo que haya hecho
+# la anterior. Los usuarios de la suite arrancan en el turno predeterminado y
+# sin rotaciones pendientes.
+for usuario in ("admin", "juan"):
+    registro = db.get_user_by_username(usuario)
+    db.asignar_turno_base(registro["id"], None)
+    for asignacion in db.listar_asignaciones_turno(registro["id"]):
+        db.eliminar_asignacion_turno(asignacion["id"])
+
 print("SETUP CI OK: admin/admin123 y juan/clave123 listos")
 db.cerrar()

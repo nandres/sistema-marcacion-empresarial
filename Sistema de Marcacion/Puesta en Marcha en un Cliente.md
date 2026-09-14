@@ -8,10 +8,12 @@ Cuatro datos condicionan todo lo demás y conviene tenerlos antes de tocar un se
 
 | Pregunta | Dónde se configura | Si se equivoca |
 | --- | --- | --- |
-| ¿A qué hora empieza la jornada? | `JORNADA_INICIO` en el `.env` | Las tardanzas se calculan contra la hora equivocada |
+| ¿Qué turnos tiene la empresa? | *Gestión → Turnos* | Las tardanzas se miden contra la hora equivocada |
 | ¿Hay pasantes o solo funcionarios? | `tipo_vinculo` de cada legajo | Se aplica el reglamento que no corresponde (Res. 3028/2024 vs 1307/2010) |
 | ¿Desde cuándo trabaja cada persona? | `fecha_ingreso` del legajo | Vacaciones y aguinaldo mal liquidados |
 | ¿Va a usar reconocimiento facial? | `BIOMETRIA_OBLIGATORIA` | Ver más abajo |
+
+El `.env` conserva `JORNADA_INICIO` para sembrar el turno inicial de la instalación. Es un valor de arranque, no la configuración: a partir de ahí los horarios se administran desde la pantalla de turnos (ver [[Turnos y Rotación de Horarios]]).
 
 **La fecha de ingreso es el dato que más se subestima.** De ella dependen los días de vacaciones (12 / 20 / 30 según la escala de la Ley 1626/00) y los meses de aguinaldo. Si se migra la plantilla sin cargarla, el sistema asume que todos ingresaron el día de la migración y liquida 12 días a quien le corresponden 30.
 
@@ -57,9 +59,10 @@ Ninguno tiene valor por defecto: el proceso no arranca sin ellos. Es deliberado 
 El orden importa porque cada paso depende del anterior:
 
 1. **Roles**: ya vienen creados (`Administrador`, `Recursos Humanos`, `Empleado`).
-2. **Legajos**, desde *Gestión → Personal*, con **vínculo** y **fecha de ingreso** reales.
-3. **Fotos biométricas**, si se van a usar: desde la GUI de escritorio, botón *Foto* de cada legajo. Requiere cámara en el equipo.
-4. **Feriados trasladados del año**: el calendario base ubica cada feriado en su fecha estatutaria, que es lo legalmente correcto a falta de decreto. Los traslados del año se cargan en `FERIADOS_TRASLADADOS` de `clock_engine.py`. Ver [[Motor de Reglas de Horas Extra]].
+2. **Turnos**, desde *Gestión → Turnos*: uno por cada horario real de la empresa. El esquema siembra una jornada administrativa de 8 horas que sirve de punto de partida y de red para quien todavía no tenga turno propio.
+3. **Legajos**, desde *Gestión → Personal*, con **vínculo**, **fecha de ingreso** y **turno** reales.
+4. **Fotos biométricas**, si se van a usar: desde la GUI de escritorio, botón *Foto* de cada legajo. Requiere cámara en el equipo.
+5. **Feriados trasladados del año**: el calendario base ubica cada feriado en su fecha estatutaria, que es lo legalmente correcto a falta de decreto. Los traslados del año se cargan en `FERIADOS_TRASLADADOS` de `clock_engine.py`. Ver [[Motor de Reglas de Horas Extra]].
 
 ## La decisión sobre biometría
 
@@ -74,6 +77,7 @@ Encenderla con la plantilla a medio cargar deja gente sin poder marcar.
 
 | Situación | Quién la resuelve | Dónde |
 | --- | --- | --- |
+| Alguien cambia de horario por un tiempo | RRHH programa una rotación con vigencia | *Gestión → Turnos* |
 | Alguien olvidó marcar la salida | Se libera solo a las 18 h y avisa a RRHH | *Gestión → Pendientes* |
 | Lluvia, paro de transporte, corte de rutas | RRHH declara la condición del día | *Gestión → Condiciones del día* |
 | Pedido de permiso | El empleado desde el portal, RRHH aprueba | *Gestión → Pendientes* |
@@ -90,14 +94,14 @@ Decirlo por adelantado evita una venta mal hecha.
 
 | Falta | Consecuencia | Detalle |
 | --- | --- | --- |
-| **Entidad `turnos`** | Una sola hora de entrada para toda la empresa. Sin turnos rotativos, jornada partida ni horarios por sucursal | P2-5 en [[Auditoría Técnica · Hallazgos Críticos]] |
 | **Multi-empresa** | Una instalación por cliente; no hay aislamiento por organización | [[Arquitectura Objetivo · Plataforma y Portal del Empleado]] |
 | **Prueba de vida en el reconocimiento facial** | Una foto en la pantalla de un celular pasa la verificación | P1-2, parte de fondo |
 | **Bus de alertas fuera del proceso** | Con varios workers, una alerta en vivo llega solo a los clientes conectados a ese worker | P3-4 |
 | **Cookie `HttpOnly` para la sesión** | El token vive en `localStorage` | P3-2 |
 | **Pool de conexiones** | Cada petición abre y cierra su conexión; irrelevante para una empresa, relevante para muchas | — |
+| **Calendario de rotación automática** | La rotación semana A / semana B se carga a mano, tramo por tramo | [[Turnos y Rotación de Horarios]] |
 
-Lo primero de esa lista es lo que más se va a pedir: **turnos**. Una empresa con dos turnos no puede usar el sistema tal como está.
+Lo primero de esa lista es lo que más se va a pedir: **multi-empresa**. Con una instalación por cliente el sistema funciona, pero mantener diez clientes son diez despliegues.
 
 ## Verificación post-instalación
 
@@ -108,6 +112,7 @@ python tests/setup_ci.py
 python tests/test_motor_horario.py
 python tests/test_condicion_dia.py
 python tests/test_turno_nocturno.py
+python tests/test_turnos.py
 python tests/test_antiguedad_y_bajas.py
 python tests/test_seguridad_datos.py
 python tests/test_planilla_extras.py
@@ -118,4 +123,4 @@ Si `test_seguridad_datos` falla en la primera comprobación, falta `BIOMETRIA_CL
 
 ## Enlaces
 
-[[Despliegue en la Nube e Infraestructura SaaS]] · [[Auditoría Técnica · Hallazgos Críticos]] · [[Autoservicio de Permisos y Formularios]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Reglamento de Asistencia y Disciplina]] · [[Motor de Reglas de Horas Extra]]
+[[Despliegue en la Nube e Infraestructura SaaS]] · [[Turnos y Rotación de Horarios]] · [[Auditoría Técnica · Hallazgos Críticos]] · [[Autoservicio de Permisos y Formularios]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Reglamento de Asistencia y Disciplina]] · [[Motor de Reglas de Horas Extra]]

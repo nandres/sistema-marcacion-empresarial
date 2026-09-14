@@ -22,17 +22,21 @@ efectivamente trabajadas, y todo lo que excede el tope es extraordinario.
 al mes y de la tolerancia climática de 30 minutos en días de lluvia intensa
 (con corte a ``Ausencia Injustificada`` a los 30 minutos de retraso),
 mientras los funcionarios conservan la gracia general de 15 minutos.
+
+Contra qué hora se mide ese retraso lo decide el **turno** del empleado
+(``turnos.py``), no una constante de la empresa: cada uno tiene su horario,
+sus días y, si hace falta, su propia tolerancia.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from database import Database
 import notifications
+import turnos
 
 JORNADA_DIURNA: timedelta = timedelta(hours=8)
 JORNADA_NOCTURNA: timedelta = timedelta(hours=7)
@@ -40,7 +44,12 @@ JORNADA_MIXTA: timedelta = timedelta(hours=7, minutes=30)
 JORNADA_JUSTIFICADA: timedelta = JORNADA_DIURNA
 INICIO_DIURNO: time = time(6, 0)
 FIN_DIURNO: time = time(20, 0)
-TOLERANCIA_ENTRADA: timedelta = timedelta(minutes=10)
+
+DESCANSO_ENTRE_JORNADAS: timedelta = timedelta(hours=8)
+"""Hueco a partir del cual dos marcas pertenecen a jornadas distintas."""
+
+VENTANA_CONSULTA: timedelta = timedelta(hours=36)
+"""Cuánto hacia atrás se leen marcas para reconstruir la jornada en curso."""
 
 # Art. 194: la jornada mixta cuyo tramo nocturno alcanza las 5 horas se
 # reputa nocturna a todos los efectos, incluido su tope de 7 horas.
@@ -143,27 +152,91 @@ def es_dia_de_descanso(dia: date) -> bool:
     return dia.weekday() == 6 or dia in feriados_de(dia.year)
 
 
-def _cargar_inicio_jornada() -> time:
-    """Lee la hora de inicio de jornada desde ``JORNADA_INICIO`` (HH:MM)."""
-    valor = os.getenv("JORNADA_INICIO", "08:00")
-    horas, minutos = valor.split(":")
-    return time(int(horas), int(minutos))
-
-
-INICIO_JORNADA: time = _cargar_inicio_jornada()
-LIMITE_TARDANZA: time = (
-    datetime.combine(date.min, INICIO_JORNADA) + TOLERANCIA_ENTRADA
-).time()
-
-
 def ahora_local() -> datetime:
     """Retorna la fecha/hora local con zona horaria (aware)."""
     return datetime.now().astimezone()
 
 
-def es_tardanza(hora_entrada: datetime) -> bool:
-    """Aplica la gracia de 10 minutos: tardanza solo si supera el límite."""
-    return hora_entrada.time() > LIMITE_TARDANZA
+def turno_vigente(
+    db: Database, usuario_id: int, dia: Optional[date] = None
+) -> turnos.Turno:
+    """Turno que rige para un empleado en una fecha (hoy por defecto)."""
+    return turnos.resolver(db, usuario_id, dia or ahora_local().date())
+
+
+def tramos_consumidos(db: Database, usuario_id: int, momento: datetime) -> int:
+    """Tramos que el empleado ya cerró en la jornada en curso.
+
+    Dónde empieza la jornada lo decide el **descanso**, no el calendario ni
+    el horario teórico. El día no sirve porque el turno nocturno reparte una
+    jornada entre dos fechas; una ventana fija hacia atrás tampoco, porque
+    con 18 horas la entrada de anoche a las 22:00 seguía contando al fichar
+    hoy a la misma hora; y anclarla a la hora prevista del turno falla con
+    quien trabaja lejos de su horario.
+
+    Se camina hacia atrás desde la marca actual y se corta en el primer
+    hueco que constituye un descanso. El umbral vive entre los dos valores
+    que lo rodean: la pausa más larga dentro de una jornada partida ronda
+    las cuatro horas y el descanso legal entre jornadas son doce.
+    """
+    referencia = momento if momento.tzinfo else momento.astimezone()
+    cerradas = [
+        m
+        for m in db.listar_marcajes_desde(usuario_id, referencia - VENTANA_CONSULTA)
+        if m["hora_salida"] is not None and m["hora_salida"] <= referencia
+    ]
+    consumidos = 0
+    corte = referencia
+    for marca in reversed(cerradas):
+        if corte - marca["hora_salida"] >= DESCANSO_ENTRE_JORNADAS:
+            break
+        consumidos += 1
+        corte = marca["hora_entrada"]
+    return consumidos
+
+
+def duracion_comprometida(
+    db: Database, usuario_id: int, entrada: datetime
+) -> timedelta:
+    """Cuánto duraba el tramo que el empleado vino a cubrir.
+
+    Sin esto, cerrar el tramo de la mañana de una jornada partida a las
+    cuatro horas —que es exactamente lo pactado— se reprocha como salida
+    anticipada por no haber llegado al tope legal de ocho.
+    """
+    momento = entrada if entrada.tzinfo else entrada.astimezone()
+    turno = turno_vigente(db, usuario_id, momento.date())
+    indice = tramos_consumidos(db, usuario_id, momento)
+    return turno.tramo_para(momento, indice).duracion
+
+
+def horas_previstas_legales(turno: turnos.Turno, dia: date) -> timedelta:
+    """Horas **ordinarias** que rinde el turno en un día, según el Art. 194.
+
+    No es la duración del horario sino lo que de ella es jornada ordinaria:
+    un turno de 22:00 a 06:00 dura ocho horas pero rinde siete, porque el
+    tope nocturno son siete y la octava ya es extraordinaria.
+    """
+    total = timedelta(0)
+    for tramo in turno.tramos:
+        entrada = tramo.entrada_del(dia)
+        desglose = calcular_horas_paraguay(
+            entrada, entrada + tramo.duracion, lambda _: False
+        )
+        total += desglose.horas_ordinarias
+    return total
+
+
+def es_tardanza(db: Database, usuario_id: int, hora_entrada: datetime) -> bool:
+    """Indica si una entrada llega fuera de la tolerancia de su turno.
+
+    Delega en ``evaluar_asistencia`` en lugar de aplicar su propia gracia.
+    Cuando eran dos reglas distintas —10 minutos acá, 15 en el flujo de
+    marcación— un funcionario que fichaba 08:12 era Normal al marcar y
+    Llegada Tardía si Recursos Humanos le corregía la marca **a esa misma
+    hora**: la corrección castigaba por corregir.
+    """
+    return evaluar_asistencia(db, usuario_id, hora_entrada)["estado"] != "Normal"
 
 
 def condicion_declarada(db: Database, dia: date) -> Dict[str, Any]:
@@ -208,9 +281,16 @@ def evaluar_asistencia(
     - Gracia general de 15 minutos sin límite mensual de uso.
     - Sin corte de ausencia por retraso y con la misma cobertura climática.
 
+    La hora contra la que se mide el retraso sale del turno vigente y del
+    tramo que le toca cubrir; si el turno declara su propia tolerancia, esa
+    desplaza a la del vínculo. En un día que el turno no cubre no hay hora a
+    la cual llegar tarde: la marca se registra y se liquida, pero no genera
+    incidencia.
+
     Returns:
         Diccionario con ``estado`` (Normal, Llegada Tardía o Ausencia
-        Injustificada), las tolerancias consideradas y un resumen legible.
+        Injustificada), el turno y la hora previstos, las tolerancias
+        consideradas y un resumen legible.
     """
     usuario = db.get_user_by_id(usuario_id)
     if not usuario:
@@ -218,17 +298,34 @@ def evaluar_asistencia(
     vinculo = (usuario.get("tipo_vinculo") or "Funcionario").strip()
     if vinculo not in ("Pasante", "Funcionario"):
         raise ValueError(f"Tipo de vínculo desconocido: '{vinculo}'.")
-    if hora_marca.tzinfo is not None:
-        hora_marca = hora_marca.replace(tzinfo=None)
-    inicio = datetime.combine(hora_marca.date(), INICIO_JORNADA)
-    retraso = max(timedelta(0), hora_marca - inicio)
-    excepcion = condicion_declarada(db, hora_marca.date())
+    instante = hora_marca if hora_marca.tzinfo else hora_marca.astimezone()
+    turno = turno_vigente(db, usuario_id, instante.date())
+    consumidos = tramos_consumidos(db, usuario_id, instante)
+    hora_marca = instante.replace(tzinfo=None)
+    prevista = turno.entrada_prevista(hora_marca, consumidos)
+    retraso = max(timedelta(0), hora_marca - prevista)
+    dia_del_turno = prevista.date()
+    excepcion = condicion_declarada(db, dia_del_turno)
     climatica = excepcion["tolerancia"]
-    if vinculo == "Pasante":
-        tardanzas_mes = db.contar_tardanzas_mes(usuario_id, hora_marca.date())
-        ordinaria = (
-            TOLERANCIA_PASANTE if tardanzas_mes < MAX_TARDANZAS_PASANTE else timedelta(0)
-        )
+    # Una tolerancia propia del turno desplaza a la del vínculo: el horario
+    # de atención al público no admite la misma gracia que una oficina.
+    propia = (
+        timedelta(minutes=turno.tolerancia_min)
+        if turno.tolerancia_min is not None
+        else None
+    )
+    tardanzas_mes: Optional[int] = None
+    if not turno.trabaja(dia_del_turno):
+        # Fuera de los días del turno no hay hora a la cual llegar tarde. La
+        # marca se registra igual —el trabajo existió y se liquida— pero no
+        # puede generar una incidencia disciplinaria.
+        tolerancia = timedelta(0)
+        retraso = timedelta(0)
+        estado = "Normal"
+    elif vinculo == "Pasante":
+        tardanzas_mes = db.contar_tardanzas_mes(usuario_id, dia_del_turno)
+        base = propia if propia is not None else TOLERANCIA_PASANTE
+        ordinaria = base if tardanzas_mes < MAX_TARDANZAS_PASANTE else timedelta(0)
         tolerancia = ordinaria + climatica
         # El corte de ausencia se corre junto con la tolerancia declarada: si
         # la empresa reconoce 30 minutos por lluvia, llegar a los 25 no puede
@@ -240,7 +337,8 @@ def evaluar_asistencia(
         else:
             estado = "Normal"
     else:
-        tolerancia = TOLERANCIA_FUNCIONARIO + climatica
+        base = propia if propia is not None else TOLERANCIA_FUNCIONARIO
+        tolerancia = base + climatica
         estado = "Llegada Tardía" if retraso > tolerancia else "Normal"
     return {
         "tipo_vinculo": vinculo,
@@ -249,9 +347,15 @@ def evaluar_asistencia(
         "tolerancia_efectiva_min": int(tolerancia.total_seconds() // 60),
         "condicion_dia": excepcion["condicion"],
         "tolerancia_climatica": bool(climatica),
-        "tardanzas_mes_previas": tardanzas_mes if vinculo == "Pasante" else None,
+        "tardanzas_mes_previas": tardanzas_mes,
+        "turno": turno.nombre,
+        "turno_id": turno.id,
+        "tramo": consumidos + 1,
+        "entrada_prevista": prevista.strftime("%H:%M"),
+        "fuera_de_turno": not turno.trabaja(dia_del_turno),
         "detalle": (
-            f"{vinculo} · retraso {int(retraso.total_seconds() // 60)} min vs "
+            f"{vinculo} · {turno.nombre} ({prevista.strftime('%H:%M')}) · "
+            f"retraso {int(retraso.total_seconds() // 60)} min vs "
             f"tolerancia {int(tolerancia.total_seconds() // 60)} min "
             f"({excepcion['condicion'] or 'día normal'}) → {estado}"
         ),
@@ -515,22 +619,29 @@ class ClockEngine:
         ahora = ahora_local()
         desglose = calcular_horas_paraguay(open_entry["hora_entrada"], ahora)
         incidencia = self._clasificar_incidencia_salida(
-            desglose, open_entry.get("tipo_incidencia") or ""
+            desglose,
+            open_entry.get("tipo_incidencia") or "",
+            duracion_comprometida(self.db, self.user["id"], open_entry["hora_entrada"]),
         )
         persistir_desglose(self.db, open_entry["id"], ahora, desglose, incidencia)
         return open_entry["id"], ahora
 
     @staticmethod
     def _clasificar_incidencia_salida(
-        desglose: DesgloseJornada, incidencia_entrada: str
+        desglose: DesgloseJornada,
+        incidencia_entrada: str,
+        comprometida: Optional[timedelta] = None,
     ) -> str:
         """Combina la incidencia de entrada con la de salida anticipada.
 
-        La jornada de referencia es la del turno efectivamente trabajado: un
-        turno nocturno que cierra a las 7 horas cumplió su jornada completa y
-        no puede reprocharse como salida anticipada.
+        La referencia es lo que el empleado debía cubrir, acotado por el tope
+        legal de su tipo de jornada: un turno nocturno que cierra a las 7
+        horas cumplió su jornada completa, y un tramo pactado de 4 horas se
+        cumple a las 4 aunque el tope diurno sea de 8.
         """
         tope = TOPES_POR_TIPO[desglose.tipo_jornada]
+        if comprometida is not None:
+            tope = min(tope, comprometida) if tope else comprometida
         if tope and desglose.total_trabajado < tope:
             return " y ".join(p for p in (incidencia_entrada, "Salida Anticipada") if p)
         return incidencia_entrada
@@ -577,14 +688,28 @@ class ClockEngine:
         ``ENTRADA`` y dejaba al empleado sin poder marcar ni la salida ni una
         entrada nueva.
 
+        Cuántas veces se puede marcar en el día lo dice el turno: la jornada
+        partida del comercio son dos entradas y dos salidas, no una.
+
         Returns:
             ``ENTRADA`` o ``SALIDA`` según el estado actual del empleado.
+
+        Raises:
+            ValueError: si el empleado ya completó todos los tramos de su turno.
         """
         self._descartar_jornadas_abandonadas()
         if self.db.get_open_entry(self.user["id"]) is not None:
             return "SALIDA"
-        if self.db.get_entries_by_date(self.user["id"], ahora_local().date()):
-            raise ValueError("Ya registró su entrada y su salida de hoy.")
+        ahora = ahora_local()
+        turno = turno_vigente(self.db, self.user["id"], ahora.date())
+        cerrados = tramos_consumidos(self.db, self.user["id"], ahora)
+        if cerrados >= len(turno.tramos):
+            if len(turno.tramos) == 1:
+                raise ValueError("Ya registró su entrada y su salida de hoy.")
+            raise ValueError(
+                f"Ya completó los {len(turno.tramos)} tramos de su turno "
+                f"{turno.nombre} ({turno.etiqueta()})."
+            )
         return "ENTRADA"
 
     def registrar_asistencia(
@@ -612,22 +737,33 @@ class ClockEngine:
         """Retorna la justificación aprobada que cubre la fecha, si existe."""
         return self.db.get_justificacion_por_fecha(self.user["id"], fecha)
 
+    def turno_del_dia(self, fecha: date) -> turnos.Turno:
+        """Turno que le corresponde al empleado en una fecha."""
+        return turno_vigente(self.db, self.user["id"], fecha)
+
     def es_dia_laboral(self, fecha: date) -> bool:
-        """Indica si la fecha es un día laboral (ni domingo ni feriado)."""
-        return not es_feriado_o_domingo(datetime.combine(fecha, time(12, 0)))
+        """Indica si la fecha es laborable para **este** empleado.
+
+        Ni domingo ni feriado, y además un día que su turno cubra: quien
+        descansa los lunes porque su turno va de martes a sábado no está
+        ausente los lunes.
+        """
+        if es_feriado_o_domingo(datetime.combine(fecha, time(12, 0))):
+            return False
+        return self.turno_del_dia(fecha).trabaja(fecha)
 
     def horas_justificadas(self, fecha: date) -> timedelta:
         """Horas ordinarias legales que reconoce una justificación aprobada.
 
-        Se reconoce la jornada diurna estándar (8 horas) solo en días
-        laborales; domingos y feriados ya son días de descanso y no
-        generan horas.
+        Reconoce lo que ese día rendía el turno del empleado, no una jornada
+        fija: justificarle ocho horas a quien tiene turno nocturno de siete
+        sería pagarle una hora extra por faltar.
         """
         if not self.justificacion_para(fecha):
             return timedelta(0)
         if not self.es_dia_laboral(fecha):
             return timedelta(0)
-        return JORNADA_JUSTIFICADA
+        return horas_previstas_legales(self.turno_del_dia(fecha), fecha)
 
     def es_falta_no_justificada(self, fecha: date) -> bool:
         """Indica si una fecha laboral quedó sin marcar y sin justificación."""

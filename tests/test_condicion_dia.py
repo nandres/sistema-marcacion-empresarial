@@ -45,9 +45,15 @@ def verificar(descripcion: str, condicion: bool, detalle: str = "") -> None:
           (f" | {detalle}" if detalle else ""))
 
 
-# El día de prueba es pasado para no chocar con marcas reales del kiosco.
+# El día de prueba es pasado para no chocar con marcas reales del kiosco, y
+# tiene que ser uno que el turno del empleado efectivamente cubra: fuera de
+# sus días no hay hora a la cual llegar tarde.
 dia = datetime.now().date() - timedelta(days=3)
-inicio = datetime.combine(dia, clock_engine.INICIO_JORNADA)
+turno = clock_engine.turno_vigente(db, empleado["id"], dia)
+while not turno.trabaja(dia) or clock_engine.es_dia_de_descanso(dia):
+    dia -= timedelta(days=1)
+    turno = clock_engine.turno_vigente(db, empleado["id"], dia)
+inicio = turno.entrada_prevista(datetime.combine(dia, turno.entrada_nominal))
 llegada = inicio + timedelta(minutes=25)
 
 db.borrar_condicion_dia(dia)

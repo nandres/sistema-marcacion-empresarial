@@ -637,7 +637,11 @@ def _dia_local(instante: datetime) -> date:
 
 
 def _estado_del_dia(
-    dia: date, marcas: List[Dict[str, Any]], justificada: bool, hoy: date
+    dia: date,
+    marcas: List[Dict[str, Any]],
+    justificada: bool,
+    hoy: date,
+    en_turno: bool = True,
 ) -> str:
     """Clasifica un día del mes para la línea de tiempo del empleado.
 
@@ -659,6 +663,10 @@ def _estado_del_dia(
         return "justificado"
     if dia > hoy:
         return "futuro"
+    # Quien tiene turno de martes a sábado no está ausente los lunes: es su
+    # día franco, y contarlo como falta le descuenta el sueldo por descansar.
+    if not en_turno:
+        return "franco"
     return "ausente"
 
 
@@ -666,8 +674,14 @@ def _linea_de_tiempo(
     marcajes: List[Dict[str, Any]],
     justificaciones: List[Dict[str, Any]],
     hoy: date,
+    turno: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
-    """Arma el mes día por día con su estado, sin una consulta por día."""
+    """Arma el mes día por día con su estado, sin una consulta por día.
+
+    El turno se resuelve una vez para todo el mes en lugar de por día: una
+    rotación a mitad de mes desplaza los francos del tramo anterior, que es
+    un detalle menor frente a treinta consultas para pintar una tabla.
+    """
     por_dia: Dict[date, List[Dict[str, Any]]] = {}
     for m in marcajes:
         por_dia.setdefault(_dia_local(m["hora_entrada"]), []).append(m)
@@ -699,7 +713,10 @@ def _linea_de_tiempo(
             {
                 "dia": numero,
                 "fecha": dia.isoformat(),
-                "estado": _estado_del_dia(dia, marcas, justificada, hoy),
+                "estado": _estado_del_dia(
+                    dia, marcas, justificada, hoy,
+                    turno.trabaja(dia) if turno else True,
+                ),
                 "descanso": clock_engine.es_dia_de_descanso(dia),
                 "hoy": dia == hoy,
                 "entrada": entrada.strftime("%H:%M") if entrada else None,
@@ -794,6 +811,7 @@ def resumen_empleado(
     """
     hoy = fecha or date.today()
     vinculo = user.get("tipo_vinculo") or "Funcionario"
+    turno = clock_engine.turno_vigente(db, user["id"], hoy)
     antiguedad = reglamento.antiguedad_anios(user, hoy)
     justificaciones = db.list_justificaciones(user["id"])
     tipo_vacaciones = "Vacaciones" if vinculo == "Funcionario" else "Licencia de Pasante"
@@ -834,9 +852,14 @@ def resumen_empleado(
         "usuario": user["username"],
         "nombre": user["full_name"],
         "hoy": _estado_de_hoy(marcajes, hoy),
-        "dias_mes": _linea_de_tiempo(marcajes, justificaciones, hoy),
+        "dias_mes": _linea_de_tiempo(marcajes, justificaciones, hoy, turno),
         "mes_nombre": MESES[hoy.month - 1],
         "vinculo": vinculo,
+        "turno": dict(
+            turno.como_dict(),
+            trabaja_hoy=turno.trabaja(hoy),
+            entrada_prevista=turno.entrada_nominal.strftime("%H:%M"),
+        ),
         "antiguedad_anios": round(antiguedad, 1),
         "reglamento": (
             reglamento.REGLAMENTO_PASANTIA

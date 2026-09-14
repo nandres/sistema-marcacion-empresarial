@@ -28,8 +28,17 @@ db.limpiar_marcajes_prueba(2, hace - timedelta(days=1), hace)
 momento_entrada = datetime(hace.year, hace.month, hace.day, 7, 30, tzinfo=timezone.utc)
 cola.encolar("juan", momento_entrada)
 
-# 2) Entrada tardía (09:30) -> Llegada Tardía -> alerta para RRHH
-momento_tarde = datetime(hace.year, hace.month, hace.day - 1, 9, 30, tzinfo=timezone.utc)
+# 2) Entrada tardía -> Llegada Tardía -> alerta para RRHH.
+# La hora se construye en horario local y en un día que el turno cubra: la
+# tardanza se mide contra el reloj de pared del turno, no contra UTC, y fuera
+# de los días del turno no hay hora a la cual llegar tarde.
+dia_tarde = hace - timedelta(days=1)
+while dia_tarde.weekday() > 4:
+    dia_tarde -= timedelta(days=1)
+db.limpiar_marcajes_prueba(2, dia_tarde, dia_tarde)
+momento_tarde = datetime(
+    dia_tarde.year, dia_tarde.month, dia_tarde.day, 9, 30
+).astimezone()
 cola.encolar("juan", momento_tarde)
 
 # 3) Salida del día puntual (17:00) -> cierra la entrada del punto 1
@@ -51,7 +60,7 @@ print("salida preservada:", r["hora_salida"].isoformat(), "== 17:00 UTC?",
       r["hora_salida"] == momento_salida)
 print("sync_id presente:", bool(r["sync_id"]))
 
-registros2 = db.get_entries_by_date(2, hace - timedelta(days=1))
+registros2 = db.get_entries_by_date(2, dia_tarde)
 print("registros día tardío:", len(registros2), "incidencia:", registros2[0]["tipo_incidencia"])
 
 # 4) Segundo lote: no debe duplicar nada

@@ -18,12 +18,13 @@ La configuración local (`.obsidian/`) está excluida del control de versiones; 
 | Hacia dónde debería ir el sistema | [[Arquitectura Objetivo · Plataforma y Portal del Empleado]] |
 | Fraude en las marcas y carga en el pico | [[Antifraude y Resiliencia en Picos de Marcación]] |
 | Cómo pide permisos un empleado y qué papeles salen solos | [[Autoservicio de Permisos y Formularios]] |
+| A qué hora entra cada persona, rotación y jornada partida | [[Turnos y Rotación de Horarios]] |
 | **Instalarlo en una empresa** | [[Puesta en Marcha en un Cliente]] |
 
 ## Notas por dominio
 
 **Reglas de negocio y normativa**
-[[Motor de Reglas de Horas Extra]] · [[Reglamento de Asistencia y Disciplina]] · [[Catálogo de Permisos y Licencias]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Autoservicio de Permisos y Formularios]]
+[[Motor de Reglas de Horas Extra]] · [[Turnos y Rotación de Horarios]] · [[Reglamento de Asistencia y Disciplina]] · [[Catálogo de Permisos y Licencias]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Autoservicio de Permisos y Formularios]]
 
 **Acceso y seguridad**
 [[Control de Roles y Permisos RBAC]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Módulo de Gestión de Usuarios]]

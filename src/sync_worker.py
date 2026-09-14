@@ -18,6 +18,7 @@ import threading
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
+import clock_engine
 import database
 import notifications
 from clock_engine import (
@@ -93,18 +94,33 @@ def sincronizar(
                 if not user:
                     raise ValueError("Usuario inexistente en el servidor.")
                 momento = _desde_iso(pendiente["momento_iso"])
-                registros = db.get_entries_by_date(user["id"], momento.date())
-                abierto = next((r for r in registros if r["hora_salida"] is None), None)
+                # Ni el día calendario ni "¿ya marcó hoy?" sirven para decidir:
+                # el turno nocturno reparte una jornada entre dos fechas y la
+                # jornada partida son dos entradas en la misma. La decisión es
+                # la misma que toma el kiosco en línea.
+                abierto = db.get_open_entry(user["id"], antes_de=momento)
+                # Una entrada que quedó abierta de otra jornada no es la que
+                # esta marca viene a cerrar: tomarla produciría un turno de
+                # veintidós horas. Es el mismo techo que aplica el kiosco.
+                if abierto is not None and (
+                    momento - abierto["hora_entrada"] > clock_engine.MAX_JORNADA_ABIERTA
+                ):
+                    abierto = None
+                previas = db.listar_marcajes_desde(
+                    user["id"], momento - clock_engine.VENTANA_CONSULTA
+                )
 
-                if abierto is None and not registros:
-                    _sincronizar_entrada(db, user, momento, pendiente, avisar)
-                    resumen["subidas"] += 1
-                elif abierto is not None:
-                    if _ya_sincronizada_salida(registros, momento):
+                if abierto is not None:
+                    if _ya_sincronizada_salida(previas, momento):
                         resumen["descartadas"] += 1
                     else:
                         _sincronizar_salida(db, user, abierto, momento, pendiente)
                         resumen["subidas"] += 1
+                elif _ya_cubierta(previas, momento):
+                    resumen["descartadas"] += 1
+                elif _queda_tramo_por_cubrir(db, user, momento):
+                    _sincronizar_entrada(db, user, momento, pendiente, avisar)
+                    resumen["subidas"] += 1
                 else:
                     resumen["descartadas"] += 1
                 cola.eliminar(pendiente["id"])
@@ -114,6 +130,26 @@ def sincronizar(
         if not usar_db_externo:
             db.cerrar()
     return resumen
+
+
+def _ya_cubierta(previas: List[Dict[str, Any]], momento: datetime) -> bool:
+    """Indica si el instante ya cae dentro de una jornada registrada.
+
+    Es la defensa contra el reintento de una cola que ya se subió. No alcanza
+    con "¿marcó ese día?": la jornada partida tiene dos entradas legítimas en
+    la misma fecha, y descartarlas por el día perdería la segunda.
+    """
+    for registro in previas:
+        fin = registro["hora_salida"]
+        if registro["hora_entrada"] <= momento and (fin is None or momento <= fin):
+            return True
+    return False
+
+
+def _queda_tramo_por_cubrir(db, user, momento: datetime) -> bool:
+    """Indica si el turno del empleado admite otra entrada en esa jornada."""
+    turno = clock_engine.turno_vigente(db, user["id"], momento.date())
+    return clock_engine.tramos_consumidos(db, user["id"], momento) < len(turno.tramos)
 
 
 def _sincronizar_entrada(db, user, momento, pendiente, avisar) -> None:
@@ -158,7 +194,9 @@ def _sincronizar_salida(db, user, abierto, momento, pendiente) -> None:
     el timestamp original."""
     desglose = calcular_horas_paraguay(abierto["hora_entrada"], momento)
     incidencia = ClockEngine._clasificar_incidencia_salida(
-        desglose, abierto.get("tipo_incidencia") or ""
+        desglose,
+        abierto.get("tipo_incidencia") or "",
+        clock_engine.duracion_comprometida(db, user["id"], abierto["hora_entrada"]),
     )
     persistir_desglose(db, abierto["id"], momento, desglose, incidencia)
 

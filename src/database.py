@@ -23,6 +23,7 @@ from psycopg2.extras import Json, RealDictCursor
 
 import biometria
 import reglamento
+import turnos as turnos_dominio
 
 # Lista SQL de tipos de permiso válidos (catálogo reglamentario + histórico)
 _TIPOS_SQL: str = ", ".join("'%s'" % t for t in reglamento.TIPOS_PERMISO_CHECK)
@@ -39,6 +40,7 @@ ROLES_INICIALES: Tuple[str, ...] = ("Administrador", "Recursos Humanos", "Emplea
 
 LOCK_TIMEOUT_DDL: str = "10s"
 """Espera máxima de las migraciones por un lock de tabla antes de abortar."""
+
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -249,6 +251,64 @@ class Database:
             "activo BOOLEAN NOT NULL DEFAULT TRUE"
         )
         cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS fecha_baja DATE")
+        # La hora de entrada dejó de ser una constante del proceso. Un turno
+        # agrupa uno o más tramos (la jornada partida tiene dos), los días de
+        # la semana que cubre y la sucursal donde rige.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS turnos (
+                id SERIAL PRIMARY KEY,
+                nombre VARCHAR(60) UNIQUE NOT NULL,
+                sucursal VARCHAR(80) NOT NULL DEFAULT 'Casa Central',
+                dias CHAR(7) NOT NULL DEFAULT '1111100',
+                tolerancia_min INTEGER,
+                activo BOOLEAN NOT NULL DEFAULT TRUE,
+                predeterminado BOOLEAN NOT NULL DEFAULT FALSE,
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_turno_predeterminado "
+            "ON turnos (predeterminado) WHERE predeterminado"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS turno_tramos (
+                id SERIAL PRIMARY KEY,
+                turno_id INTEGER NOT NULL REFERENCES turnos (id) ON DELETE CASCADE,
+                orden SMALLINT NOT NULL,
+                hora_entrada TIME NOT NULL,
+                hora_salida TIME NOT NULL,
+                UNIQUE (turno_id, orden)
+            )
+            """
+        )
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS turno_id INTEGER "
+            "REFERENCES turnos (id) ON DELETE SET NULL"
+        )
+        # La rotación no se modela pisando el legajo: se asigna un turno con
+        # vigencia y, al vencer, el empleado vuelve solo al turno de contrato.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS asignaciones_turno (
+                id SERIAL PRIMARY KEY,
+                usuario_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+                turno_id INTEGER NOT NULL REFERENCES turnos (id) ON DELETE CASCADE,
+                desde DATE NOT NULL,
+                hasta DATE,
+                motivo VARCHAR(120) NOT NULL DEFAULT '',
+                asignado_por INTEGER REFERENCES users (id),
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CHECK (hasta IS NULL OR hasta >= desde)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asignaciones_vigencia "
+            "ON asignaciones_turno (usuario_id, desde DESC, hasta)"
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS marcajes (
@@ -501,7 +561,41 @@ class Database:
                 "INSERT INTO roles (nombre) VALUES (%s) ON CONFLICT (nombre) DO NOTHING",
                 (nombre,),
             )
+        self._sembrar_turno_predeterminado(cursor)
         self.connection.commit()
+
+    def _sembrar_turno_predeterminado(self, cursor: Any) -> None:
+        """Deja a la empresa con un turno usable desde la primera marcación.
+
+        Una instalación que todavía no definió turnos tiene que seguir
+        funcionando, así que el esquema siembra la jornada administrativa con
+        la hora de ``JORNADA_INICIO``. Acá el valor sí está disponible: el
+        DDL corre después de ``load_config()``, que es lo que no ocurría
+        cuando la hora era una constante congelada al importar el módulo.
+        """
+        # El cursor del DDL es de tuplas, no de diccionarios: acá se indexa
+        # por posición y no por nombre de columna.
+        cursor.execute("SELECT COUNT(*) FROM turnos")
+        if cursor.fetchone()[0]:
+            return
+        respaldo = turnos_dominio.de_respaldo()
+        tramo = respaldo.tramos[0]
+        cursor.execute(
+            """
+            INSERT INTO turnos (nombre, dias, predeterminado)
+            VALUES (%s, %s, TRUE)
+            RETURNING id
+            """,
+            (respaldo.nombre, respaldo.dias),
+        )
+        turno_id = cursor.fetchone()[0]
+        cursor.execute(
+            """
+            INSERT INTO turno_tramos (turno_id, orden, hora_entrada, hora_salida)
+            VALUES (%s, 1, %s, %s)
+            """,
+            (turno_id, tramo.entrada, tramo.salida),
+        )
 
     def esquema_listo(self) -> bool:
         """Indica si las tablas base ya existen sobre la conexión activa.
@@ -517,11 +611,12 @@ class Database:
             WHERE table_schema = 'public'
               AND table_name IN ('roles', 'users', 'marcajes', 'logs_auditoria',
                                  'justificaciones', 'solicitudes_correccion', 'alertas',
-                                 'condiciones_dia', 'solicitudes_permiso')
+                                 'condiciones_dia', 'solicitudes_permiso',
+                                 'turnos', 'turno_tramos', 'asignaciones_turno')
             """,
             fetch="one",
         )
-        return int(fila["presentes"]) == 9
+        return int(fila["presentes"]) == 12
 
     def _execute(
         self, query: str, params: Optional[Tuple[Any, ...]] = None, fetch: str = "none"
@@ -621,6 +716,7 @@ class Database:
         salario_mensual: float = 0.0,
         tipo_vinculo: str = "Funcionario",
         fecha_ingreso: Optional[Any] = None,
+        turno_id: Optional[int] = None,
     ) -> int:
         """Inserta un usuario y retorna su identificador.
 
@@ -631,12 +727,13 @@ class Database:
         cursor = self._execute(
             """
             INSERT INTO users (username, password_hash, full_name, role_id,
-                               salario_mensual, tipo_vinculo, fecha_ingreso)
-            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_DATE))
+                               salario_mensual, tipo_vinculo, fecha_ingreso,
+                               turno_id)
+            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_DATE), %s)
             RETURNING id
             """,
             (username, password_hash, full_name, role_id, salario_mensual,
-             tipo_vinculo, fecha_ingreso),
+             tipo_vinculo, fecha_ingreso, turno_id),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
@@ -676,8 +773,11 @@ class Database:
             f"""
             SELECT u.id, u.username, u.full_name, u.salario_mensual,
                    u.tipo_vinculo, r.nombre AS role_name, u.created_at,
-                   u.fecha_ingreso, u.activo, u.fecha_baja
-            FROM users u JOIN roles r ON r.id = u.role_id
+                   u.fecha_ingreso, u.activo, u.fecha_baja, u.turno_id,
+                   t.nombre AS turno_nombre
+            FROM users u
+            JOIN roles r ON r.id = u.role_id
+            LEFT JOIN turnos t ON t.id = u.turno_id
             {filtro}
             ORDER BY u.id
             """,
@@ -708,8 +808,15 @@ class Database:
         salario_mensual: Optional[float] = None,
         tipo_vinculo: Optional[str] = None,
         fecha_ingreso: Optional[Any] = None,
+        turno_id: Optional[int] = None,
+        limpiar_turno: bool = False,
     ) -> bool:
-        """Actualiza los campos provistos de un usuario y retorna si hubo cambios."""
+        """Actualiza los campos provistos de un usuario y retorna si hubo cambios.
+
+        ``limpiar_turno`` devuelve el legajo al turno predeterminado de la
+        empresa: sin él, un ``turno_id`` nulo sería indistinguible de no
+        haber mandado el campo y nadie podría deshacer una asignación.
+        """
         updates: List[str] = []
         params: List[Any] = []
         if full_name is not None:
@@ -730,6 +837,11 @@ class Database:
         if fecha_ingreso is not None:
             updates.append("fecha_ingreso = %s")
             params.append(fecha_ingreso)
+        if limpiar_turno:
+            updates.append("turno_id = NULL")
+        elif turno_id is not None:
+            updates.append("turno_id = %s")
+            params.append(turno_id)
         if not updates:
             return False
         params.append(user_id)
@@ -759,6 +871,347 @@ class Database:
     def list_roles(self) -> List[Dict[str, Any]]:
         """Lista todos los roles registrados."""
         return self._execute("SELECT * FROM roles ORDER BY id", fetch="all")
+
+    def listar_turnos(self, incluir_inactivos: bool = False) -> List[Dict[str, Any]]:
+        """Lista los turnos con sus tramos y la dotación asignada a cada uno.
+
+        Los tramos llegan en una sola consulta y se agrupan en memoria: un
+        ``SELECT`` por turno para pintar una tabla de seis filas es la forma
+        más fácil de convertir una pantalla en una tormenta de consultas.
+        """
+        filtro = "" if incluir_inactivos else "WHERE t.activo"
+        turnos = self._execute(
+            f"""
+            SELECT t.*,
+                   (SELECT COUNT(*) FROM users u
+                     WHERE u.turno_id = t.id AND u.activo) AS dotacion,
+                   (SELECT COUNT(*) FROM asignaciones_turno a
+                     WHERE a.turno_id = t.id
+                       AND (a.hasta IS NULL OR a.hasta >= CURRENT_DATE)
+                       AND a.desde <= CURRENT_DATE) AS asignados
+            FROM turnos t
+            {filtro}
+            ORDER BY t.predeterminado DESC, t.nombre
+            """,
+            fetch="all",
+        )
+        if not turnos:
+            return []
+        tramos = self._execute(
+            """
+            SELECT turno_id, orden, hora_entrada, hora_salida
+            FROM turno_tramos
+            WHERE turno_id = ANY(%s)
+            ORDER BY turno_id, orden
+            """,
+            ([t["id"] for t in turnos],),
+            fetch="all",
+        )
+        por_turno: Dict[int, List[Dict[str, Any]]] = {}
+        for tramo in tramos:
+            por_turno.setdefault(tramo["turno_id"], []).append(tramo)
+        for turno in turnos:
+            turno["tramos"] = por_turno.get(turno["id"], [])
+        return turnos
+
+    def get_turno(self, turno_id: int) -> Optional[Dict[str, Any]]:
+        """Retorna un turno con sus tramos ordenados, o ``None``."""
+        turno = self._execute(
+            "SELECT * FROM turnos WHERE id = %s", (turno_id,), fetch="one"
+        )
+        if not turno:
+            return None
+        turno["tramos"] = self._execute(
+            """
+            SELECT orden, hora_entrada, hora_salida
+            FROM turno_tramos WHERE turno_id = %s ORDER BY orden
+            """,
+            (turno_id,),
+            fetch="all",
+        )
+        return turno
+
+    def get_turno_por_nombre(self, nombre: str) -> Optional[Dict[str, Any]]:
+        """Busca un turno por su nombre, que es único."""
+        fila = self._execute(
+            "SELECT id FROM turnos WHERE lower(nombre) = lower(%s)",
+            (nombre,),
+            fetch="one",
+        )
+        return self.get_turno(fila["id"]) if fila else None
+
+    def crear_turno(
+        self,
+        nombre: str,
+        tramos: List[Tuple[Any, Any]],
+        dias: str,
+        sucursal: str,
+        tolerancia_min: Optional[int] = None,
+    ) -> int:
+        """Inserta un turno con sus tramos en una sola transacción."""
+        cursor = self._execute(
+            """
+            INSERT INTO turnos (nombre, sucursal, dias, tolerancia_min)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (nombre, sucursal, dias, tolerancia_min),
+        )
+        turno_id = cursor.fetchone()["id"]
+        self._reemplazar_tramos(turno_id, tramos)
+        self.connection.commit()
+        return turno_id
+
+    def actualizar_turno(
+        self,
+        turno_id: int,
+        nombre: Optional[str] = None,
+        tramos: Optional[List[Tuple[Any, Any]]] = None,
+        dias: Optional[str] = None,
+        sucursal: Optional[str] = None,
+        tolerancia_min: Optional[int] = None,
+        limpiar_tolerancia: bool = False,
+    ) -> bool:
+        """Actualiza los campos provistos de un turno y, si llegan, sus tramos."""
+        updates: List[str] = []
+        params: List[Any] = []
+        if nombre is not None:
+            updates.append("nombre = %s")
+            params.append(nombre)
+        if dias is not None:
+            updates.append("dias = %s")
+            params.append(dias)
+        if sucursal is not None:
+            updates.append("sucursal = %s")
+            params.append(sucursal)
+        if limpiar_tolerancia:
+            updates.append("tolerancia_min = NULL")
+        elif tolerancia_min is not None:
+            updates.append("tolerancia_min = %s")
+            params.append(tolerancia_min)
+        if updates:
+            params.append(turno_id)
+            self._execute(
+                f"UPDATE turnos SET {', '.join(updates)} WHERE id = %s", tuple(params)
+            )
+        if tramos is not None:
+            self._reemplazar_tramos(turno_id, tramos)
+        if not updates and tramos is None:
+            return False
+        self.connection.commit()
+        return True
+
+    def _reemplazar_tramos(self, turno_id: int, tramos: List[Tuple[Any, Any]]) -> None:
+        """Deja los tramos del turno exactamente como los describe la lista."""
+        self._execute("DELETE FROM turno_tramos WHERE turno_id = %s", (turno_id,))
+        for orden, (entrada, salida) in enumerate(tramos, start=1):
+            self._execute(
+                """
+                INSERT INTO turno_tramos (turno_id, orden, hora_entrada, hora_salida)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (turno_id, orden, entrada, salida),
+            )
+
+    def cambiar_estado_turno(self, turno_id: int, activo: bool) -> bool:
+        """Activa o retira de circulación un turno sin borrar su historia."""
+        cursor = self._execute(
+            "UPDATE turnos SET activo = %s WHERE id = %s", (activo, turno_id)
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def marcar_turno_predeterminado(self, turno_id: int) -> bool:
+        """Traslada la marca de predeterminado a otro turno.
+
+        El índice único parcial admite un solo predeterminado, así que hay
+        que bajar el anterior antes de levantar el nuevo.
+        """
+        self._execute(
+            "UPDATE turnos SET predeterminado = FALSE WHERE predeterminado "
+            "AND id <> %s",
+            (turno_id,),
+        )
+        cursor = self._execute(
+            "UPDATE turnos SET predeterminado = TRUE WHERE id = %s", (turno_id,)
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def eliminar_turno(self, turno_id: int) -> None:
+        """Elimina un turno; sus tramos y asignaciones caen en cascada."""
+        self._execute("DELETE FROM turnos WHERE id = %s", (turno_id,))
+        self.connection.commit()
+
+    def contar_personal_en_turno(self, turno_id: int) -> int:
+        """Empleados activos que hoy dependen del turno, por legajo o asignación."""
+        fila = self._execute(
+            """
+            SELECT COUNT(DISTINCT u.id) AS total
+            FROM users u
+            LEFT JOIN asignaciones_turno a
+                   ON a.usuario_id = u.id
+                  AND a.turno_id = %s
+                  AND a.desde <= CURRENT_DATE
+                  AND (a.hasta IS NULL OR a.hasta >= CURRENT_DATE)
+            WHERE u.activo AND (u.turno_id = %s OR a.id IS NOT NULL)
+            """,
+            (turno_id, turno_id),
+            fetch="one",
+        )
+        return int(fila["total"])
+
+    def asignar_turno_base(self, user_id: int, turno_id: Optional[int]) -> bool:
+        """Fija el turno de contrato del legajo (``None`` lo devuelve al predeterminado)."""
+        cursor = self._execute(
+            "UPDATE users SET turno_id = %s WHERE id = %s", (turno_id, user_id)
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def crear_asignacion_turno(
+        self,
+        usuario_id: int,
+        turno_id: int,
+        desde: Any,
+        hasta: Optional[Any],
+        motivo: str,
+        asignado_por: Optional[int],
+    ) -> int:
+        """Registra una rotación con vigencia sobre el turno de contrato."""
+        cursor = self._execute(
+            """
+            INSERT INTO asignaciones_turno
+                (usuario_id, turno_id, desde, hasta, motivo, asignado_por)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (usuario_id, turno_id, desde, hasta, motivo, asignado_por),
+        )
+        self.connection.commit()
+        return cursor.fetchone()["id"]
+
+    def listar_asignaciones_turno(
+        self, usuario_id: Optional[int] = None, solo_vigentes: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Lista rotaciones con el nombre del turno y del empleado."""
+        condiciones: List[str] = []
+        params: List[Any] = []
+        if usuario_id is not None:
+            condiciones.append("a.usuario_id = %s")
+            params.append(usuario_id)
+        if solo_vigentes:
+            condiciones.append("(a.hasta IS NULL OR a.hasta >= CURRENT_DATE)")
+        filtro = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
+        return self._execute(
+            f"""
+            SELECT a.*, t.nombre AS turno_nombre, u.full_name
+            FROM asignaciones_turno a
+            JOIN turnos t ON t.id = a.turno_id
+            JOIN users u ON u.id = a.usuario_id
+            {filtro}
+            ORDER BY a.desde DESC, a.id DESC
+            """,
+            tuple(params),
+            fetch="all",
+        )
+
+    def eliminar_asignacion_turno(self, asignacion_id: int) -> bool:
+        """Revoca una rotación; el empleado vuelve a su turno de contrato."""
+        cursor = self._execute(
+            "DELETE FROM asignaciones_turno WHERE id = %s", (asignacion_id,)
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def resolver_turno(self, usuario_id: int, dia: Any) -> Optional[Dict[str, Any]]:
+        """Turno que rige para un empleado en una fecha, con su procedencia.
+
+        Prioridad: asignación vigente, turno del legajo, turno predeterminado
+        de la empresa. La consulta trae las tres candidatas y se queda con la
+        de mayor prioridad, de modo que la resolución no dependa de en qué
+        orden las pregunte el código que llama.
+        """
+        fila = self._execute(
+            """
+            SELECT elegido.turno_id, elegido.origen
+            FROM (
+                (SELECT turno_id, 'asignacion' AS origen, 1 AS prioridad
+                   FROM asignaciones_turno
+                  WHERE usuario_id = %s AND desde <= %s
+                    AND (hasta IS NULL OR hasta >= %s)
+                  ORDER BY desde DESC, id DESC
+                  LIMIT 1)
+                UNION ALL
+                (SELECT turno_id, 'legajo', 2
+                   FROM users WHERE id = %s AND turno_id IS NOT NULL)
+                UNION ALL
+                (SELECT id, 'predeterminado', 3
+                   FROM turnos WHERE predeterminado AND activo)
+            ) elegido
+            ORDER BY elegido.prioridad
+            LIMIT 1
+            """,
+            (usuario_id, dia, dia, usuario_id),
+            fetch="one",
+        )
+        if not fila:
+            return None
+        turno = self.get_turno(fila["turno_id"])
+        if turno:
+            turno["origen"] = fila["origen"]
+        return turno
+
+    def turnos_vigentes_de_la_plantilla(self, dia: Any) -> Dict[int, Dict[str, Any]]:
+        """Turno que rige hoy para cada empleado activo, en una sola consulta.
+
+        El panel necesita responder "quién está en qué turno hoy", que no es
+        lo mismo que el turno de contrato: con una rotación en curso, mirar
+        el legajo muestra a la persona donde ya no está. Resolverlo empleado
+        por empleado serían tantas consultas como filas tenga la pantalla.
+        """
+        filas = self._execute(
+            """
+            SELECT u.id AS usuario_id,
+                   COALESCE(ta.id, tu.id, td.id) AS turno_id,
+                   COALESCE(ta.nombre, tu.nombre, td.nombre) AS turno_nombre,
+                   CASE WHEN ta.id IS NOT NULL THEN 'asignacion'
+                        WHEN tu.id IS NOT NULL THEN 'legajo'
+                        ELSE 'predeterminado' END AS origen
+            FROM users u
+            LEFT JOIN LATERAL (
+                SELECT turno_id FROM asignaciones_turno
+                WHERE usuario_id = u.id AND desde <= %s
+                  AND (hasta IS NULL OR hasta >= %s)
+                ORDER BY desde DESC, id DESC
+                LIMIT 1
+            ) vigente ON TRUE
+            LEFT JOIN turnos ta ON ta.id = vigente.turno_id
+            LEFT JOIN turnos tu ON tu.id = u.turno_id
+            LEFT JOIN turnos td ON td.predeterminado AND td.activo
+            """,
+            (dia, dia),
+            fetch="all",
+        )
+        return {fila["usuario_id"]: fila for fila in filas}
+
+    def listar_marcajes_desde(
+        self, user_id: int, desde: datetime
+    ) -> List[Dict[str, Any]]:
+        """Marcajes cuya entrada cae dentro de la ventana de jornada en curso.
+
+        Se mira la ventana y no la fecha porque un turno nocturno reparte una
+        sola jornada entre dos días calendario.
+        """
+        return self._execute(
+            """
+            SELECT * FROM marcajes
+            WHERE user_id = %s AND hora_entrada >= %s AND NOT abandonado
+            ORDER BY hora_entrada
+            """,
+            (user_id, desde),
+            fetch="all",
+        )
 
     def open_clock_in(
         self,
@@ -875,20 +1328,33 @@ class Database:
         )
         self.connection.commit()
 
-    def get_open_entry(self, user_id: int) -> Optional[Dict[str, Any]]:
+    def get_open_entry(
+        self, user_id: int, antes_de: Optional[datetime] = None
+    ) -> Optional[Dict[str, Any]]:
         """Retorna el marcaje abierto más reciente del usuario, si existe.
+
+        "Más reciente" es por hora de entrada y no por orden de inserción:
+        al reponer una cola offline las marcas se insertan en el orden en que
+        se encolaron, que no es el orden en que ocurrieron, y una salida
+        terminaba cerrando la entrada equivocada.
+
+        ``antes_de`` acota a las jornadas que ya habían empezado en ese
+        instante, que es lo que necesita esa misma reposición.
 
         Los abandonados no cuentan como abiertos: ya salieron del circuito de
         marcación y esperan la corrección de Recursos Humanos.
         """
+        filtro = "AND hora_entrada <= %s" if antes_de is not None else ""
+        parametros = (user_id, antes_de) if antes_de is not None else (user_id,)
         return self._execute(
-            """
+            f"""
             SELECT * FROM marcajes
             WHERE user_id = %s AND hora_salida IS NULL AND NOT abandonado
-            ORDER BY id DESC
+            {filtro}
+            ORDER BY hora_entrada DESC, id DESC
             LIMIT 1
             """,
-            (user_id,),
+            parametros,
             fetch="one",
         )
 

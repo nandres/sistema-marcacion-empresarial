@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import getpass
 import os
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from functools import wraps
-from typing import Any, Callable, Dict, Optional, TypeVar
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 import bcrypt
 import jwt
@@ -20,12 +20,17 @@ import jwt
 from clock_engine import (
     calcular_horas_paraguay,
     es_feriado_o_domingo,
-    es_tardanza,
+    evaluar_asistencia,
     persistir_desglose,
+    turno_vigente,
 )
 from database import Database, load_dotenv
 import notifications
 import reglamento
+import turnos
+
+SIN_CAMBIO: Any = object()
+"""Centinela para distinguir 'no lo toques' de 'ponelo en nulo'."""
 
 ROLE_ADMIN: str = "Administrador"
 ROLE_RRHH: str = "Recursos Humanos"
@@ -213,6 +218,7 @@ def create_user(
     salario_mensual: float = 0.0,
     tipo_vinculo: str = "Funcionario",
     fecha_ingreso: Optional[Any] = None,
+    turno_id: Optional[int] = None,
 ) -> int:
     """Crea un usuario auditando la acción; solo el Admin asigna otro Admin.
 
@@ -228,6 +234,8 @@ def create_user(
         raise ValueError(f"El rol '{role_name}' no existe.")
     if db.get_user_by_username(username):
         raise ValueError("El usuario ya existe.")
+    if turno_id is not None and not db.get_turno(turno_id):
+        raise ValueError("El turno indicado no existe.")
     user_id = db.create_user(
         username,
         hash_password(password),
@@ -236,6 +244,7 @@ def create_user(
         salario_mensual,
         tipo_vinculo,
         fecha_ingreso,
+        turno_id,
     )
     db.registrar_auditoria(
         actor["id"],
@@ -249,6 +258,7 @@ def create_user(
             "salario_mensual": salario_mensual,
             "tipo_vinculo": tipo_vinculo,
             "fecha_ingreso": str(fecha_ingreso) if fecha_ingreso else "hoy",
+            "turno_id": turno_id,
         },
     )
     return user_id
@@ -265,8 +275,13 @@ def update_user(
     salario_mensual: Optional[float] = None,
     tipo_vinculo: Optional[str] = None,
     fecha_ingreso: Optional[Any] = None,
+    turno_id: Any = SIN_CAMBIO,
 ) -> None:
-    """Edita un usuario auditando los valores anterior y nuevo."""
+    """Edita un usuario auditando los valores anterior y nuevo.
+
+    ``turno_id`` en nulo devuelve el legajo al turno predeterminado; omitirlo
+    deja el que tenga.
+    """
     if role_name == ROLE_ADMIN:
         require_role(db, actor, (ROLE_ADMIN,))
     if tipo_vinculo is not None and tipo_vinculo not in TIPOS_VINCULO:
@@ -280,6 +295,11 @@ def update_user(
         if not role:
             raise ValueError(f"El rol '{role_name}' no existe.")
         role_id = role["id"]
+    limpiar_turno = turno_id is not SIN_CAMBIO and turno_id is None
+    if turno_id is SIN_CAMBIO:
+        turno_id = None
+    elif turno_id is not None and not db.get_turno(turno_id):
+        raise ValueError("El turno indicado no existe.")
     anterior = _valores_auditoria(target)
     password_hash = hash_password(password) if password else None
     db.update_user(
@@ -290,6 +310,8 @@ def update_user(
         salario_mensual=salario_mensual,
         tipo_vinculo=tipo_vinculo,
         fecha_ingreso=fecha_ingreso,
+        turno_id=turno_id,
+        limpiar_turno=limpiar_turno,
     )
     nuevos = _valores_auditoria(
         {
@@ -854,8 +876,12 @@ def _corregir_entrada(
 ) -> None:
     """Crea o ajusta la entrada de la fecha reclamada según la hora propuesta."""
     marcajes = db.get_entries_by_date(solicitud["usuario_id"], instante.date())
-    tardanza = es_tardanza(instante)
-    incidencia = "Llegada Tardía" if tardanza else ""
+    # La corrección se evalúa con la misma regla que la marcación en vivo: si
+    # aplicara su propia gracia, corregir una marca a la hora exacta a la que
+    # se fichó podría convertir un día normal en una llegada tardía.
+    evaluacion = evaluar_asistencia(db, solicitud["usuario_id"], instante)
+    tardanza = evaluacion["estado"] != "Normal"
+    incidencia = evaluacion["estado"] if tardanza else ""
     if marcajes:
         marcaje = marcajes[0]
         anterior = _valores_marcaje(marcaje)
@@ -921,3 +947,341 @@ def _corregir_salida(
         actor["id"], "ACTUALIZAR", "marcajes", marcaje["id"],
         anterior=anterior, nuevos=nuevos,
     )
+
+# --- Turnos -----------------------------------------------------------------
+
+TOLERANCIA_MAXIMA_TURNO: int = 60
+"""Tope de la gracia propia de un turno; más que eso ya no es tolerancia."""
+
+
+def _turno_como_dict(fila: Dict[str, Any]) -> Dict[str, Any]:
+    """Proyecta una fila de turno con sus derivados para la UI y las APIs."""
+    proyectado = turnos.desde_fila(fila).como_dict()
+    proyectado["dotacion"] = int(fila.get("dotacion") or 0)
+    proyectado["asignados"] = int(fila.get("asignados") or 0)
+    return proyectado
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH, ROLE_EMPLEADO)
+def listar_turnos(
+    db: Database, actor: Dict, incluir_inactivos: bool = False
+) -> List[Dict[str, Any]]:
+    """Catálogo de turnos de la empresa con su horario y su dotación."""
+    return [_turno_como_dict(fila) for fila in db.listar_turnos(incluir_inactivos)]
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def crear_turno(
+    db: Database,
+    actor: Dict,
+    nombre: str,
+    tramos: Any,
+    dias: Any = turnos.MASCARA_LUNES_VIERNES,
+    sucursal: str = turnos.SUCURSAL_PREDETERMINADA,
+    tolerancia_min: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Da de alta un turno validando que describa una jornada realizable."""
+    nombre = (nombre or "").strip()
+    if len(nombre) < 3:
+        raise ValueError("El turno necesita un nombre de al menos 3 caracteres.")
+    if db.get_turno_por_nombre(nombre):
+        raise ValueError(f"Ya existe un turno llamado '{nombre}'.")
+    definidos = turnos.construir_tramos(_tramos_de_entrada(tramos))
+    mascara = turnos.normalizar_mascara(dias)
+    tolerancia = _tolerancia_de_turno(tolerancia_min)
+    turno_id = db.crear_turno(
+        nombre,
+        [(t.entrada, t.salida) for t in definidos],
+        mascara,
+        (sucursal or turnos.SUCURSAL_PREDETERMINADA).strip(),
+        tolerancia,
+    )
+    db.registrar_auditoria(
+        actor["id"],
+        "CREAR",
+        "turnos",
+        turno_id,
+        nuevos={
+            "nombre": nombre,
+            "dias": mascara,
+            "sucursal": sucursal,
+            "tolerancia_min": tolerancia,
+            "tramos": [t.etiqueta() for t in definidos],
+        },
+    )
+    return _turno_como_dict(db.get_turno(turno_id))
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def actualizar_turno(
+    db: Database,
+    actor: Dict,
+    turno_id: int,
+    nombre: Optional[str] = None,
+    tramos: Any = None,
+    dias: Any = None,
+    sucursal: Optional[str] = None,
+    tolerancia_min: Any = SIN_CAMBIO,
+) -> Dict[str, Any]:
+    """Modifica un turno vigente.
+
+    El cambio rige hacia adelante: los marcajes ya liquidados conservan la
+    incidencia que se les calculó con el horario vigente ese día.
+    """
+    actual = db.get_turno(turno_id)
+    if not actual:
+        raise ValueError("El turno no existe.")
+    anterior = _turno_como_dict(actual)
+    if nombre is not None:
+        nombre = nombre.strip()
+        existente = db.get_turno_por_nombre(nombre)
+        if existente and existente["id"] != turno_id:
+            raise ValueError(f"Ya existe un turno llamado '{nombre}'.")
+    definidos = (
+        turnos.construir_tramos(_tramos_de_entrada(tramos))
+        if tramos is not None
+        else None
+    )
+    mascara = turnos.normalizar_mascara(dias) if dias is not None else None
+    limpiar = tolerancia_min is not SIN_CAMBIO and tolerancia_min in (None, "")
+    tolerancia = (
+        None
+        if limpiar or tolerancia_min is SIN_CAMBIO
+        else _tolerancia_de_turno(tolerancia_min)
+    )
+    db.actualizar_turno(
+        turno_id,
+        nombre=nombre,
+        tramos=[(t.entrada, t.salida) for t in definidos] if definidos else None,
+        dias=mascara,
+        sucursal=sucursal.strip() if sucursal is not None else None,
+        tolerancia_min=tolerancia,
+        limpiar_tolerancia=limpiar,
+    )
+    actualizado = _turno_como_dict(db.get_turno(turno_id))
+    db.registrar_auditoria(
+        actor["id"],
+        "ACTUALIZAR",
+        "turnos",
+        turno_id,
+        anterior=anterior,
+        nuevos=actualizado,
+    )
+    return actualizado
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def retirar_turno(db: Database, actor: Dict, turno_id: int) -> str:
+    """Saca un turno de circulación, o lo borra si nunca se usó.
+
+    No se retira un turno con gente adentro: el horario de esa gente pasaría
+    en silencio a ser otro y sus tardanzas se medirían contra una hora que
+    nadie les comunicó.
+    """
+    turno = db.get_turno(turno_id)
+    if not turno:
+        raise ValueError("El turno no existe.")
+    if turno["predeterminado"]:
+        raise ValueError(
+            "El turno predeterminado no se puede retirar: designá otro antes."
+        )
+    dotacion = db.contar_personal_en_turno(turno_id)
+    if dotacion:
+        raise ValueError(
+            f"{dotacion} empleado(s) dependen de este turno. Reasignalos antes "
+            f"de retirarlo."
+        )
+    uso_historico = any(
+        a["turno_id"] == turno_id for a in db.listar_asignaciones_turno()
+    )
+    if uso_historico:
+        db.cambiar_estado_turno(turno_id, False)
+        resultado = "retirado"
+    else:
+        db.eliminar_turno(turno_id)
+        resultado = "eliminado"
+    db.registrar_auditoria(
+        actor["id"],
+        "ELIMINAR",
+        "turnos",
+        turno_id,
+        anterior={"nombre": turno["nombre"], "resultado": resultado},
+    )
+    return resultado
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def designar_turno_predeterminado(
+    db: Database, actor: Dict, turno_id: int
+) -> Dict[str, Any]:
+    """Elige el turno que rige para quien no tiene ninguno asignado."""
+    turno = db.get_turno(turno_id)
+    if not turno:
+        raise ValueError("El turno no existe.")
+    if not turno["activo"]:
+        raise ValueError("Un turno retirado no puede ser el predeterminado.")
+    db.marcar_turno_predeterminado(turno_id)
+    db.registrar_auditoria(
+        actor["id"],
+        "ACTUALIZAR",
+        "turnos",
+        turno_id,
+        nuevos={"predeterminado": True, "nombre": turno["nombre"]},
+    )
+    return _turno_como_dict(db.get_turno(turno_id))
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def asignar_turno_base(
+    db: Database, actor: Dict, usuario_id: int, turno_id: Optional[int]
+) -> Dict[str, Any]:
+    """Fija el turno de contrato de un legajo."""
+    empleado = db.get_user_by_id(usuario_id)
+    if not empleado:
+        raise ValueError("El empleado no existe.")
+    if turno_id is not None:
+        turno = db.get_turno(turno_id)
+        if not turno:
+            raise ValueError("El turno no existe.")
+        if not turno["activo"]:
+            raise ValueError("No se puede asignar un turno retirado.")
+    db.asignar_turno_base(usuario_id, turno_id)
+    db.registrar_auditoria(
+        actor["id"],
+        "ACTUALIZAR",
+        "users",
+        usuario_id,
+        anterior={"turno_id": empleado.get("turno_id")},
+        nuevos={"turno_id": turno_id},
+    )
+    return turno_de_empleado(db, actor, usuario_id)
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def rotar_turno(
+    db: Database,
+    actor: Dict,
+    usuario_id: int,
+    turno_id: int,
+    desde: Any,
+    hasta: Any = None,
+    motivo: str = "",
+) -> Dict[str, Any]:
+    """Asigna un turno con vigencia: la forma de rotar sin tocar el legajo.
+
+    Al vencer la asignación el empleado vuelve solo a su turno de contrato,
+    sin que nadie tenga que acordarse de deshacer el cambio.
+    """
+    empleado = db.get_user_by_id(usuario_id)
+    if not empleado:
+        raise ValueError("El empleado no existe.")
+    turno = db.get_turno(turno_id)
+    if not turno:
+        raise ValueError("El turno no existe.")
+    if not turno["activo"]:
+        raise ValueError("No se puede rotar a un turno retirado.")
+    desde = _como_fecha(desde, "desde")
+    hasta = _como_fecha(hasta, "hasta") if hasta else None
+    if hasta and hasta < desde:
+        raise ValueError("La vigencia termina antes de empezar.")
+    asignacion_id = db.crear_asignacion_turno(
+        usuario_id, turno_id, desde, hasta, (motivo or "").strip(), actor["id"]
+    )
+    vigencia = f"Desde {desde.isoformat()}"
+    vigencia += f" hasta {hasta.isoformat()}" if hasta else " sin fecha de fin"
+    db.registrar_auditoria(
+        actor["id"],
+        "CREAR",
+        "asignaciones_turno",
+        asignacion_id,
+        nuevos={
+            "usuario_id": usuario_id,
+            "turno": turno["nombre"],
+            "desde": desde.isoformat(),
+            "hasta": hasta.isoformat() if hasta else None,
+            "motivo": motivo,
+        },
+    )
+    notifications.registrar_alerta(
+        db,
+        "rotacion_turno",
+        "baja",
+        f"{empleado['full_name']} pasa al turno {turno['nombre']}.",
+        f"{vigencia} · firmó {actor['full_name']}",
+        usuario_id=usuario_id,
+    )
+    return turno_de_empleado(db, actor, usuario_id)
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def revocar_rotacion(db: Database, actor: Dict, asignacion_id: int) -> bool:
+    """Cancela una rotación; el empleado vuelve a su turno de contrato."""
+    if not db.eliminar_asignacion_turno(asignacion_id):
+        raise ValueError("La asignación no existe.")
+    db.registrar_auditoria(actor["id"], "ELIMINAR", "asignaciones_turno", asignacion_id)
+    return True
+
+
+def turno_de_empleado(
+    db: Database, actor: Dict, usuario_id: int, dia: Any = None
+) -> Dict[str, Any]:
+    """Horario vigente de un empleado, con sus rotaciones programadas.
+
+    Cada uno consulta el suyo; el de otro, solo administración.
+    """
+    ajeno = actor["id"] != usuario_id
+    if ajeno and actor.get("role_name") not in ROLES_GESTION_USUARIOS:
+        raise PermissionError("No tiene permiso para consultar turnos ajenos.")
+    dia = _como_fecha(dia, "día") if dia else date.today()
+    vigente = turno_vigente(db, usuario_id, dia)
+    proyectado = vigente.como_dict()
+    proyectado["fecha"] = dia.isoformat()
+    proyectado["trabaja_hoy"] = vigente.trabaja(dia)
+    proyectado["rotaciones"] = [
+        {
+            "id": a["id"],
+            "turno": a["turno_nombre"],
+            "desde": a["desde"].isoformat(),
+            "hasta": a["hasta"].isoformat() if a["hasta"] else None,
+            "motivo": a["motivo"],
+        }
+        for a in db.listar_asignaciones_turno(usuario_id, solo_vigentes=True)
+    ]
+    return proyectado
+
+
+def _tramos_de_entrada(tramos: Any) -> List[Any]:
+    """Acepta la forma cómoda para cada llamador y la normaliza a una lista."""
+    if tramos is None:
+        raise ValueError("Indicá al menos un tramo horario.")
+    if isinstance(tramos, dict):
+        return [tramos]
+    return list(tramos)
+
+
+def _tolerancia_de_turno(valor: Any) -> Optional[int]:
+    """Valida la gracia propia del turno; ``None`` deja vigente la del vínculo."""
+    if valor is None or valor == "":
+        return None
+    try:
+        minutos = int(valor)
+    except (TypeError, ValueError):
+        raise ValueError("La tolerancia del turno se expresa en minutos enteros.")
+    if not 0 <= minutos <= TOLERANCIA_MAXIMA_TURNO:
+        raise ValueError(
+            f"La tolerancia del turno debe estar entre 0 y "
+            f"{TOLERANCIA_MAXIMA_TURNO} minutos."
+        )
+    return minutos
+
+
+def _como_fecha(valor: Any, campo: str) -> date:
+    """Convierte a ``date`` lo que llega de un formulario o de una API."""
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    try:
+        return date.fromisoformat(str(valor).strip())
+    except ValueError:
+        raise ValueError(f"Fecha inválida en '{campo}': se espera AAAA-MM-DD.")

@@ -45,13 +45,17 @@ flowchart LR
 | `condiciones_dia` | Condición excepcional del día declarada por RRHH (reemplaza a la casilla del kiosco) |
 | `src/biometria.py` | Cifrado AES-256-GCM de las plantillas faciales: [[Seguridad y Cifrado de Comunicaciones]] |
 | `src/rate_limit.py` | Freno de intentos fallidos en login y kiosco |
+| `src/turnos.py` | Definición, validación y resolución de turnos: [[Turnos y Rotación de Horarios]] |
+| `turnos`, `turno_tramos` | Horarios de la empresa y las franjas de cada uno (la jornada partida tiene dos) |
+| `asignaciones_turno` | Rotaciones con vigencia; al vencer el empleado vuelve a su turno de contrato |
 
 ## Flujo de datos
 
 1. `app.py` inicia `Database` y crea la base y el esquema (tablas `roles`, `users`, `marcajes`, `logs_auditoria`).
 2. `auth.py` valida credenciales (bcrypt) contra la tabla `users` y verifica el rol.
-3. `clock_engine.py` registra entradas/salidas en `marcajes` con el desglose de la Ley 213 y las reglas de tolerancia de la Res. 3028/2024.
-4. `database.py` persiste todo en PostgreSQL y audita las operaciones de RRHH/Admin.
+3. `turnos.py` resuelve qué horario rige para ese empleado ese día (rotación vigente → legajo → predeterminado).
+4. `clock_engine.py` registra entradas/salidas en `marcajes` con el desglose de la Ley 213, midiendo la tardanza contra el turno resuelto y aplicando las reglas de la Res. 3028/2024.
+5. `database.py` persiste todo en PostgreSQL y audita las operaciones de RRHH/Admin.
 
 ## Documentación vinculada
 
@@ -62,6 +66,7 @@ flowchart LR
 - [[Antifraude y Resiliencia en Picos de Marcación]] — vectores de fraude y comportamiento bajo el pico de las 08:00
 - [[Sistema de Diseño · Planilla]] — lenguaje visual compartido por la web y el escritorio
 - [[Autoservicio de Permisos y Formularios]] — permisos desde el portal y documentos que se emiten solos
+- [[Turnos y Rotación de Horarios]] — horarios por empleado, rotación con vigencia y jornada partida
 - [[Puesta en Marcha en un Cliente]] — instalación, secretos, carga inicial y qué no está incluido
 
 ### Módulos

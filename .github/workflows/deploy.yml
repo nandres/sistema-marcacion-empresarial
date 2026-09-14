@@ -79,6 +79,9 @@ jobs:
       - name: Turno nocturno y jornadas sin cierre (P2-2, P2-6)
         run: python tests/test_turno_nocturno.py
 
+      - name: Turnos, rotación y jornada partida (P2-4, P2-5)
+        run: python tests/test_turnos.py
+
       - name: Antigüedad desde el contrato y baja lógica (P3-6)
         run: python tests/test_antiguedad_y_bajas.py
 

@@ -30,6 +30,7 @@ import notifications
 import reglamento
 import reports
 import sync_worker
+import turnos
 from clock_engine import ClockEngine
 from database import Database
 from offline_queue import ColaOffline
@@ -1381,6 +1382,7 @@ class PanelGestion(ctk.CTkFrame):
     # decorativo no permite.
     SECCIONES: List[tuple] = [
         ("Personal", "Gestión de Personal"),
+        ("Turnos", "Horarios y rotación"),
         ("Pedidos de permiso", "Bandeja del portal del empleado"),
         ("Justificaciones", "Permisos y PDFs"),
         ("Condiciones del día", "Tolerancias declaradas"),
@@ -1453,6 +1455,7 @@ class PanelGestion(ctk.CTkFrame):
         self.personal_tab = PersonalTab(
             contenido, self.db, self.actor, self._refrescar_empleados
         )
+        self.turnos_tab = TurnosTab(contenido, self.db, self.actor)
         self.solicitudes_tab = SolicitudesPermisoTab(contenido, self.db, self.actor)
         self.justificaciones_tab = JustificacionesTab(contenido, self.db, self.actor)
         self.condiciones_tab = CondicionesTab(contenido, self.db, self.actor)
@@ -1465,6 +1468,7 @@ class PanelGestion(ctk.CTkFrame):
         # de la pestaña.
         self.pestanas = [
             self.personal_tab,
+            self.turnos_tab,
             self.solicitudes_tab,
             self.justificaciones_tab,
             self.condiciones_tab,
@@ -1532,6 +1536,7 @@ class PanelGestion(ctk.CTkFrame):
 
     def _refrescar_empleados(self) -> None:
         self.justificaciones_tab.refrescar_empleados()
+        self.turnos_tab._refrescar()
 
 
 class AlertasTab(ctk.CTkFrame):
@@ -2101,6 +2106,310 @@ class CondicionesTab(ctk.CTkFrame):
                 corner_radius=RADIO,
                 command=partial(self._revocar, condicion["fecha"]),
             ).grid(row=0, column=1, rowspan=2, padx=(0, 14), sticky="e")
+
+
+class TurnosTab(ctk.CTkFrame):
+    """Definición de turnos y asignación de la plantilla.
+
+    Un turno es el horario contra el que se mide la puntualidad. Antes había
+    uno solo para toda la empresa, fijado en el `.env`, así que dos turnos
+    que se relevan o la jornada partida del comercio no se podían modelar.
+
+    La asignación es en dos niveles: el turno del legajo es el de contrato y
+    la rotación lo desplaza por un período, de modo que al vencer la persona
+    vuelve sola a su horario sin que nadie tenga que deshacer nada.
+    """
+
+    DIAS = ("Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom")
+
+    def __init__(self, master, db: Database, actor: Dict) -> None:
+        super().__init__(master, fg_color="transparent")
+        self.db = db
+        self.actor = actor
+        self.turnos: List[Dict] = []
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        formulario = tarjeta(self)
+        formulario.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        formulario.grid_columnconfigure(5, weight=1)
+        titulo(formulario, "Nuevo turno", 16).grid(
+            row=0, column=0, columnspan=6, sticky="w", padx=20, pady=(14, 2)
+        )
+        etiqueta(
+            formulario,
+            "El horario contra el que se miden las tardanzas de quien lo tenga asignado",
+            12,
+            t("MUTED"),
+        ).grid(row=1, column=0, columnspan=6, sticky="w", padx=20, pady=(0, 12))
+
+        self.entrada_nombre = entrada(formulario, "Nombre (Mañana, Noche…)", ancho=230)
+        self.entrada_nombre.grid(row=2, column=0, columnspan=2, sticky="w",
+                                 padx=(20, 8), pady=(0, 10))
+        self.entrada_sucursal = entrada(formulario, "Sucursal", ancho=190)
+        self.entrada_sucursal.grid(row=2, column=2, columnspan=2, sticky="w",
+                                   padx=8, pady=(0, 10))
+        self.entrada_sucursal.insert(0, turnos.SUCURSAL_PREDETERMINADA)
+        self.entrada_tolerancia = entrada(formulario, "Tolerancia (min)", ancho=150)
+        self.entrada_tolerancia.grid(row=2, column=4, sticky="w", padx=8, pady=(0, 10))
+
+        etiqueta(formulario, "Entrada", 12, t("MUTED")).grid(
+            row=3, column=0, sticky="w", padx=(20, 8)
+        )
+        etiqueta(formulario, "Salida", 12, t("MUTED")).grid(row=3, column=1, sticky="w")
+        self.entrada_desde = entrada(formulario, "HH:MM", ancho=110)
+        self.entrada_desde.grid(row=4, column=0, sticky="w", padx=(20, 8), pady=(0, 10))
+        self.entrada_desde.insert(0, "08:00")
+        self.entrada_hasta = entrada(formulario, "HH:MM", ancho=110)
+        self.entrada_hasta.grid(row=4, column=1, sticky="w", pady=(0, 10))
+        self.entrada_hasta.insert(0, "16:00")
+
+        self.var_partida = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            formulario,
+            text="Jornada partida",
+            variable=self.var_partida,
+            command=self._alternar_partida,
+            font=(FONT, 13),
+            text_color=t("TEXT"),
+            fg_color=t("PRIMARY"),
+            hover_color=t("PRIMARY_HOVER"),
+            border_color=t("INPUT_BORDER"),
+            corner_radius=RADIO,
+        ).grid(row=4, column=2, sticky="w", padx=8, pady=(0, 10))
+
+        self.entrada_desde2 = entrada(formulario, "HH:MM", ancho=110)
+        self.entrada_desde2.insert(0, "14:00")
+        self.entrada_hasta2 = entrada(formulario, "HH:MM", ancho=110)
+        self.entrada_hasta2.insert(0, "18:00")
+
+        self.dias_marcados: List[ctk.BooleanVar] = []
+        fila_dias = ctk.CTkFrame(formulario, fg_color="transparent")
+        fila_dias.grid(row=5, column=0, columnspan=6, sticky="w", padx=(16, 8), pady=(0, 10))
+        for indice, nombre in enumerate(self.DIAS):
+            marcado = ctk.BooleanVar(value=indice < 5)
+            ctk.CTkCheckBox(
+                fila_dias,
+                text=nombre,
+                variable=marcado,
+                width=64,
+                font=(FONT, 12),
+                text_color=t("TEXT"),
+                fg_color=t("PRIMARY"),
+                hover_color=t("PRIMARY_HOVER"),
+                border_color=t("INPUT_BORDER"),
+                corner_radius=RADIO,
+            ).pack(side="left", padx=4)
+            self.dias_marcados.append(marcado)
+
+        boton_primario(formulario, "Crear turno", self._crear).grid(
+            row=6, column=0, columnspan=2, sticky="w", padx=(20, 8), pady=(0, 12)
+        )
+        self.lbl_resultado = etiqueta(formulario, "", 12, t("SUCCESS"))
+        self.lbl_resultado.grid(
+            row=6, column=2, columnspan=4, sticky="w", padx=8, pady=(0, 12)
+        )
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
+        self.scroll.grid(row=1, column=0, sticky="nsew")
+        self._refrescar()
+
+    def _alternar_partida(self) -> None:
+        """Muestra la segunda franja solo cuando la jornada es partida."""
+        if self.var_partida.get():
+            self.entrada_desde2.grid(row=4, column=3, sticky="w", padx=8, pady=(0, 10))
+            self.entrada_hasta2.grid(row=4, column=4, sticky="w", padx=8, pady=(0, 10))
+        else:
+            self.entrada_desde2.grid_remove()
+            self.entrada_hasta2.grid_remove()
+
+    def _mascara(self) -> str:
+        return "".join("1" if var.get() else "0" for var in self.dias_marcados)
+
+    def _avisar(self, texto: str, color: str) -> None:
+        self.lbl_resultado.configure(text=texto, text_color=color)
+
+    def _crear(self) -> None:
+        tramos = [
+            {"entrada": self.entrada_desde.get().strip(),
+             "salida": self.entrada_hasta.get().strip()}
+        ]
+        if self.var_partida.get():
+            tramos.append(
+                {"entrada": self.entrada_desde2.get().strip(),
+                 "salida": self.entrada_hasta2.get().strip()}
+            )
+        tolerancia = self.entrada_tolerancia.get().strip()
+        try:
+            creado = auth.crear_turno(
+                self.db,
+                self.actor,
+                self.entrada_nombre.get().strip(),
+                tramos,
+                self._mascara(),
+                self.entrada_sucursal.get().strip() or turnos.SUCURSAL_PREDETERMINADA,
+                tolerancia or None,
+            )
+        except ValueError as error:
+            self._avisar(str(error), t("DANGER"))
+            return
+        self._avisar(
+            f"{creado['nombre']} · {creado['horario']} · {creado['dias_texto']}",
+            t("SUCCESS"),
+        )
+        self.entrada_nombre.delete(0, "end")
+        self._refrescar()
+
+    def _retirar(self, turno_id: int) -> None:
+        try:
+            resultado = auth.retirar_turno(self.db, self.actor, turno_id)
+        except ValueError as error:
+            self._avisar(str(error), t("DANGER"))
+            return
+        self._avisar(f"Turno {resultado}.", t("MUTED"))
+        self._refrescar()
+
+    def _hacer_predeterminado(self, turno_id: int) -> None:
+        try:
+            turno = auth.designar_turno_predeterminado(self.db, self.actor, turno_id)
+        except ValueError as error:
+            self._avisar(str(error), t("DANGER"))
+            return
+        self._avisar(f"{turno['nombre']} es el turno predeterminado.", t("SUCCESS"))
+        self._refrescar()
+
+    def _asignar(self, usuario_id: int, nombre_turno: str) -> None:
+        elegido = next(
+            (x["id"] for x in self.turnos if x["nombre"] == nombre_turno), None
+        )
+        try:
+            auth.asignar_turno_base(self.db, self.actor, usuario_id, elegido)
+        except ValueError as error:
+            self._avisar(str(error), t("DANGER"))
+            return
+        self._avisar(f"Turno de contrato actualizado a {nombre_turno}.", t("SUCCESS"))
+        self._refrescar()
+
+    def _refrescar(self) -> None:
+        for hijo in self.scroll.winfo_children():
+            hijo.destroy()
+        self.turnos = auth.listar_turnos(self.db, self.actor, incluir_inactivos=True)
+        activos = [x for x in self.turnos if x["activo"]]
+
+        titulo(self.scroll, "Turnos definidos", 15).pack(anchor="w", pady=(4, 8))
+        for turno in self.turnos:
+            self._fila_turno(turno)
+
+        titulo(self.scroll, "Quién trabaja en qué turno", 15).pack(
+            anchor="w", pady=(18, 4)
+        )
+        etiqueta(
+            self.scroll,
+            "El turno de contrato rige mientras no haya una rotación vigente",
+            12,
+            t("MUTED"),
+        ).pack(anchor="w", pady=(0, 8))
+        vigentes = self.db.turnos_vigentes_de_la_plantilla(datetime.date.today())
+        for persona in self.db.list_users():
+            self._fila_persona(persona, vigentes.get(persona["id"]) or {}, activos)
+
+    def _fila_turno(self, turno: Dict) -> None:
+        fila = tarjeta(self.scroll)
+        fila.pack(fill="x", pady=5)
+        fila.grid_columnconfigure(0, weight=1)
+        marcas = []
+        if turno["predeterminado"]:
+            marcas.append("predeterminado")
+        if turno["partida"]:
+            marcas.append("jornada partida")
+        if turno["nocturno"]:
+            marcas.append("nocturno")
+        if not turno["activo"]:
+            marcas.append("retirado")
+        etiqueta(
+            fila,
+            f"{turno['nombre']} · {turno['horario']}",
+            14,
+            t("TEXT") if turno["activo"] else t("MUTED"),
+            "bold",
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 2))
+        detalle = (
+            f"{turno['dias_texto']} · {turno['horas_previstas']} h previstas · "
+            f"{turno['sucursal']} · dotación {max(turno['dotacion'], turno['asignados'])}"
+        )
+        if turno["tolerancia_min"] is not None:
+            detalle += f" · tolerancia propia {turno['tolerancia_min']} min"
+        if marcas:
+            detalle += " · " + ", ".join(marcas)
+        etiqueta(fila, detalle, 12, t("MUTED")).grid(
+            row=1, column=0, sticky="w", padx=14, pady=(0, 10)
+        )
+        acciones = ctk.CTkFrame(fila, fg_color="transparent")
+        acciones.grid(row=0, column=1, rowspan=2, padx=(0, 14), sticky="e")
+        if turno["activo"] and not turno["predeterminado"]:
+            ctk.CTkButton(
+                acciones,
+                text="Predeterminado",
+                width=130,
+                height=32,
+                font=(FONT, 12),
+                fg_color="transparent",
+                hover_color=t("INPUT_BG"),
+                border_width=1,
+                border_color=t("INPUT_BORDER"),
+                text_color=t("TEXT"),
+                corner_radius=RADIO,
+                command=partial(self._hacer_predeterminado, turno["id"]),
+            ).pack(side="left", padx=4)
+        if not turno["predeterminado"]:
+            ctk.CTkButton(
+                acciones,
+                text="Retirar",
+                width=90,
+                height=32,
+                font=(FONT, 12),
+                fg_color="transparent",
+                hover_color=t("DANGER"),
+                border_width=1,
+                border_color=t("DANGER"),
+                text_color=t("DANGER"),
+                corner_radius=RADIO,
+                command=partial(self._retirar, turno["id"]),
+            ).pack(side="left", padx=4)
+
+    def _fila_persona(self, persona: Dict, vigente: Dict, activos: List[Dict]) -> None:
+        fila = tarjeta(self.scroll)
+        fila.pack(fill="x", pady=4)
+        fila.grid_columnconfigure(0, weight=1)
+        etiqueta(fila, persona["full_name"], 14, t("TEXT"), "bold").grid(
+            row=0, column=0, sticky="w", padx=14, pady=(10, 2)
+        )
+        hoy = vigente.get("turno_nombre") or "—"
+        origen = vigente.get("origen") or "predeterminado"
+        leyenda = {
+            "asignacion": "por rotación vigente",
+            "legajo": "por su contrato",
+            "predeterminado": "sin turno propio en el legajo",
+        }[origen]
+        etiqueta(fila, f"Hoy: {hoy} · {leyenda}", 12, t("MUTED")).grid(
+            row=1, column=0, sticky="w", padx=14, pady=(0, 10)
+        )
+        nombres = [x["nombre"] for x in activos] or ["—"]
+        actual = persona.get("turno_nombre") or nombres[0]
+        menu = ctk.CTkOptionMenu(
+            fila,
+            values=nombres,
+            font=(FONT, 12),
+            fg_color=t("INPUT_BG"),
+            button_color=t("PRIMARY"),
+            button_hover_color=t("PRIMARY_HOVER"),
+            text_color=t("TEXT"),
+            dropdown_fg_color=t("INPUT_BG"),
+            width=210,
+            command=partial(self._asignar, persona["id"]),
+        )
+        menu.set(actual if actual in nombres else nombres[0])
+        menu.grid(row=0, column=1, rowspan=2, padx=(0, 14), sticky="e")
 
 
 class DashboardTab(ctk.CTkFrame):

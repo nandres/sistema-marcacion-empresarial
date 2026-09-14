@@ -85,17 +85,22 @@ Las dos filas que cruzan el domingo son la diferencia más cara: el motor anteri
 
 ## Tolerancia de llegada
 
+La hora contra la que se mide el retraso sale del **turno** del empleado, no de una constante del proceso:
+
 ```python
-TOLERANCIA_ENTRADA: timedelta = timedelta(minutes=10)
-INICIO_JORNADA: time = _cargar_inicio_jornada()   # env JORNADA_INICIO (HH:MM)
+turno = turno_vigente(db, usuario_id, instante.date())
+prevista = turno.entrada_prevista(hora_marca, tramos_consumidos(db, usuario_id, instante))
+retraso = max(timedelta(0), hora_marca - prevista)
 ```
 
-> [!warning] Dos defectos abiertos en esta sección
-> **`JORNADA_INICIO` del `.env` no se aplica** (P2-5): se congela al importar el módulo, antes de cargar las variables de entorno. Hoy está latente porque el valor coincide con el predeterminado.
->
-> **Conviven dos definiciones de tardanza** (P2-4): `es_tardanza()` aplica 10 minutos y `evaluar_asistencia()` aplica 15 para funcionarios.
->
-> De fondo: la hora de entrada sigue siendo una **constante global del proceso**. Sin entidad `turnos` no hay horarios rotativos ni jornadas partidas — ver [[Arquitectura Objetivo · Plataforma y Portal del Empleado]].
+| Tolerancia | Minutos | Fuente |
+| --- | --- | --- |
+| Funcionario | 15 | Gracia general |
+| Pasante | 10, hasta 3 veces al mes | Res. 3028/2024 |
+| Propia del turno | la que declare | Desplaza a la del vínculo |
+| Condición del día | la que declare RRHH | Se **suma** a la vigente |
+
+Fuera de los días que cubre el turno no hay hora a la cual llegar tarde: la marca se registra y se liquida, pero no genera incidencia. El diseño completo está en [[Turnos y Rotación de Horarios]], que cerró P2-4 y P2-5.
 
 ## Calendario de feriados
 
@@ -118,4 +123,4 @@ El cierre en línea, la sincronización offline y la corrección aprobada por RR
 
 ## Enlaces
 
-[[Auditoría Técnica · Hallazgos Críticos]] · [[Panel de Reportes y Auditoría]] · [[Reglamento de Asistencia y Disciplina]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Ecosistema Sistema de Marcación]]
+[[Turnos y Rotación de Horarios]] · [[Auditoría Técnica · Hallazgos Críticos]] · [[Panel de Reportes y Auditoría]] · [[Reglamento de Asistencia y Disciplina]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Ecosistema Sistema de Marcación]]

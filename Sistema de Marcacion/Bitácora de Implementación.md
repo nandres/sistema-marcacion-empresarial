@@ -163,6 +163,27 @@ El rediseño de la fase 14 arregló la **jerarquía** pero conservó la **forma*
 
 **Cobertura nueva**: `test_turno_nocturno.py`, `test_antiguedad_y_bajas.py` y `test_seguridad_datos.py`. La suite pasó de 14 a 17 conjuntos.
 
+### 18. Entidad `turnos`: horarios, rotación y jornada partida
+*2026-09-14 · cierre de P2-5 y P2-4*
+
+**Lo que faltaba.** La hora de entrada era una constante del proceso, congelada al importar el módulo. Una empresa con dos turnos no podía usar el sistema, y el `JORNADA_INICIO` del `.env` se ignoraba en silencio. Ahora hay tres tablas —`turnos`, `turno_tramos`, `asignaciones_turno`— y una resolución por prioridad: rotación vigente, turno del legajo, predeterminado de la empresa. La rotación tiene vigencia, así que al vencer el empleado vuelve **solo** a su horario de contrato.
+
+**Lo que la entidad dejó a la vista.** Tres defectos que la constante tapaba:
+
+- La **salida anticipada** se medía contra el tope legal de la jornada, así que cerrar el tramo de la mañana de una jornada partida a las cuatro horas —lo pactado— se reprochaba por no llegar a ocho.
+- Los **días de franco** se contaban como ausencia: quien tiene turno de martes a sábado figuraba ausente todos los lunes, y una ausencia injustificada descuenta.
+- La **cola offline** decidía entrada o salida por fecha calendario, así que descartaba el segundo tramo de una jornada partida; y como `get_open_entry` ordenaba por inserción y no por hora, una salida repuesta podía cerrar la entrada equivocada.
+
+**P2-4 de arrastre.** Con una sola hora de referencia ya no tenía sentido sostener dos definiciones de tardanza: `es_tardanza` (10 min) y `evaluar_asistencia` (15 min para funcionarios) daban veredictos distintos para la misma marca, de modo que corregir una marca **a su hora exacta** podía convertir un día normal en una llegada tardía. `es_tardanza` ahora delega.
+
+**Lo que atajó la verificación.** Tres cosas, todas en pruebas que escribí junto con el código:
+
+- La primera regla de "dónde empieza la jornada" —una ventana fija de 18 horas— bloqueaba al turno nocturno: la entrada de anoche a las 22:00 seguía contando al fichar hoy a la misma hora. La segunda —anclar a la hora prevista del turno— fallaba con quien trabaja lejos de su horario. La que quedó mira el **descanso** entre marcas, que no depende de horarios teóricos.
+- `smoke_sync` destapó que `evaluar_asistencia` hacía `replace(tzinfo=None)` sin convertir: una marca guardada en UTC se evaluaba como si esa hora fuera local. La prueba lo daba por bueno porque estaba escrita con la misma confusión.
+- El replay de una cola ya subida duplicaba marcas. La defensa vieja era "¿marcó ese día?", que la jornada partida invalida; la nueva pregunta si el instante cae **dentro** de una jornada ya registrada.
+
+**Cobertura nueva**: `test_turnos.py`, 48 verificaciones sobre definición, resolución, tardanza, francos, jornada partida, turno nocturno, permisos y reposición offline. La suite pasó de 17 a 18 conjuntos.
+
 ## Cómo ejecutar
 
 | Componente | Comando |
@@ -225,9 +246,17 @@ Las dos primeras filas son la brecha de mayor valor: el motor horario es lógica
 - **Naive y aware no se mezclan**: `datetime.combine()` produce un instante sin zona que revienta al compararse con un `TIMESTAMPTZ` de PostgreSQL. La frontera de la aplicación debe normalizar a *aware* una sola vez.
 - **Si el sujeto de una regla controla el dato que la activa, la regla no existe**: el checkbox de "día lluvioso" lo declara el propio empleado que se beneficia de la tolerancia.
 
+### Agregadas por la entidad `turnos` (2026-09-14)
+
+- **Una constante global no es una configuración con un solo valor; es la ausencia de la entidad.** `JORNADA_INICIO` parecía "la hora de entrada, configurable". No lo era: era la prueba de que el concepto *turno* no existía. Arreglar la lectura del `.env` habría cerrado el síntoma y dejado el sistema igual de invendible.
+- **Una regla temporal no se define con una ventana fija.** "Las últimas N horas" falla en los dos extremos: corta jornadas partidas si N es chico y encadena jornadas distintas si es grande. La pregunta correcta era dónde está el **descanso**, que es un dato observable y no un parámetro a calibrar.
+- **`replace(tzinfo=None)` no convierte, descarta.** Un `TIMESTAMPTZ` en UTC evaluado así se lee como si su hora fuera local. La prueba que lo cubría estaba escrita con la misma confusión, así que confirmaba el error en vez de encontrarlo: una prueba escrita desde la misma cabeza que el código hereda sus supuestos.
+- **Elegir "el más cercano" premia faltar.** Al decidir contra qué tramo medir una llegada, la cercanía decía que presentarse a las 11:00 en un turno 07:00–11:00 / 14:00–18:00 era llegar tres horas temprano al segundo tramo. Es llegar cuatro tarde al primero. El orden de los tramos pendientes es el dato, no la distancia.
+- **Una asignación sin vencimiento es una que alguien va a olvidar deshacer.** La rotación se modeló con `desde`/`hasta` desde el principio para que el caso normal —volver al turno de contrato— no dependa de que nadie se olvide.
+
 ## Enlaces
 
 - [[Auditoría Técnica · Hallazgos Críticos]] · [[Arquitectura Objetivo · Plataforma y Portal del Empleado]] · [[Antifraude y Resiliencia en Picos de Marcación]]
 - [[Ecosistema Sistema de Marcación]] · [[Catálogo de Permisos y Licencias]] · [[Reglamento de Asistencia y Disciplina]]
-- [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Motor de Reglas de Horas Extra]] · [[Autoservicio de Permisos y Formularios]]
+- [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Motor de Reglas de Horas Extra]] · [[Autoservicio de Permisos y Formularios]] · [[Turnos y Rotación de Horarios]]
 - [[Módulo de Gestión de Usuarios]] · [[Control de Roles y Permisos RBAC]] · [[Panel de Reportes y Auditoría]] · [[Seguridad y Cifrado de Comunicaciones]]

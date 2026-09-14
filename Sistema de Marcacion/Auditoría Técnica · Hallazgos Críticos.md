@@ -18,7 +18,8 @@
 > | P1-5 | Corregido | Sábado 22:00 → domingo 06:00 manda las 6 h de domingo al 100 % |
 > | P2-3 | Corregido | `feriados_de(anio)` compone cualquier año: fijos + Pascua + traslados |
 > | P2-1 | Corregido de arrastre | Aprobar una corrección de salida ya no lanza `TypeError` |
-> | P2-4 | Parcial | El reproche de salida anticipada usa el tope real del turno; siguen dos definiciones de tardanza en la entrada |
+> | P2-4 | Corregido | Una sola regla de tardanza: la corrección de RRHH y la marca en vivo dan el mismo veredicto |
+> | P2-5 | Corregido | Turnos con tramos, días y rotación con vigencia; la hora de entrada dejó de ser una constante del proceso |
 >
 > Cobertura nueva: `tests/test_motor_horario.py` (14 turnos frontera) y `tests/smoke_portal_js.py`.
 
@@ -257,16 +258,22 @@ En menos de cuatro meses todos los feriados se liquidan como días comunes. El r
 
 **Corrección**: tabla `feriados` en base, administrable por RRHH, con año y tipo (fijo / trasladable).
 
-### P2-4 · Dos definiciones distintas de "llegada tardía"
+### P2-4 · Dos definiciones distintas de "llegada tardía" ✅ corregido
 
-- `es_tardanza()` (`clock_engine.py:80`) → gracia de **10 minutos**.
-- `evaluar_asistencia()` (`clock_engine.py:133`) → gracia de **15 minutos** para funcionarios.
+> Cerrado el 2026-09-14 junto con P2-5. Detalle en [[Turnos y Rotación de Horarios]].
 
-El flujo normal de marcación usa la segunda; la corrección aprobada por RRHH (`auth.py:489`) usa la primera. Un funcionario que marca 08:12 es "Normal" al marcar, pero si RRHH corrige su marca **a esa misma hora** queda como "Llegada Tardía". La corrección castiga por corregir.
+- `es_tardanza()` → gracia de **10 minutos**.
+- `evaluar_asistencia()` → gracia de **15 minutos** para funcionarios.
 
-### P2-5 · `JORNADA_INICIO` del `.env` se ignora ✅
+El flujo normal de marcación usaba la segunda; la corrección aprobada por RRHH, la primera. Un funcionario que marcaba 08:12 era "Normal" al marcar, pero si RRHH corregía su marca **a esa misma hora** quedaba como "Llegada Tardía". La corrección castigaba por corregir.
 
-`src/clock_engine.py:64` congela `INICIO_JORNADA` en tiempo de importación, antes de que `load_dotenv()` llegue a correr (vive dentro de `load_config()`, en `Database.__init__`). Reproducido:
+**Corrección aplicada**: `es_tardanza` delega en `evaluar_asistencia`. Una sola regla y un solo veredicto, medidos ambos contra el turno del empleado.
+
+### P2-5 · No existía la entidad `turnos` ✅ corregido
+
+> Cerrado el 2026-09-14. Diseño completo en [[Turnos y Rotación de Horarios]].
+
+`clock_engine.py` congelaba `INICIO_JORNADA` en tiempo de importación, antes de que `load_dotenv()` llegara a correr (vive dentro de `load_config()`, en `Database.__init__`). Reproducido:
 
 ```
 os.getenv JORNADA_INICIO (antes de load_dotenv): None
@@ -274,9 +281,9 @@ os.getenv JORNADA_INICIO (después de load_dotenv): '08:00'
 INICIO_JORNADA sigue siendo: 08:00:00  <-- congelado en import-time
 ```
 
-Hoy el defecto está latente porque el `.env` coincide con el valor por defecto. En cuanto alguien configure `JORNADA_INICIO=07:00`, el sistema seguirá evaluando contra las 08:00 **sin avisar**.
+El defecto estaba latente porque el `.env` coincidía con el valor por defecto. Pero el fondo era mayor: **la hora de entrada era una constante global del proceso**. Sin la entidad "turno" no había horarios rotativos, ni turnos por sucursal, ni jornadas partidas. Una empresa con dos turnos no podía usar el sistema.
 
-Más de fondo: **la hora de entrada es una constante global del proceso**. No existe la entidad "turno", así que el sistema no puede modelar horarios rotativos, turnos por sucursal ni jornadas partidas.
+**Corrección aplicada**: tablas `turnos`, `turno_tramos` y `asignaciones_turno`, con resolución por prioridad (rotación vigente → turno del legajo → predeterminado de la empresa). La constante desapareció; `JORNADA_INICIO` sobrevive solo como valor con que el esquema siembra el turno inicial. De yapa cayeron tres defectos que la entidad dejó a la vista: la salida anticipada medida contra el tope legal en lugar de contra el tramo pactado, los días de franco contados como ausencia, y la cola offline decidiendo entrada o salida por fecha calendario.
 
 ### P2-6 · Un marcaje abierto bloquea al empleado para siempre ✅ corregido
 
@@ -397,11 +404,11 @@ El `Dockerfile` no crea usuario sin privilegios. Cualquier ejecución de código
 | 6 | `detectar_accion_hoy` por estado, no por calendario | P2-2, P2-6 | ✅ hecho |
 | 7 | `fecha_ingreso` y baja lógica | P3-6 | ✅ hecho |
 | 8 | Biometría cifrada, freno de intentos y contenedor sin privilegios | P3-1, P3-3, P3-11 | ✅ hecho |
-| 9 | Entidad `turnos` (multi-turno, jornada partida) | P2-5 | pendiente |
+| 9 | Entidad `turnos` (multi-turno, jornada partida, rotación) | P2-4, P2-5 | ✅ hecho |
 | 10 | Cookie `HttpOnly` y bus de alertas fuera del proceso | P3-2, P3-4 | pendiente |
 
 El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].
 
 ## Enlaces
 
-[[Ecosistema Sistema de Marcación]] · [[Motor de Reglas de Horas Extra]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Catálogo de Permisos y Licencias]] · [[Bitácora de Implementación]]
+[[Ecosistema Sistema de Marcación]] · [[Motor de Reglas de Horas Extra]] · [[Turnos y Rotación de Horarios]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Catálogo de Permisos y Licencias]] · [[Bitácora de Implementación]]
