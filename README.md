@@ -20,7 +20,7 @@ El núcleo de cálculo del sistema (`clock_engine.py`) procesa las marcas abstra
 
 Una misma instalación puede alojar a **varias empresas** sin que ninguna vea los datos de otra. Cuatro capas lo sostienen: doce tablas llevan `empresa_id`; la conexión falla si no tiene empresa activa; un verificador estático impide que una consulta nueva quede sin acotar; y PostgreSQL lo impone con políticas de seguridad por fila, de modo que una consulta a la que se le olvidó el `WHERE` no devuelve ninguna fila en lugar de devolver las de todos. Ninguna sesión puede ver dos clientes a la vez.
 
-La hora contra la que se mide cada llegada sale del **turno** del empleado: cada turno tiene su horario (una franja, o dos si la jornada es partida), los días de la semana que cubre y, si hace falta, su propia tolerancia. La rotación se programa con vigencia, así que al vencer la persona vuelve sola a su horario de contrato, y los días que su turno no cubre figuran como **franco** en lugar de contarse como ausencia.
+La hora contra la que se mide cada llegada sale del **turno** del empleado: cada turno tiene su horario (una franja, o dos si la jornada es partida), los días de la semana que cubre y, si hace falta, su propia tolerancia. Una empresa que rota turnos define un **ciclo** —qué turnos, en qué orden y cada cuántos días— y el turno de cada día se calcula, sin cargar semana por semana. La rotación puntual se programa con vigencia y le gana al ciclo, así que al vencer la persona vuelve sola a donde estaba. Los días que su turno no cubre figuran como **franco** en lugar de contarse como ausencia.
 
 ---
 
@@ -195,6 +195,7 @@ python tests/smoke_permisos_autoservicio.py  # Pedido, cuota reservada, aprobaci
 python tests/test_planilla_extras.py # Planilla de horas extra y constancia de asistencia
 python tests/test_turno_nocturno.py  # Turnos que cruzan la medianoche y jornadas sin cierre
 python tests/test_turnos.py          # Horarios por empleado, rotación, jornada partida y francos
+python tests/test_rotacion.py        # Ciclos: semana A / semana B calculada, no cargada a mano
 python tests/guardia_arrendamiento.py  # Ninguna consulta de datos de cliente sin acotar
 python tests/test_multiempresa.py    # Dos clientes alojados: ningún dato cruzado
 python tests/test_cola_firmada.py    # La cola offline rechaza marcas fabricadas a mano

@@ -33,6 +33,7 @@ TABLAS_DE_EMPRESA: Set[str] = {
     "users", "marcajes", "justificaciones", "alertas", "fotos",
     "solicitudes_correccion", "condiciones_dia", "solicitudes_permiso",
     "turnos", "turno_tramos", "asignaciones_turno", "logs_auditoria",
+    "ciclos_rotacion", "ciclo_turnos",
 }
 
 EXCEPCIONES: Dict[str, str] = {

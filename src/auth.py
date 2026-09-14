@@ -1280,6 +1280,17 @@ def turno_de_empleado(
     proyectado = vigente.como_dict()
     proyectado["fecha"] = dia.isoformat()
     proyectado["trabaja_hoy"] = vigente.trabaja(dia)
+    ciclo = db.get_ciclo_de(usuario_id)
+    proyectado["ciclo"] = (
+        {
+            "nombre": ciclo["nombre"],
+            "secuencia": " → ".join(t["turno_nombre"] for t in ciclo["turnos"]),
+            "dias_por_tramo": int(ciclo["dias_por_tramo"]),
+            "posicion": ciclo["posicion"],
+        }
+        if ciclo
+        else None
+    )
     proyectado["rotaciones"] = [
         {
             "id": a["id"],
@@ -1328,3 +1339,186 @@ def _como_fecha(valor: Any, campo: str) -> date:
         return date.fromisoformat(str(valor).strip())
     except ValueError:
         raise ValueError(f"Fecha inválida en '{campo}': se espera AAAA-MM-DD.")
+
+
+# --- Ciclos de rotación -----------------------------------------------------
+
+MIN_TURNOS_EN_CICLO: int = 2
+MAX_TURNOS_EN_CICLO: int = 6
+
+
+def _ciclo_como_dict(fila: Dict[str, Any]) -> Dict[str, Any]:
+    """Proyecta un ciclo para la UI y las APIs."""
+    return {
+        "id": fila["id"],
+        "nombre": fila["nombre"],
+        "dias_por_tramo": int(fila["dias_por_tramo"]),
+        "ancla": fila["ancla"].isoformat(),
+        "activo": bool(fila.get("activo", True)),
+        "dotacion": int(fila.get("dotacion") or 0),
+        "turnos": [
+            {"orden": t["orden"], "id": t["turno_id"], "nombre": t["turno_nombre"]}
+            for t in fila.get("turnos", [])
+        ],
+        "secuencia": " → ".join(t["turno_nombre"] for t in fila.get("turnos", [])),
+    }
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def listar_ciclos(
+    db: Database, actor: Dict, incluir_inactivos: bool = False
+) -> List[Dict[str, Any]]:
+    """Ciclos de rotación definidos, con su secuencia y su dotación."""
+    return [_ciclo_como_dict(f) for f in db.listar_ciclos(incluir_inactivos)]
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def crear_ciclo(
+    db: Database,
+    actor: Dict,
+    nombre: str,
+    turnos_ids: List[int],
+    dias_por_tramo: int = 7,
+    ancla: Any = None,
+) -> Dict[str, Any]:
+    """Define una rotación automática: qué turnos, en qué orden y cada cuánto.
+
+    El ancla es el día en que el ciclo empieza a correr. No describe lo que
+    pasó antes, así que una fecha anterior cae al turno de contrato: un
+    calendario que inventara el pasado ensuciaría la liquidación ya hecha.
+    """
+    nombre = (nombre or "").strip()
+    if len(nombre) < 3:
+        raise ValueError("El ciclo necesita un nombre de al menos 3 caracteres.")
+    ids = [int(t) for t in (turnos_ids or [])]
+    if not MIN_TURNOS_EN_CICLO <= len(ids) <= MAX_TURNOS_EN_CICLO:
+        raise ValueError(
+            f"Un ciclo alterna entre {MIN_TURNOS_EN_CICLO} y "
+            f"{MAX_TURNOS_EN_CICLO} turnos; se recibieron {len(ids)}."
+        )
+    if len(set(ids)) != len(ids):
+        raise ValueError("Un turno no puede aparecer dos veces en el mismo ciclo.")
+    for turno_id in ids:
+        turno = db.get_turno(turno_id)
+        if not turno:
+            raise ValueError("Uno de los turnos del ciclo no existe.")
+        if not turno["activo"]:
+            raise ValueError(
+                f"El turno '{turno['nombre']}' está retirado y no puede entrar "
+                f"en un ciclo."
+            )
+    try:
+        dias = int(dias_por_tramo)
+    except (TypeError, ValueError):
+        raise ValueError("Los días por tramo se expresan en número entero.")
+    if not 1 <= dias <= 60:
+        raise ValueError("Los días por tramo van de 1 a 60.")
+    inicio = _como_fecha(ancla, "ancla") if ancla else date.today()
+
+    ciclo_id = db.crear_ciclo(nombre, ids, dias, inicio)
+    db.registrar_auditoria(
+        actor["id"],
+        "CREAR",
+        "ciclos_rotacion",
+        ciclo_id,
+        nuevos={
+            "nombre": nombre,
+            "turnos": ids,
+            "dias_por_tramo": dias,
+            "ancla": inicio.isoformat(),
+        },
+    )
+    return _ciclo_como_dict(db.get_ciclo(ciclo_id))
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def eliminar_ciclo(db: Database, actor: Dict, ciclo_id: int) -> bool:
+    """Elimina un ciclo que no tenga gente adentro."""
+    ciclo = db.get_ciclo(ciclo_id)
+    if not ciclo:
+        raise ValueError("El ciclo no existe.")
+    dotacion = db.contar_personal_en_ciclo(ciclo_id)
+    if dotacion:
+        raise ValueError(
+            f"{dotacion} empleado(s) rotan con este ciclo. Sacalos antes de "
+            f"eliminarlo."
+        )
+    db.eliminar_ciclo(ciclo_id)
+    db.registrar_auditoria(
+        actor["id"], "ELIMINAR", "ciclos_rotacion", ciclo_id,
+        anterior={"nombre": ciclo["nombre"]},
+    )
+    return True
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def asignar_ciclo(
+    db: Database,
+    actor: Dict,
+    usuario_id: int,
+    ciclo_id: Optional[int],
+    posicion: int = 0,
+) -> Dict[str, Any]:
+    """Pone a un empleado a rotar, en el tramo del ciclo que le toca arrancar.
+
+    La posición es lo que hace que dos personas del mismo ciclo estén siempre
+    en turnos distintos: sin ella, todo el equipo rotaría en bloque y no
+    quedaría nadie cubriendo el otro turno.
+    """
+    empleado = db.get_user_by_id(usuario_id)
+    if not empleado:
+        raise ValueError("El empleado no existe.")
+    if ciclo_id is not None:
+        ciclo = db.get_ciclo(ciclo_id)
+        if not ciclo:
+            raise ValueError("El ciclo no existe.")
+        if not 0 <= int(posicion) < len(ciclo["turnos"]):
+            raise ValueError(
+                f"La posición va de 0 a {len(ciclo['turnos']) - 1} en este ciclo."
+            )
+    db.asignar_ciclo(usuario_id, ciclo_id, posicion)
+    db.registrar_auditoria(
+        actor["id"], "ACTUALIZAR", "users", usuario_id,
+        anterior={"ciclo_id": empleado.get("ciclo_id")},
+        nuevos={"ciclo_id": ciclo_id, "ciclo_posicion": int(posicion)},
+    )
+    return turno_de_empleado(db, actor, usuario_id)
+
+
+def calendario_de_rotacion(
+    db: Database, actor: Dict, usuario_id: int, semanas: int = 6
+) -> List[Dict[str, Any]]:
+    """Qué turno le toca a alguien en los próximos tramos.
+
+    El ciclo se calcula y no se materializa, así que sin esta proyección el
+    empleado no tendría dónde ver cuándo le toca la noche. Una rotación que
+    la persona no puede consultar es una rotación que va a preguntar por
+    teléfono todas las semanas.
+    """
+    ajeno = actor["id"] != usuario_id
+    if ajeno and actor.get("role_name") not in ROLES_GESTION_USUARIOS:
+        raise PermissionError("No tiene permiso para consultar turnos ajenos.")
+    ciclo = db.get_ciclo_de(usuario_id)
+    if not ciclo:
+        return []
+    paso = int(ciclo["dias_por_tramo"])
+    hoy = date.today()
+    # El calendario arranca en el tramo en curso, no hoy: lo que interesa es
+    # desde cuándo rige cada turno, no en qué día se abrió la pantalla.
+    transcurridos = (hoy - ciclo["ancla"]).days
+    inicio = ciclo["ancla"] + timedelta(days=(transcurridos // paso) * paso)
+    proyeccion: List[Dict[str, Any]] = []
+    for tramo in range(max(1, semanas)):
+        desde = inicio + timedelta(days=paso * tramo)
+        turno = turno_vigente(db, usuario_id, desde)
+        proyeccion.append(
+            {
+                "desde": desde.isoformat(),
+                "hasta": (desde + timedelta(days=paso - 1)).isoformat(),
+                "turno": turno.nombre,
+                "horario": turno.etiqueta(),
+                "origen": turno.origen,
+                "en_curso": tramo == 0,
+            }
+        )
+    return proyeccion

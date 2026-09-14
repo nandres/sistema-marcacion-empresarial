@@ -380,6 +380,27 @@
       partes.push('<span class="turno-nota">Jornada partida</span>');
     }
     $("parte-turno").innerHTML = partes.join("");
+    pintarRotacion();
+  }
+
+  /* Un ciclo se calcula y no se materializa, así que sin esta proyección el
+     empleado no tendría dónde ver cuándo le toca la noche. Una rotación que
+     no se puede consultar se pregunta por teléfono todas las semanas. */
+  function pintarRotacion() {
+    pedir("/api/rotacion?semanas=4").then(function (tramos) {
+      if (!tramos || !tramos.length) { $("mi-rotacion").innerHTML = ""; return; }
+      $("mi-rotacion").innerHTML =
+        '<div class="rubro"><h3>Cómo rota tu turno</h3></div>' +
+        '<div class="marco"><table class="registro"><thead><tr>' +
+          "<th>Desde</th><th>Hasta</th><th>Turno</th><th class=\"num\">Horario</th>" +
+        "</tr></thead><tbody>" +
+        tramos.map(function (t) {
+          return "<tr" + (t.en_curso ? ' class="es-hoy"' : "") + ">" +
+            "<td>" + esc(t.desde) + "</td><td>" + esc(t.hasta) + "</td>" +
+            "<td>" + esc(t.turno) + "</td>" +
+            '<td class="num mono">' + esc(t.horario) + "</td></tr>";
+        }).join("") + "</tbody></table></div>";
+    }).catch(function () { /* sin ciclo no hay nada que mostrar */ });
   }
 
   // ---------------------------------------------------- portal · registro
@@ -1021,10 +1042,12 @@
     $("g-turnos").innerHTML = '<div class="vacio">Cargando…</div>';
     Promise.all([
       pedir("/api/panel/turnos?incluir_inactivos=true"),
-      pedir("/api/panel/personal")
+      pedir("/api/panel/personal"),
+      pedir("/api/panel/ciclos")
     ]).then(function (r) {
       sesion.turnos = r[0] || [];
       sesion.personal = (r[1] || {}).personal || [];
+      sesion.ciclos = r[2] || [];
       pintarTurnos();
     }).catch(function (error) {
       if (error.message !== "sesion") avisar("g-turnos", error.message);
@@ -1068,6 +1091,16 @@
         "</div></td></tr>";
     }).join("");
 
+    var ciclos = (sesion.ciclos || []).map(function (c) {
+      return "<tr><td><b>" + esc(c.nombre) + "</b></td>" +
+        "<td>" + esc(c.secuencia) + "</td>" +
+        '<td class="num">' + esc(c.dias_por_tramo) + " días</td>" +
+        '<td class="num mono">' + esc(c.ancla) + "</td>" +
+        '<td class="num">' + esc(c.dotacion) + "</td>" +
+        '<td><button class="btn-riesgo btn-chico" data-ciclo-borrar="' + esc(c.id) +
+          '">Eliminar</button></td></tr>';
+    }).join("");
+
     var plantilla = sesion.personal.filter(function (p) { return p.activo !== false; });
     var dotacion = plantilla.map(function (p) {
       return "<tr><td><b>" + esc(p.full_name) + "</b>" +
@@ -1082,6 +1115,9 @@
         '<td><div class="acciones fin">' +
           '<button class="btn-suave btn-chico" data-turno-asignar="' + esc(p.id) + '">Cambiar turno</button>' +
           '<button class="btn-suave btn-chico" data-turno-rotar="' + esc(p.id) + '">Rotar</button>' +
+          ((sesion.ciclos || []).length
+            ? '<button class="btn-suave btn-chico" data-ciclo-asignar="' + esc(p.id) + '">Ciclo</button>'
+            : "") +
         "</div></td></tr>";
     }).join("");
 
@@ -1114,6 +1150,23 @@
           '<th class="num">Dotación</th><th></th></tr></thead><tbody>' + filas + "</tbody></table></div>"
                : '<div class="vacio">Todavía no hay turnos definidos.</div>') +
       "</div>" +
+      '<div class="bloque"><div class="rubro"><h3>Rotación automática</h3>' +
+        '<span class="apunte">Alterna turnos cada tantos días, sin cargar semana por semana</span></div>' +
+        '<div class="rejilla-campos">' +
+          '<div><label for="c-nombre">Nombre del ciclo</label><input id="c-nombre" placeholder="Semana A / Semana B"></div>' +
+          '<div><label for="c-dias">Días por tramo</label><input id="c-dias" type="number" min="1" max="60" value="7"></div>' +
+          '<div><label for="c-ancla">Empieza el</label><input id="c-ancla" type="date" value="' + iso(new Date()) + '"></div>' +
+        "</div>" +
+        '<div class="rejilla-campos" style="margin-top:12px"><div><label>Turnos que alterna, en orden</label>' +
+          '<div class="dias-fila" id="c-turnos">' + casillasTurnos() + "</div></div></div>" +
+        '<div class="acciones fin" style="margin-top:16px"><button id="c-crear">Crear ciclo</button></div>' +
+        '<div id="c-aviso"></div>' +
+        (ciclos ? '<div class="marco" style="margin-top:16px"><table><thead><tr><th>Ciclo</th>' +
+          '<th>Secuencia</th><th class="num">Cada</th><th class="num">Desde</th>' +
+          '<th class="num">Dotación</th><th></th></tr></thead><tbody>' + ciclos +
+          "</tbody></table></div>"
+                : '<div class="vacio" style="margin-top:16px">Ningún ciclo definido: los turnos se asignan a mano.</div>') +
+      "</div>" +
       '<div class="bloque"><div class="rubro"><h3>Quién trabaja en qué turno</h3>' +
         '<span class="apunte">Cambiar turno fija el del contrato; rotar lo desplaza por un período</span></div>' +
         (dotacion ? '<div class="marco"><table><thead><tr><th>Empleado</th><th>Turno de hoy</th>' +
@@ -1125,6 +1178,106 @@
       $("t-segundo-tramo").classList.toggle("oculto", !$("t-partida").checked);
     });
     $("t-crear").addEventListener("click", crearTurno);
+    if ($("c-crear")) $("c-crear").addEventListener("click", crearCiclo);
+  }
+
+  /* Los turnos del ciclo se eligen marcándolos: el orden en que rotan es el
+     del catálogo, que es como los nombra quien arma el cuadro de turnos. */
+  function casillasTurnos() {
+    return (sesion.turnos || []).filter(function (t) { return t.activo; })
+      .map(function (t) {
+        return '<label class="dia-casilla" style="min-width:auto">' +
+          '<input type="checkbox" data-ciclo-turno="' + esc(t.id) + '">' +
+          "<span>" + esc(t.nombre) + "</span></label>";
+      }).join("");
+  }
+
+  function crearCiclo() {
+    var elegidos = Array.prototype.slice
+      .call($("c-turnos").querySelectorAll("input[data-ciclo-turno]"))
+      .filter(function (c) { return c.checked; })
+      .map(function (c) { return Number(c.dataset.cicloTurno); });
+    if (elegidos.length < 2) {
+      avisar("c-aviso", "Un ciclo alterna entre dos turnos o más."); return;
+    }
+    pedir("/api/panel/ciclos", {
+      cuerpo: {
+        nombre: $("c-nombre").value.trim(),
+        turnos: elegidos,
+        dias_por_tramo: Number($("c-dias").value) || 7,
+        ancla: $("c-ancla").value || null
+      }
+    }).then(function (c) {
+      notificar("Ciclo creado", c.nombre + " · " + c.secuencia, "baja");
+      cargarTurnos();
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("c-aviso", error.message);
+    });
+  }
+
+  function borrarCiclo(id) {
+    pedir("/api/panel/ciclos/" + id, { metodo: "DELETE" }).then(function (d) {
+      notificar("Ciclo eliminado", d.mensaje, "baja");
+      cargarTurnos();
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("g-turnos", error.message);
+    });
+  }
+
+  function abrirCicloDeEmpleado(usuarioId) {
+    var persona = sesion.personal.filter(function (p) { return p.id === usuarioId; })[0];
+    if (!persona) return;
+    pedir("/api/panel/personal/" + usuarioId + "/rotacion?semanas=6")
+      .then(function (calendario) {
+        var filas = (calendario || []).map(function (t) {
+          return "<tr" + (t.en_curso ? ' class="es-hoy"' : "") + ">" +
+            '<td class="mono">' + esc(t.desde) + " → " + esc(t.hasta) + "</td>" +
+            "<td>" + esc(t.turno) + "</td>" +
+            '<td class="num mono">' + esc(t.horario) + "</td></tr>";
+        }).join("");
+        abrirModal(
+          "<h3>Rotación de " + esc(persona.full_name) + "</h3>" +
+          '<p class="apunte">La posición decide en qué tramo arranca: dos personas ' +
+            "del mismo ciclo con posiciones distintas nunca coinciden de turno.</p>" +
+          '<div class="rejilla-campos">' +
+            '<div><label for="cc-ciclo">Ciclo</label><select id="cc-ciclo">' +
+              '<option value="">Sin rotación automática</option>' +
+              (sesion.ciclos || []).map(function (c) {
+                return '<option value="' + esc(c.id) + '"' +
+                  (c.id === persona.ciclo_id ? " selected" : "") + ">" +
+                  esc(c.nombre) + " · " + esc(c.secuencia) + "</option>";
+              }).join("") + "</select></div>" +
+            '<div><label for="cc-posicion">Posición inicial</label>' +
+              '<input id="cc-posicion" type="number" min="0" value="' +
+              esc(persona.ciclo_posicion || 0) + '"></div>' +
+          "</div>" +
+          (filas ? '<div class="marco" style="margin-top:16px"><table><thead><tr>' +
+            '<th>Tramo</th><th>Turno</th><th class="num">Horario</th>' +
+            "</tr></thead><tbody>" + filas + "</tbody></table></div>" : "") +
+          '<div id="cc-aviso"></div>' +
+          '<div class="acciones fin" style="margin-top:16px">' +
+            '<button class="btn-suave" data-cerrar="1">Cancelar</button>' +
+            '<button data-ciclo-guardar="' + esc(usuarioId) + '">Guardar</button></div>'
+        );
+      }).catch(function (error) {
+        if (error.message !== "sesion") avisar("g-turnos", error.message);
+      });
+  }
+
+  function guardarCicloDeEmpleado(usuarioId) {
+    var elegido = $("cc-ciclo").value;
+    pedir("/api/panel/personal/" + usuarioId + "/ciclo", {
+      cuerpo: {
+        ciclo_id: elegido === "" ? null : Number(elegido),
+        posicion: Number($("cc-posicion").value) || 0
+      }
+    }).then(function (t) {
+      cerrarModal();
+      notificar("Rotación actualizada", t.nombre + " · " + t.horario, "baja");
+      cargarTurnos();
+    }).catch(function (error) {
+      if (error.message !== "sesion") avisar("cc-aviso", error.message);
+    });
   }
 
   function mascaraDe(contenedor) {
@@ -1746,10 +1899,14 @@
       "[data-baja],[data-reincorporar],[data-turno-editar],[data-turno-guardar]," +
       "[data-turno-retirar],[data-turno-predeterminado],[data-turno-asignar]," +
       "[data-turno-base],[data-turno-rotar],[data-rotacion-guardar]," +
-      "[data-rotacion-revocar]");
+      "[data-rotacion-revocar],[data-ciclo-borrar],[data-ciclo-asignar]," +
+      "[data-ciclo-guardar]");
     if (!objetivo) return;
     var d = objetivo.dataset;
 
+    if (d.cicloBorrar) { borrarCiclo(d.cicloBorrar); return; }
+    if (d.cicloAsignar) { abrirCicloDeEmpleado(parseInt(d.cicloAsignar, 10)); return; }
+    if (d.cicloGuardar) { guardarCicloDeEmpleado(d.cicloGuardar); return; }
     if (d.turnoEditar) { editarTurno(parseInt(d.turnoEditar, 10)); return; }
     if (d.turnoGuardar) { guardarTurno(d.turnoGuardar); return; }
     if (d.turnoRetirar) { retirarTurno(d.turnoRetirar); return; }

@@ -97,6 +97,7 @@ Encenderla con la plantilla a medio cargar deja gente sin poder marcar.
 | --- | --- | --- |
 | Alojar un cliente nuevo en la misma instalación | Quien instala | `python src/app.py alta-empresa` |
 | Alguien cambia de horario por un tiempo | RRHH programa una rotación con vigencia | *Gestión → Turnos* |
+| La empresa rota turnos cada semana | RRHH define un ciclo y asigna posiciones; el resto se calcula | *Gestión → Turnos → Rotación automática* |
 | Alguien olvidó marcar la salida | Se libera solo a las 18 h y avisa a RRHH | *Gestión → Pendientes* |
 | Lluvia, paro de transporte, corte de rutas | RRHH declara la condición del día | *Gestión → Condiciones del día* |
 | Pedido de permiso | El empleado desde el portal, RRHH aprueba | *Gestión → Pendientes* |
@@ -114,9 +115,8 @@ Decirlo por adelantado evita una venta mal hecha.
 | Falta | Consecuencia | Detalle |
 | --- | --- | --- |
 | **Prueba de vida a prueba de video** | El gesto que pide el kiosco deja afuera una foto quieta, pero no a quien mueva el teléfono siguiendo la consigna. Lo cierra una cámara con infrarrojo o un modelo anti-suplantación | P1-2b |
-| **Calendario de rotación automática** | La rotación semana A / semana B se carga a mano, tramo por tramo | [[Turnos y Rotación de Horarios]] |
 
-Lo primero de esa lista es lo que más se va a pedir: el **calendario de rotación automática**, porque una empresa con turnos que rotan cada semana hoy los carga a mano, semana por semana.
+Lo que queda en esa lista es de fondo y no bloquea ninguna venta: la prueba de vida disuade pero no prueba, y el subdominio por cliente es comodidad, no aislamiento.
 
 ## Verificación post-instalación
 
@@ -129,6 +129,7 @@ python tests/test_condicion_dia.py
 python tests/test_turno_nocturno.py
 python tests/test_turnos.py
 python tests/test_multiempresa.py
+python tests/test_rotacion.py
 python tests/test_antiguedad_y_bajas.py
 python tests/test_seguridad_datos.py
 python tests/test_planilla_extras.py

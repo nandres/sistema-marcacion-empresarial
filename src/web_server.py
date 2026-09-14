@@ -791,6 +791,8 @@ def _personal_publico(fila: Dict[str, Any]) -> Dict[str, Any]:
             "creado_en",
             "turno_id",
             "turno_nombre",
+            "ciclo_id",
+            "ciclo_posicion",
         )
         if k in fila
     }
@@ -1548,6 +1550,117 @@ def api_panel_rotacion_revocar(
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error))
         return {"mensaje": "Rotación cancelada."}
+    finally:
+        db.cerrar()
+
+
+class CicloNuevo(BaseModel):
+    nombre: str
+    turnos: List[int]
+    dias_por_tramo: int = 7
+    ancla: Optional[str] = None
+
+
+class CicloDeEmpleado(BaseModel):
+    ciclo_id: Optional[int] = None
+    posicion: int = 0
+
+
+@app.get("/api/panel/ciclos")
+def api_panel_ciclos(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> List[Dict[str, Any]]:
+    """Ciclos de rotación con su secuencia y su dotación."""
+    _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
+    try:
+        return auth.listar_ciclos(db, usuario)
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/ciclos")
+def api_panel_ciclos_crear(
+    payload: CicloNuevo,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Define una rotación automática entre dos o más turnos."""
+    _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
+    try:
+        try:
+            return auth.crear_ciclo(
+                db, usuario, payload.nombre, payload.turnos,
+                payload.dias_por_tramo, payload.ancla,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+    finally:
+        db.cerrar()
+
+
+@app.delete("/api/panel/ciclos/{ciclo_id}")
+def api_panel_ciclos_eliminar(
+    ciclo_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, str]:
+    """Elimina un ciclo que no tenga gente rotando con él."""
+    _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
+    try:
+        try:
+            auth.eliminar_ciclo(db, usuario, ciclo_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"mensaje": "Ciclo eliminado."}
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/personal/{user_id}/ciclo")
+def api_panel_ciclo_empleado(
+    user_id: int,
+    payload: CicloDeEmpleado,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Pone (o saca) a un empleado de un ciclo de rotación."""
+    _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
+    try:
+        try:
+            return auth.asignar_ciclo(
+                db, usuario, user_id, payload.ciclo_id, payload.posicion
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/rotacion")
+def api_rotacion_propia(
+    semanas: int = 6,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> List[Dict[str, Any]]:
+    """Qué turno le toca al empleado en los próximos tramos de su ciclo."""
+    db = _cliente_de(usuario)
+    try:
+        return auth.calendario_de_rotacion(db, usuario, usuario["id"], semanas)
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/panel/personal/{user_id}/rotacion")
+def api_panel_rotacion_empleado(
+    user_id: int,
+    semanas: int = 8,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> List[Dict[str, Any]]:
+    """Calendario de rotación de un empleado, para el panel."""
+    _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
+    try:
+        return auth.calendario_de_rotacion(db, usuario, user_id, semanas)
     finally:
         db.cerrar()
 

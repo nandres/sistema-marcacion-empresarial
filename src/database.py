@@ -56,6 +56,8 @@ TABLAS_DE_EMPRESA: Tuple[str, ...] = (
     "turno_tramos",
     "asignaciones_turno",
     "logs_auditoria",
+    "ciclos_rotacion",
+    "ciclo_turnos",
 )
 """Tablas cuyas filas pertenecen a un cliente.
 
@@ -469,6 +471,45 @@ class Database:
         )
         # La rotación no se modela pisando el legajo: se asigna un turno con
         # vigencia y, al vencer, el empleado vuelve solo al turno de contrato.
+        # Un ciclo de rotación es una lista ordenada de turnos y cada cuántos
+        # días se avanza. Se calcula al vuelo en lugar de materializar las
+        # asignaciones semana por semana: así no hay nada que regenerar y el
+        # calendario sigue siendo correcto en cualquier fecha futura.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ciclos_rotacion (
+                id SERIAL PRIMARY KEY,
+                nombre VARCHAR(60) NOT NULL,
+                dias_por_tramo SMALLINT NOT NULL DEFAULT 7,
+                ancla DATE NOT NULL,
+                activo BOOLEAN NOT NULL DEFAULT TRUE,
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CHECK (dias_por_tramo BETWEEN 1 AND 60)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ciclo_turnos (
+                id SERIAL PRIMARY KEY,
+                ciclo_id INTEGER NOT NULL
+                    REFERENCES ciclos_rotacion (id) ON DELETE CASCADE,
+                orden SMALLINT NOT NULL,
+                turno_id INTEGER NOT NULL REFERENCES turnos (id) ON DELETE CASCADE,
+                UNIQUE (ciclo_id, orden)
+            )
+            """
+        )
+        # La posición es lo que hace que dos personas del mismo ciclo estén
+        # siempre en turnos distintos y roten juntas.
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS ciclo_id INTEGER "
+            "REFERENCES ciclos_rotacion (id) ON DELETE SET NULL"
+        )
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "ciclo_posicion SMALLINT NOT NULL DEFAULT 0"
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS asignaciones_turno (
@@ -1168,11 +1209,12 @@ class Database:
                                  'logs_auditoria',
                                  'justificaciones', 'solicitudes_correccion', 'alertas',
                                  'condiciones_dia', 'solicitudes_permiso',
-                                 'turnos', 'turno_tramos', 'asignaciones_turno')
+                                 'turnos', 'turno_tramos', 'asignaciones_turno',
+                                 'ciclos_rotacion', 'ciclo_turnos')
             """,
             fetch="one",
         )
-        return int(fila["presentes"]) == 13
+        return int(fila["presentes"]) == 15
 
     def _execute(
         self, query: str, params: Optional[Tuple[Any, ...]] = None, fetch: str = "none"
@@ -1334,7 +1376,7 @@ class Database:
             SELECT u.id, u.username, u.full_name, u.salario_mensual,
                    u.tipo_vinculo, r.nombre AS role_name, u.created_at,
                    u.fecha_ingreso, u.activo, u.fecha_baja, u.turno_id,
-                   t.nombre AS turno_nombre
+                   t.nombre AS turno_nombre, u.ciclo_id, u.ciclo_posicion
             FROM users u
             JOIN roles r ON r.id = u.role_id
             LEFT JOIN turnos t ON t.id = u.turno_id
@@ -1734,11 +1776,34 @@ class Database:
                   ORDER BY desde DESC, id DESC
                   LIMIT 1)
                 UNION ALL
-                (SELECT turno_id, 'legajo', 2
+                (SELECT ct.turno_id, 'ciclo', 2
+                   FROM users u
+                   JOIN ciclos_rotacion c
+                     ON c.id = u.ciclo_id AND c.activo
+                    -- Un ciclo no describe lo que pasó antes de empezar. Sin
+                    -- este corte, una fecha anterior al ancla daba un tramo
+                    -- distinto para cada posición y el registro del mes
+                    -- quedaba incoherente entre compañeros del mismo ciclo.
+                    AND %s::date >= c.ancla
+                   JOIN ciclo_turnos ct
+                     ON ct.ciclo_id = c.id
+                    -- FLOOR y no la división entera de PostgreSQL: con una
+                    -- fecha anterior al ancla, la entera trunca hacia cero y
+                    -- devolvería el tramo equivocado.
+                    AND ct.orden = 1 + (
+                        (u.ciclo_posicion + FLOOR(
+                            (%s::date - c.ancla)::numeric / c.dias_por_tramo
+                        )::int)
+                        %% (SELECT COUNT(*) FROM ciclo_turnos x
+                             WHERE x.ciclo_id = c.id)::int
+                    )
+                  WHERE u.empresa_id = %s AND u.id = %s)
+                UNION ALL
+                (SELECT turno_id, 'legajo', 3
                    FROM users
                   WHERE empresa_id = %s AND id = %s AND turno_id IS NOT NULL)
                 UNION ALL
-                (SELECT id, 'predeterminado', 3
+                (SELECT id, 'predeterminado', 4
                    FROM turnos
                   WHERE empresa_id = %s AND predeterminado AND activo)
             ) elegido
@@ -1746,6 +1811,7 @@ class Database:
             LIMIT 1
             """,
             (self.empresa, usuario_id, dia, dia,
+             dia, dia, self.empresa, usuario_id,
              self.empresa, usuario_id, self.empresa),
             fetch="one",
         )
@@ -1767,9 +1833,11 @@ class Database:
         filas = self._execute(
             """
             SELECT u.id AS usuario_id,
-                   COALESCE(ta.id, tu.id, td.id) AS turno_id,
-                   COALESCE(ta.nombre, tu.nombre, td.nombre) AS turno_nombre,
+                   COALESCE(ta.id, tc.id, tu.id, td.id) AS turno_id,
+                   COALESCE(ta.nombre, tc.nombre, tu.nombre, td.nombre)
+                       AS turno_nombre,
                    CASE WHEN ta.id IS NOT NULL THEN 'asignacion'
+                        WHEN tc.id IS NOT NULL THEN 'ciclo'
                         WHEN tu.id IS NOT NULL THEN 'legajo'
                         ELSE 'predeterminado' END AS origen
             FROM users u
@@ -1780,17 +1848,174 @@ class Database:
                 ORDER BY desde DESC, id DESC
                 LIMIT 1
             ) vigente ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT ct.turno_id
+                FROM ciclos_rotacion c
+                JOIN ciclo_turnos ct
+                  ON ct.ciclo_id = c.id
+                 AND ct.orden = 1 + (
+                     (u.ciclo_posicion + FLOOR(
+                         (%s::date - c.ancla)::numeric / c.dias_por_tramo
+                     )::int)
+                     %% (SELECT COUNT(*) FROM ciclo_turnos x
+                          WHERE x.ciclo_id = c.id)::int
+                 )
+                WHERE c.id = u.ciclo_id AND c.activo AND %s::date >= c.ancla
+                LIMIT 1
+            ) rotado ON TRUE
             LEFT JOIN turnos ta ON ta.id = vigente.turno_id
+            LEFT JOIN turnos tc ON tc.id = rotado.turno_id
             LEFT JOIN turnos tu ON tu.id = u.turno_id
             LEFT JOIN turnos td
                    ON td.empresa_id = u.empresa_id
                   AND td.predeterminado AND td.activo
             WHERE u.empresa_id = %s
             """,
-            (dia, dia, self.empresa),
+            (dia, dia, dia, dia, self.empresa),
             fetch="all",
         )
         return {fila["usuario_id"]: fila for fila in filas}
+
+    # --- Ciclos de rotación -------------------------------------------------
+
+    def listar_ciclos(self, incluir_inactivos: bool = False) -> List[Dict[str, Any]]:
+        """Ciclos de rotación con sus turnos en orden y su dotación."""
+        filtro = "" if incluir_inactivos else "AND c.activo"
+        ciclos = self._execute(
+            f"""
+            SELECT c.*,
+                   (SELECT COUNT(*) FROM users u
+                     WHERE u.ciclo_id = c.id AND u.activo) AS dotacion
+            FROM ciclos_rotacion c
+            WHERE c.empresa_id = %s {filtro}
+            ORDER BY c.nombre
+            """,
+            (self.empresa,),
+            fetch="all",
+        )
+        if not ciclos:
+            return []
+        tramos = self._execute(
+            """
+            SELECT ct.ciclo_id, ct.orden, ct.turno_id, t.nombre AS turno_nombre
+            FROM ciclo_turnos ct
+            JOIN turnos t ON t.id = ct.turno_id
+            WHERE ct.empresa_id = %s AND ct.ciclo_id = ANY(%s)
+            ORDER BY ct.ciclo_id, ct.orden
+            """,
+            (self.empresa, [c["id"] for c in ciclos]),
+            fetch="all",
+        )
+        por_ciclo: Dict[int, List[Dict[str, Any]]] = {}
+        for tramo in tramos:
+            por_ciclo.setdefault(tramo["ciclo_id"], []).append(tramo)
+        for ciclo in ciclos:
+            ciclo["turnos"] = por_ciclo.get(ciclo["id"], [])
+        return ciclos
+
+    def get_ciclo(self, ciclo_id: int) -> Optional[Dict[str, Any]]:
+        """Devuelve un ciclo con sus turnos ordenados, o ``None``."""
+        ciclo = self._execute(
+            "SELECT * FROM ciclos_rotacion WHERE empresa_id = %s AND id = %s",
+            (self.empresa, ciclo_id),
+            fetch="one",
+        )
+        if not ciclo:
+            return None
+        ciclo["turnos"] = self._execute(
+            """
+            SELECT ct.orden, ct.turno_id, t.nombre AS turno_nombre
+            FROM ciclo_turnos ct
+            JOIN turnos t ON t.id = ct.turno_id
+            WHERE ct.empresa_id = %s AND ct.ciclo_id = %s
+            ORDER BY ct.orden
+            """,
+            (self.empresa, ciclo_id),
+            fetch="all",
+        )
+        return ciclo
+
+    def crear_ciclo(
+        self, nombre: str, turnos_ids: List[int], dias_por_tramo: int, ancla: Any
+    ) -> int:
+        """Da de alta un ciclo con su secuencia de turnos."""
+        cursor = self._execute(
+            """
+            INSERT INTO ciclos_rotacion
+                (nombre, dias_por_tramo, ancla, empresa_id)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (nombre, dias_por_tramo, ancla, self.empresa),
+        )
+        ciclo_id = cursor.fetchone()["id"]
+        self._reemplazar_turnos_de_ciclo(ciclo_id, turnos_ids)
+        self.connection.commit()
+        return ciclo_id
+
+    def _reemplazar_turnos_de_ciclo(self, ciclo_id: int, turnos_ids: List[int]) -> None:
+        """Deja la secuencia del ciclo exactamente como la describe la lista."""
+        self._execute(
+            "DELETE FROM ciclo_turnos WHERE empresa_id = %s AND ciclo_id = %s",
+            (self.empresa, ciclo_id),
+        )
+        for orden, turno_id in enumerate(turnos_ids, start=1):
+            self._execute(
+                """
+                INSERT INTO ciclo_turnos (ciclo_id, orden, turno_id, empresa_id)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (ciclo_id, orden, turno_id, self.empresa),
+            )
+
+    def eliminar_ciclo(self, ciclo_id: int) -> None:
+        """Elimina un ciclo; su secuencia cae en cascada."""
+        self._execute(
+            "DELETE FROM ciclos_rotacion WHERE empresa_id = %s AND id = %s",
+            (self.empresa, ciclo_id),
+        )
+        self.connection.commit()
+
+    def contar_personal_en_ciclo(self, ciclo_id: int) -> int:
+        """Empleados activos que rotan con ese ciclo."""
+        fila = self._execute(
+            "SELECT COUNT(*) AS total FROM users "
+            "WHERE empresa_id = %s AND ciclo_id = %s AND activo",
+            (self.empresa, ciclo_id),
+            fetch="one",
+        )
+        return int(fila["total"])
+
+    def asignar_ciclo(
+        self, user_id: int, ciclo_id: Optional[int], posicion: int = 0
+    ) -> bool:
+        """Pone al empleado en un ciclo, en la posición indicada.
+
+        La posición es lo que hace que dos personas del mismo ciclo estén
+        siempre en turnos distintos y roten juntas.
+        """
+        cursor = self._execute(
+            "UPDATE users SET ciclo_id = %s, ciclo_posicion = %s "
+            "WHERE empresa_id = %s AND id = %s",
+            (ciclo_id, max(0, int(posicion)), self.empresa, user_id),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def get_ciclo_de(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Ciclo del empleado con su posición, o ``None`` si no rota."""
+        fila = self._execute(
+            "SELECT ciclo_id, ciclo_posicion FROM users "
+            "WHERE empresa_id = %s AND id = %s",
+            (self.empresa, user_id),
+            fetch="one",
+        )
+        if not fila or fila["ciclo_id"] is None:
+            return None
+        ciclo = self.get_ciclo(fila["ciclo_id"])
+        if ciclo:
+            ciclo["posicion"] = int(fila["ciclo_posicion"] or 0)
+        return ciclo
 
     def listar_marcajes_desde(
         self, user_id: int, desde: datetime

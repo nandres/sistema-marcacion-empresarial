@@ -31,17 +31,42 @@ La jornada partida del comercio (07:00–11:00 y 14:00–18:00) son **cuatro mar
 
 ## Quién trabaja qué turno
 
-La resolución tiene tres niveles y siempre devuelve algo:
+La resolución tiene cuatro niveles y siempre devuelve algo:
 
 | Prioridad | Origen | Para qué sirve |
 | --- | --- | --- |
-| 1 | **Asignación vigente** en esa fecha | Rotar sin tocar el legajo |
-| 2 | **Turno del legajo** | El horario de contrato |
-| 3 | **Turno predeterminado** de la empresa | Quien todavía no tiene turno propio |
+| 1 | **Asignación vigente** en esa fecha | El cambio puntual de una semana |
+| 2 | **Ciclo de rotación** | La rotación que se repite sola |
+| 3 | **Turno del legajo** | El horario de contrato |
+| 4 | **Turno predeterminado** de la empresa | Quien todavía no tiene turno propio |
 
 La rotación tiene vigencia (`desde`, `hasta`): al vencer, el empleado **vuelve solo** a su turno de contrato. Nadie tiene que acordarse de deshacer el cambio, que es donde estos sistemas suelen acumular gente en el turno equivocado.
 
 Si la cadena se agota —base recién migrada, o un legajo que apunta a un turno borrado— cae a un turno de respaldo de 8 horas. Quedarse sin marcar por un hueco de configuración es peor que medirse contra la jornada administrativa.
+
+## Rotación automática
+
+Cargar a mano una asignación por persona y por semana, para siempre, no es una rotación: es una tarea eterna. El **ciclo** describe la regla —qué turnos, en qué orden y cada cuántos días— y el turno de cada día se calcula.
+
+```
+ciclos_rotacion  nombre · dias_por_tramo · ancla
+ciclo_turnos     orden · turno
+users.ciclo_id, users.ciclo_posicion
+```
+
+La **posición** es lo que hace que dos personas del mismo ciclo estén siempre en turnos distintos y roten juntas. Sin ella el equipo entero rotaría en bloque y no quedaría nadie cubriendo el otro turno.
+
+| Semana | Ana (posición 0) | Beto (posición 1) |
+| --- | --- | --- |
+| 1 | Mañana | Noche |
+| 2 | Noche | Mañana |
+| 3 | Mañana | Noche |
+
+**Se calcula, no se materializa.** No hay filas que regenerar, el calendario sigue siendo correcto en cualquier fecha futura y cambiar el ciclo no obliga a rehacer nada. La contracara es que hace falta una proyección para poder verlo, y por eso existe `/api/rotacion`: una rotación que la persona no puede consultar se pregunta por teléfono todas las semanas. El portal la muestra bajo *Cómo rota tu turno*, con el tramo en curso resaltado.
+
+El ciclo entra entre la rotación puntual y el turno del legajo, así que un cambio de una semana le sigue ganando: *"esta semana Juan cambia con Pedro"* se carga como siempre y al vencer se vuelve al ciclo, no al contrato.
+
+**Un ciclo no describe lo que pasó antes de empezar.** Una fecha anterior al ancla cae al turno de contrato. Sin ese corte, el registro de un mes viejo mostraba un tramo distinto para cada posición y quedaba incoherente entre compañeros del mismo ciclo.
 
 ## Qué cambió con la entidad
 
@@ -100,6 +125,8 @@ La reposición sin conexión decidía por fecha, así que descartaba el segundo 
 | Cambiar turno | Fija el turno de contrato del legajo |
 | Rotar | Asigna un turno por un período; al vencer vuelve solo |
 | Retirar | Solo si nadie depende del turno; si nunca se usó, se elimina |
+| Crear un ciclo | Qué turnos alterna, en qué orden y cada cuántos días |
+| Poner a alguien a rotar | Se elige el ciclo y la posición en que arranca |
 
 No se retira un turno con gente adentro: el horario de esa gente pasaría en silencio a ser otro y sus tardanzas se medirían contra una hora que nadie les comunicó.
 
@@ -109,7 +136,6 @@ El empleado ve su horario en el portal, debajo del parte del día, con la marca 
 
 - **El cambio de horario rige hacia adelante y no versiona el pasado.** Los marcajes ya liquidados conservan la incidencia calculada con el horario de entonces, que es lo correcto; pero si se edita un turno y después se corrige una marca vieja, la corrección usa el horario **nuevo**.
 - **La línea de tiempo del mes resuelve el turno una vez**, no día por día: una rotación a mitad de mes desplaza los francos del tramo anterior. Es un detalle de presentación frente a treinta consultas por pantalla.
-- **No hay calendario de rotación automática** (semana A / semana B). Cada tramo se carga a mano.
 
 ## Enlaces
 
