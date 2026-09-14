@@ -898,7 +898,7 @@ class MarcacionApp(ctk.CTk):
             self._mostrar_estado(str(error), t("DANGER"))
             return
         except (psycopg2.Error, OSError):
-            self._marcar_offline(username)
+            self._marcar_offline(username, decision.marca)
             return
         ticket = reports.comprobante_marcacion(entry_id, momento, tipo)
         self.ticket_box.delete("1.0", "end")
@@ -957,10 +957,14 @@ class MarcacionApp(ctk.CTk):
             )
         return decision
 
-    def _marcar_offline(self, username: str) -> None:
-        """Guarda la marcación en la cola local cuando PostgreSQL no responde."""
+    def _marcar_offline(self, username: str, verificacion: str = "") -> None:
+        """Guarda la marcación en la cola local cuando PostgreSQL no responde.
+
+        El veredicto del control biométrico se guarda con la marca: la cámara
+        estaba acá y al sincronizar ya no, así que no se puede reconstruir.
+        """
         momento = clock_engine.ahora_local()
-        self.cola.encolar(username, momento)
+        self.cola.encolar(username, momento, verificacion)
         self._mostrar_estado(
             "Servidor central no disponible: la marcación quedó guardada "
             "localmente y se sincronizará automáticamente.",

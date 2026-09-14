@@ -385,11 +385,17 @@ todas = [j for j in db.list_justificaciones() if j["usuario_id"] == user["id"]]
 
 Con 500 empleados y tres años de histórico, cada apertura del portal arrastra la tabla entera. Lo mismo en `api_permiso_pdf` (`web_server.py:1072`), que recorre todas las justificaciones para encontrar una por id.
 
-### P3-10 · La cola offline confía en un nombre de usuario
+### P3-10 · La cola offline confía en un nombre de usuario ✅ corregido
 
 `offline_queue.py` almacena solo `username` y `momento`. `sync_worker` reinyecta esas marcas **sin verificar credenciales**. Quien tenga acceso al archivo `marcaciones_offline.db` del kiosco puede fabricar marcaciones para cualquier empleado, y entrarán al sistema central como legítimas.
 
 Además, una marca que falla de forma permanente (usuario inexistente) se reintenta cada 15 segundos para siempre: no hay contador de reintentos ni cola de descarte.
+
+**Corrección aplicada**: cada fila se firma con HMAC-SHA256 al encolarla, sobre el `sync_id`, el empleado, el instante y el veredicto biométrico. La clave vive en el entorno y no en el archivo, así que copiar el SQLite no alcanza para falsificar. Lo que no verifica no se reintenta —no va a mejorar— y no se borra en silencio: se aparta en una tabla `descartadas` con su motivo y RRHH recibe una alerta. Las que fallan por otro motivo se reintentan hasta un techo de 20 lotes y después se apartan igual.
+
+De paso, el veredicto del control biométrico ahora viaja con la marca: la cámara estaba en el kiosco y al sincronizar ya no, así que antes toda marca offline entraba como *No verificada* aunque el rostro hubiera coincidido.
+
+Y quedó a la vista un defecto propio del sincronizador: una entrada vieja **sin cerrar** hacía que toda marca posterior pareciera ya cubierta y se descartara en silencio. Ahora solo cubren las jornadas con salida.
 
 ### P3-11 · El contenedor corre como root ✅ corregido
 

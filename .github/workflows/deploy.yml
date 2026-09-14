@@ -82,6 +82,9 @@ jobs:
       - name: Turnos, rotación y jornada partida (P2-4, P2-5)
         run: python tests/test_turnos.py
 
+      - name: Cola offline firmada y con techo de reintentos (P3-10)
+        run: python tests/test_cola_firmada.py
+
       - name: Aislamiento entre empresas alojadas
         run: |
           python tests/guardia_arrendamiento.py

@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional
 import clock_engine
 import database
 import notifications
+import offline_queue
 from clock_engine import (
     ClockEngine,
     calcular_horas_paraguay,
@@ -71,7 +72,7 @@ def sincronizar(
     Returns:
         Diccionario con ``subidas``, ``descartadas`` y ``fallidas``.
     """
-    resumen = {"subidas": 0, "descartadas": 0, "fallidas": 0}
+    resumen = {"subidas": 0, "descartadas": 0, "fallidas": 0, "falsificadas": 0}
     pendientes = cola.pendientes()
     if not pendientes:
         return resumen
@@ -97,6 +98,22 @@ def sincronizar(
     try:
         for pendiente in pendientes:
             try:
+                # La firma se comprueba antes que nada: sin ella, el servidor
+                # central creería cualquier fila que alguien escriba en el
+                # SQLite del kiosco. Una marca sin firma válida no se reintenta
+                # —no va a mejorar— y no se borra en silencio: se aparta.
+                if not offline_queue.verificar(pendiente):
+                    cola.descartar(pendiente, "Firma inválida o ausente.")
+                    resumen["falsificadas"] += 1
+                    avisar(
+                        "cola_falsificada",
+                        "alta",
+                        f"Marcación offline sin firma válida para "
+                        f"'{pendiente['username']}'.",
+                        f"{pendiente['momento_iso']} · sync_id "
+                        f"{pendiente['sync_id'][:8]} · apartada sin aplicar",
+                    )
+                    continue
                 user = db.get_user_by_username(pendiente["username"])
                 if not user:
                     raise ValueError("Usuario inexistente en el servidor.")
@@ -131,8 +148,25 @@ def sincronizar(
                 else:
                     resumen["descartadas"] += 1
                 cola.eliminar(pendiente["id"])
-            except Exception:
+            except Exception as error:
                 resumen["fallidas"] += 1
+                # Una marca que falla siempre —usuario borrado, fecha
+                # imposible— se reintentaba cada quince segundos para siempre.
+                # Después de insistir un rato se aparta y se avisa, porque lo
+                # que falta para resolverla no está en este proceso.
+                intentos = cola.registrar_fallo(pendiente["id"], str(error))
+                if intentos >= offline_queue.MAX_INTENTOS:
+                    cola.descartar(
+                        pendiente, f"{intentos} intentos fallidos: {error}"
+                    )
+                    resumen["descartadas"] += 1
+                    avisar(
+                        "cola_descartada",
+                        "alta",
+                        f"Marcación offline apartada tras {intentos} intentos "
+                        f"('{pendiente['username']}').",
+                        f"{pendiente['momento_iso']} · {error}",
+                    )
     finally:
         if not usar_db_externo:
             db.cerrar()
@@ -140,15 +174,20 @@ def sincronizar(
 
 
 def _ya_cubierta(previas: List[Dict[str, Any]], momento: datetime) -> bool:
-    """Indica si el instante ya cae dentro de una jornada registrada.
+    """Indica si el instante ya cae dentro de una jornada **cerrada**.
 
     Es la defensa contra el reintento de una cola que ya se subió. No alcanza
     con "¿marcó ese día?": la jornada partida tiene dos entradas legítimas en
     la misma fecha, y descartarlas por el día perdería la segunda.
+
+    Solo cuentan las jornadas con salida. Una entrada abierta no cubre nada:
+    si es la de esta marca, ya la tomó la rama de salida; y si quedó abierta
+    de otro día, dar por cubierto todo lo posterior descartaría en silencio
+    cada marca que el kiosco repusiera desde entonces.
     """
     for registro in previas:
         fin = registro["hora_salida"]
-        if registro["hora_entrada"] <= momento and (fin is None or momento <= fin):
+        if fin is not None and registro["hora_entrada"] <= momento <= fin:
             return True
     return False
 
@@ -183,6 +222,7 @@ def _sincronizar_entrada(db, user, momento, pendiente, avisar) -> None:
         tolerancia,
         condicion,
         sync_id=pendiente["sync_id"],
+        verificacion_facial=pendiente.get("verificacion_facial") or "No verificada",
     )
     if entry_id is None:
         return
