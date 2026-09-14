@@ -17,7 +17,12 @@ from typing import Any, Callable, Dict, Optional, TypeVar
 import bcrypt
 import jwt
 
-from clock_engine import calcular_horas_paraguay, es_feriado_o_domingo, es_tardanza
+from clock_engine import (
+    calcular_horas_paraguay,
+    es_feriado_o_domingo,
+    es_tardanza,
+    persistir_desglose,
+)
 from database import Database, load_dotenv
 import notifications
 import reglamento
@@ -37,11 +42,49 @@ TIPOS_VINCULO: tuple = ("Pasante", "Funcionario")
 JWT_EXPIRACION_HORAS: int = 8
 JWT_ALGORITMO: str = "HS256"
 
+LONGITUD_MINIMA_SECRETO: int = 32
+
+# Tope de la tolerancia que Recursos Humanos puede declarar por día. Sin
+# techo, una declaración de 8 horas anularía el control de asistencia.
+TOLERANCIA_MAXIMA_DECLARABLE: int = 120
+
+
+def secreto_requerido(variable: str) -> str:
+    """Lee un secreto obligatorio del entorno o aborta la operación.
+
+    Sin valor por defecto: una variable ausente detiene el proceso en lugar
+    de degradarlo a una clave conocida. Un secreto de firma con respaldo
+    hardcodeado permite falsificar tokens a cualquiera que lea el repositorio.
+
+    Raises:
+        RuntimeError: si la variable falta o es más corta que
+            ``LONGITUD_MINIMA_SECRETO``.
+    """
+    load_dotenv()
+    valor = (os.getenv(variable) or "").strip()
+    if not valor:
+        raise RuntimeError(
+            f"Falta la variable de entorno {variable}. "
+            f"Generá una con: python -c \"import secrets; print(secrets.token_urlsafe(48))\" "
+            f"y agregala al .env antes de iniciar el sistema."
+        )
+    if len(valor) < LONGITUD_MINIMA_SECRETO:
+        raise RuntimeError(
+            f"{variable} tiene {len(valor)} caracteres; se requieren al menos "
+            f"{LONGITUD_MINIMA_SECRETO} para una firma HS256 sólida."
+        )
+    return valor
+
+
+def verificar_secretos() -> None:
+    """Valida los secretos obligatorios al arrancar (falla rápido y claro)."""
+    secreto_requerido("JWT_SECRET_KEY")
+    secreto_requerido("COMPROBANTE_CLAVE")
+
 
 def _jwt_secret() -> str:
     """Clave de firma de tokens leída de ``JWT_SECRET_KEY`` en el ``.env``."""
-    load_dotenv()
-    return os.getenv("JWT_SECRET_KEY", "clave-de-desarrollo-no-usar-en-produccion")
+    return secreto_requerido("JWT_SECRET_KEY")
 
 
 def crear_token_acceso(usuario_id: int, rol: str) -> str:
@@ -289,6 +332,7 @@ def crear_justificacion(
     fecha_inicio: Any,
     fecha_fin: Any,
     horas_usadas: float = 0.0,
+    permitir_futuro: bool = False,
 ) -> int:
     """Crea una justificación aprobada para un empleado (solo RRHH/Admin).
 
@@ -296,6 +340,11 @@ def crear_justificacion(
     empleado), que las fechas no excedan el día de hoy, y que el empleado
     aún tenga disponibilidad de la cuota (días, horas o veces) del artículo
     en su período de cómputo vigente.
+
+    ``permitir_futuro`` levanta el tope del día de hoy. La carga directa de
+    RRHH registra ausencias ya ocurridas y conserva el tope; la aprobación
+    de una solicitud presentada por el empleado no puede tenerlo, porque un
+    permiso se pide antes de tomarlo.
 
     El actor que la crea queda registrado como ``aprobado_por`` y la
     operación se audita en ``logs_auditoria``.
@@ -318,7 +367,7 @@ def crear_justificacion(
     if fecha_fin < fecha_inicio:
         raise ValueError("La fecha de fin no puede ser anterior al inicio.")
     hoy = datetime.now().date()
-    if fecha_fin > hoy:
+    if fecha_fin > hoy and not permitir_futuro:
         raise ValueError(
             f"La fecha de fin no puede superar el día de hoy ({hoy.isoformat()})."
         )
@@ -392,6 +441,242 @@ def crear_justificacion(
     return justificacion_id
 
 
+MOTIVO_MINIMO: int = 10
+
+
+def solicitar_permiso(
+    db: Database,
+    empleado: Dict,
+    tipo_permiso: str,
+    fecha_inicio: Any,
+    fecha_fin: Any,
+    horas_solicitadas: float,
+    motivo: str,
+) -> Dict[str, Any]:
+    """Registra el pedido de permiso que el empleado presenta desde el portal.
+
+    Valida contra el mismo catálogo reglamentario que usa RRHH —artículo
+    aplicable al vínculo, coherencia de fechas, unidad de medida y cuota
+    disponible descontando lo que ya reservan otros pedidos pendientes—, de
+    modo que a la bandeja de Recursos Humanos solo lleguen solicitudes que
+    cumplen el artículo invocado. Aprobar deja de ser una tarea de control
+    aritmético y pasa a ser una decisión.
+
+    Returns:
+        La solicitud creada con el artículo y las condiciones que la rigen.
+
+    Raises:
+        ValueError: Con el motivo exacto del rechazo, en lenguaje del
+            reglamento, para que el empleado pueda corregir el pedido.
+    """
+    vinculo = empleado.get("tipo_vinculo") or "Funcionario"
+    articulo = reglamento.encontrar_articulo(tipo_permiso, vinculo)
+    if articulo is None:
+        raise ValueError(
+            f"El permiso '{tipo_permiso}' no corresponde al vínculo '{vinculo}'."
+        )
+    if fecha_fin < fecha_inicio:
+        raise ValueError("La fecha de fin no puede ser anterior al inicio.")
+    motivo = (motivo or "").strip()
+    if len(motivo) < MOTIVO_MINIMO:
+        raise ValueError(
+            f"Contá el motivo del pedido (al menos {MOTIVO_MINIMO} caracteres)."
+        )
+
+    por_horas = articulo["unidad"] == reglamento.UNIDAD_HORAS
+    if por_horas:
+        if horas_solicitadas <= 0:
+            raise ValueError("Indicá cuántas horas necesitás.")
+        if fecha_fin != fecha_inicio:
+            raise ValueError(
+                "Un permiso por horas se toma en un solo día: igualá las fechas."
+            )
+    elif horas_solicitadas:
+        raise ValueError("Este permiso se mide en días; no lleva cantidad de horas.")
+
+    hoy = datetime.now().date()
+    estado = next(
+        (
+            d
+            for d in reglamento.disponibilidad_permisos(db, empleado, hoy)
+            if d["tipo"] == tipo_permiso
+        ),
+        None,
+    )
+    if estado is None:
+        raise ValueError("No se encontró la disponibilidad del permiso.")
+    if not estado["solicitable"]:
+        raise ValueError(_detalle_sin_cupo(estado))
+
+    pedido = float(horas_solicitadas) if por_horas else float(
+        (fecha_fin - fecha_inicio).days + 1
+    )
+    disponible = estado["restantes_efectivos"]
+    if disponible is not None and pedido > disponible:
+        unidad = estado["unidad"]
+        raise ValueError(
+            f"Pediste {pedido:g} {unidad} y te quedan {disponible:g} "
+            f"de '{estado['nombre']}' ({estado['articulo']}, {estado['periodo']})."
+        )
+
+    solicitud_id = db.crear_solicitud_permiso(
+        empleado["id"],
+        tipo_permiso,
+        fecha_inicio,
+        fecha_fin,
+        horas_solicitadas,
+        motivo,
+    )
+    notifications.registrar_alerta(
+        db,
+        "permiso_solicitado",
+        "baja",
+        f"{empleado['full_name']} solicitó {estado['nombre']}.",
+        f"{articulo['articulo']} · {fecha_inicio.isoformat()} al "
+        f"{fecha_fin.isoformat()} · solicitud #{solicitud_id}",
+        usuario_id=empleado["id"],
+    )
+    return {
+        "id": solicitud_id,
+        "estado": "Pendiente",
+        "articulo": articulo["articulo"],
+        "nombre": articulo["nombre"],
+        "condiciones": articulo["condiciones"],
+    }
+
+
+def _detalle_sin_cupo(estado: Dict[str, Any]) -> str:
+    """Explica el agotamiento citando el artículo y lo ya comprometido."""
+    partes = [
+        f"{estado['usados']:g} {estado['unidad']} usados de {estado['cuota']:g}"
+    ]
+    if estado["pendientes"]:
+        partes.append(f"{estado['pendientes']:g} en pedidos sin resolver")
+    if estado.get("usos_max"):
+        partes.append(f"{estado['usos']:g} de {estado['usos_max']:g} usos")
+    return (
+        f"Cuota agotada de '{estado['nombre']}' ({estado['articulo']}): "
+        f"{' · '.join(partes)} en el período {estado['periodo']}."
+    )
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def resolver_solicitud_permiso(
+    db: Database,
+    actor: Dict,
+    solicitud_id: int,
+    aprobar: bool,
+    observacion: str = "",
+) -> Dict[str, Any]:
+    """Aprueba o rechaza una solicitud de permiso del portal.
+
+    Al aprobar emite la justificación oficial —la misma que hasta ahora
+    cargaba RRHH a mano— y la ata a la solicitud, de modo que el PDF del
+    permiso queda disponible para el empleado sin ningún paso extra. La
+    cuota se vuelve a verificar en este momento y no en el del pedido,
+    porque entre uno y otro pudo aprobarse otra solicitud.
+    """
+    solicitud = db.get_solicitud_permiso(solicitud_id)
+    if not solicitud:
+        raise ValueError(f"La solicitud #{solicitud_id} no existe.")
+    if solicitud["estado"] != "Pendiente":
+        raise ValueError(
+            f"La solicitud #{solicitud_id} ya fue {solicitud['estado'].lower()}."
+        )
+
+    justificacion_id: Optional[int] = None
+    if aprobar:
+        justificacion_id = crear_justificacion(
+            db,
+            actor,
+            solicitud["usuario_id"],
+            solicitud["tipo_permiso"],
+            solicitud["fecha_inicio"],
+            solicitud["fecha_fin"],
+            float(solicitud["horas_solicitadas"] or 0),
+            permitir_futuro=True,
+        )
+    estado = "Aprobado" if aprobar else "Rechazado"
+    if not db.resolver_solicitud_permiso(
+        solicitud_id, estado, actor["id"], observacion.strip(), justificacion_id
+    ):
+        raise ValueError("La solicitud fue resuelta por otra persona mientras tanto.")
+    db.registrar_auditoria(
+        actor["id"],
+        "RESOLVER",
+        "solicitudes_permiso",
+        solicitud_id,
+        anterior={"estado": "Pendiente"},
+        nuevos={
+            "estado": estado,
+            "justificacion_id": justificacion_id,
+            "observacion": observacion.strip(),
+        },
+    )
+    notifications.registrar_alerta(
+        db,
+        "permiso_resuelto",
+        "baja" if aprobar else "media",
+        f"Tu permiso de {solicitud['tipo_permiso']} fue {estado.lower()}.",
+        observacion.strip()
+        or f"{solicitud['fecha_inicio']} al {solicitud['fecha_fin']}",
+        usuario_id=solicitud["usuario_id"],
+    )
+    return {
+        "id": solicitud_id,
+        "estado": estado,
+        "justificacion_id": justificacion_id,
+    }
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def declarar_condicion_dia(
+    db: Database,
+    actor: Dict,
+    fecha: Any,
+    condicion: str,
+    tolerancia_min: int,
+    nota: str = "",
+) -> Dict[str, Any]:
+    """Declara la condición excepcional de un día para toda la plantilla.
+
+    Es el reemplazo de la casilla que el propio empleado marcaba en el
+    kiosco: la tolerancia climática de la Res. 3028/2024 la reconoce la
+    empresa, no quien llega tarde. Queda firmada y auditada.
+    """
+    condicion = (condicion or "").strip()
+    if not condicion:
+        raise ValueError("Indicá qué condición se declara para el día.")
+    if not 0 <= tolerancia_min <= TOLERANCIA_MAXIMA_DECLARABLE:
+        raise ValueError(
+            f"La tolerancia debe estar entre 0 y {TOLERANCIA_MAXIMA_DECLARABLE} minutos."
+        )
+    fila = db.declarar_condicion_dia(
+        fecha, condicion, int(tolerancia_min), actor["id"], nota.strip()
+    )
+    db.registrar_auditoria(
+        actor["id"],
+        "DECLARAR",
+        "condiciones_dia",
+        0,
+        nuevos={
+            "fecha": fecha.isoformat(),
+            "condicion": condicion,
+            "tolerancia_min": int(tolerancia_min),
+            "nota": nota.strip(),
+        },
+    )
+    notifications.registrar_alerta(
+        db,
+        "condicion_dia",
+        "media",
+        f"{condicion} declarada para el {fecha.isoformat()}.",
+        f"Tolerancia de {tolerancia_min} min para toda la plantilla · "
+        f"firmó {actor['full_name']}",
+    )
+    return fila
+
+
 @autorizado(ROLE_ADMIN,)
 def delete_user(db: Database, actor: Dict, user_id: int) -> None:
     """Elimina un usuario (solo Admin) auditando los valores previos."""
@@ -455,7 +740,12 @@ def _aplicar_correccion_marcaje(
     db: Database, actor: Dict, solicitud: Dict
 ) -> None:
     """Materializa la marca aprobada en la tabla ``marcajes`` con auditoría."""
-    instante = datetime.combine(solicitud["fecha_registro"], solicitud["hora_propuesta"])
+    # RRHH tipea una hora de reloj local; los marcajes se guardan en
+    # TIMESTAMPTZ, así que el instante se ancla a la zona horaria acá y no
+    # viaja naive hasta chocar contra un valor aware de la base.
+    instante = datetime.combine(
+        solicitud["fecha_registro"], solicitud["hora_propuesta"]
+    ).astimezone()
     if solicitud["tipo_marca"] == "Entrada":
         _corregir_entrada(db, actor, solicitud, instante)
     else:
@@ -475,9 +765,11 @@ def _valores_marcaje(marcaje: Dict) -> Dict[str, Any]:
         "es_feriado": bool(marcaje["es_feriado"]),
         "es_tardanza": bool(marcaje["es_tardanza"]),
         "horas_ordinarias": str(marcaje["horas_ordinarias"] or "00:00:00"),
+        "horas_nocturnas": str(marcaje.get("horas_nocturnas") or "00:00:00"),
         "horas_extra_50": str(marcaje["horas_extra_50"] or "00:00:00"),
         "horas_extra_100": str(marcaje["horas_extra_100"] or "00:00:00"),
         "tipo_incidencia": marcaje.get("tipo_incidencia") or "",
+        "tipo_jornada": marcaje.get("tipo_jornada") or "",
     }
 
 
@@ -535,24 +827,19 @@ def _corregir_salida(
         )
     marcaje = abiertos[0]
     anterior = _valores_marcaje(marcaje)
-    feriado = es_feriado_o_domingo(marcaje["hora_entrada"])
-    desglose = calcular_horas_paraguay(marcaje["hora_entrada"], instante, feriado)
-    db.close_clock_out(
-        marcaje["id"],
-        instante,
-        feriado,
-        desglose["horas_ordinarias"],
-        desglose["horas_extra_50"],
-        desglose["horas_extra_100"],
-        marcaje.get("tipo_incidencia") or "",
+    desglose = calcular_horas_paraguay(marcaje["hora_entrada"], instante)
+    persistir_desglose(
+        db, marcaje["id"], instante, desglose, marcaje.get("tipo_incidencia") or ""
     )
     nuevos = dict(
         anterior,
         hora_salida=instante.isoformat(),
-        es_feriado=feriado,
-        horas_ordinarias=str(desglose["horas_ordinarias"]),
-        horas_extra_50=str(desglose["horas_extra_50"]),
-        horas_extra_100=str(desglose["horas_extra_100"]),
+        es_feriado=desglose.toca_descanso,
+        horas_ordinarias=str(desglose.horas_ordinarias),
+        horas_nocturnas=str(desglose.horas_nocturnas),
+        horas_extra_50=str(desglose.horas_extra_50),
+        horas_extra_100=str(desglose.horas_extra_100),
+        tipo_jornada=desglose.tipo_jornada,
     )
     db.registrar_auditoria(
         actor["id"], "ACTUALIZAR", "marcajes", marcaje["id"],

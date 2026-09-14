@@ -1,6 +1,9 @@
 # Ecosistema Sistema de Marcación
 
-> Mapa del tejido de software que compone el proyecto. La bóveda aloja la documentación comercial ([[AGENTS.md]]) y el repositorio Git aloja el código en `src/`.
+> Mapa del tejido de software que compone el proyecto. La bóveda aloja la documentación y el repositorio Git aloja el código en `src/`. Para orientarse entre las notas, ver [[AGENTS]].
+
+> [!warning] Estado al 2026-09-13
+> La auditoría técnica registró **defectos bloqueantes** en el motor horario, el arranque del esquema y el portal web. Antes de tomar este mapa como descripción del estado deseado, leer [[Auditoría Técnica · Hallazgos Críticos]].
 
 ## Arquitectura
 
@@ -38,6 +41,8 @@ flowchart LR
 | `src/biometric_sync.py` | Sincronización TCP/IP con relojes ZKTeco (puerto 4370) |
 | `Dockerfile` | Contenedor de producción (gunicorn + uvicorn): [[Despliegue en la Nube e Infraestructura SaaS]] |
 | `solicitudes_correccion` | Tabla de reclamos de marcación fallida (Pendiente/Aprobado/Rechazado) |
+| `solicitudes_permiso` | Pedidos de permiso presentados desde el portal: [[Autoservicio de Permisos y Formularios]] |
+| `condiciones_dia` | Condición excepcional del día declarada por RRHH (reemplaza a la casilla del kiosco) |
 
 ## Flujo de datos
 
@@ -47,6 +52,16 @@ flowchart LR
 4. `database.py` persiste todo en PostgreSQL y audita las operaciones de RRHH/Admin.
 
 ## Documentación vinculada
+
+### Auditoría y evolución
+
+- [[Auditoría Técnica · Hallazgos Críticos]] — registro de bugs y vulnerabilidades con severidad y corrección
+- [[Arquitectura Objetivo · Plataforma y Portal del Empleado]] — separación en capas, modelo de datos faltante y rediseño del portal
+- [[Antifraude y Resiliencia en Picos de Marcación]] — vectores de fraude y comportamiento bajo el pico de las 08:00
+- [[Sistema de Diseño · Planilla]] — lenguaje visual compartido por la web y el escritorio
+- [[Autoservicio de Permisos y Formularios]] — permisos desde el portal y documentos que se emiten solos
+
+### Módulos
 
 - [[Bitácora de Implementación]] (historial cronológico completo)
 - [[Control de Roles y Permisos RBAC]]

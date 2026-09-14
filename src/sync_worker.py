@@ -23,8 +23,8 @@ import notifications
 from clock_engine import (
     ClockEngine,
     calcular_horas_paraguay,
-    es_feriado_o_domingo,
     evaluar_asistencia,
+    persistir_desglose,
 )
 from offline_queue import ColaOffline
 
@@ -35,10 +35,15 @@ def _desde_iso(momento_iso: str) -> datetime:
 
 
 def _nueva_db() -> Optional[database.Database]:
-    """Abre una conexión ya inicializada, o None si PostgreSQL no responde."""
+    """Abre una conexión al servidor central, o None si no responde.
+
+    No aplica migraciones: el DDL bloquea a las conexiones de lectura largas
+    y este hilo corre cada 15 segundos. El esquema se aplica una sola vez en
+    ``migrate.py``, antes de levantar la aplicación.
+    """
     try:
         db = database.Database()
-        db.initialize()
+        db.connect()
         return db
     except Exception:
         return None
@@ -88,12 +93,11 @@ def sincronizar(
                 if not user:
                     raise ValueError("Usuario inexistente en el servidor.")
                 momento = _desde_iso(pendiente["momento_iso"])
-                lluvia = bool(pendiente["es_dia_lluvioso"])
                 registros = db.get_entries_by_date(user["id"], momento.date())
                 abierto = next((r for r in registros if r["hora_salida"] is None), None)
 
                 if abierto is None and not registros:
-                    _sincronizar_entrada(db, user, momento, lluvia, pendiente, avisar)
+                    _sincronizar_entrada(db, user, momento, pendiente, avisar)
                     resumen["subidas"] += 1
                 elif abierto is not None:
                     if _ya_sincronizada_salida(registros, momento):
@@ -112,9 +116,14 @@ def sincronizar(
     return resumen
 
 
-def _sincronizar_entrada(db, user, momento, lluvia, pendiente, avisar) -> None:
-    """Reinserta una ENTRADA offline con su timestamp y evaluación original."""
-    evaluacion = evaluar_asistencia(db, user["id"], momento, lluvia)
+def _sincronizar_entrada(db, user, momento, pendiente, avisar) -> None:
+    """Reinserta una ENTRADA offline con su timestamp y evaluación original.
+
+    La condición excepcional del día se resuelve acá y no en el kiosco: la
+    declaración de Recursos Humanos puede firmarse después de que el kiosco
+    perdiera la conexión, y la marca igual tiene que quedar amparada.
+    """
+    evaluacion = evaluar_asistencia(db, user["id"], momento)
     estado = evaluacion["estado"]
     incidencia = (
         "Ausencia Injustificada"
@@ -122,7 +131,7 @@ def _sincronizar_entrada(db, user, momento, lluvia, pendiente, avisar) -> None:
         else ("Llegada Tardía" if estado == "Llegada Tardía" else "")
     )
     tolerancia = evaluacion["tolerancia_climatica"] or evaluacion["retraso_min"] > 0
-    condicion = "Lluvia intensa" if lluvia else ""
+    condicion = evaluacion["condicion_dia"]
     entry_id = db.open_clock_in(
         user["id"],
         momento,
@@ -147,20 +156,11 @@ def _sincronizar_entrada(db, user, momento, lluvia, pendiente, avisar) -> None:
 def _sincronizar_salida(db, user, abierto, momento, pendiente) -> None:
     """Cierra una SALIDA offline con el desglose legal calculado sobre
     el timestamp original."""
-    feriado = es_feriado_o_domingo(abierto["hora_entrada"])
-    desglose = calcular_horas_paraguay(abierto["hora_entrada"], momento, feriado)
+    desglose = calcular_horas_paraguay(abierto["hora_entrada"], momento)
     incidencia = ClockEngine._clasificar_incidencia_salida(
-        desglose, feriado, abierto.get("tipo_incidencia") or ""
+        desglose, abierto.get("tipo_incidencia") or ""
     )
-    db.close_clock_out(
-        abierto["id"],
-        momento,
-        feriado,
-        desglose["horas_ordinarias"],
-        desglose["horas_extra_50"],
-        desglose["horas_extra_100"],
-        incidencia,
-    )
+    persistir_desglose(db, abierto["id"], momento, desglose, incidencia)
 
 
 def _ya_sincronizada_salida(registros: List[Dict[str, Any]], momento: datetime) -> bool:

@@ -36,14 +36,23 @@ DEFAULT_CONFIG: Dict[str, str] = {
 
 ROLES_INICIALES: Tuple[str, ...] = ("Administrador", "Recursos Humanos", "Empleado")
 
+LOCK_TIMEOUT_DDL: str = "10s"
+"""Espera máxima de las migraciones por un lock de tabla antes de abortar."""
+
 
 def load_dotenv(path: str = ".env") -> None:
     """Carga las variables ``KEY=VALUE`` del archivo indicado al entorno.
 
     Respeta las variables ya definidas en el entorno real (no las pisa)
-    y descarta comentarios y líneas vacías.
+    y descarta comentarios y líneas vacías. Si la ruta relativa no existe
+    en el directorio actual, cae a la raíz del proyecto: el archivo vive
+    junto a ``src/`` y el directorio de trabajo cambia según cómo se
+    invoque la aplicación (``python src/app.py`` o el ``WORKDIR`` del
+    contenedor).
     """
     env_path = Path(path)
+    if not env_path.is_absolute() and not env_path.exists():
+        env_path = Path(__file__).resolve().parent.parent / path
     if not env_path.exists():
         return
     for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -160,6 +169,10 @@ class Database:
         self.ensure_database()
         self.connect()
         cursor = self.connection.cursor()
+        # Una petición de lock exclusivo en espera bloquea también a los
+        # lectores que llegan detrás. Si otra sesión mantiene una transacción
+        # abierta, conviene abortar la migración antes que encolar la base.
+        cursor.execute(f"SET lock_timeout = '{LOCK_TIMEOUT_DDL}'")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS roles (
@@ -217,24 +230,8 @@ class Database:
             "ON users (departamento)"
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_marcajes_analitica "
-            "ON marcajes (es_tardanza, hora_entrada)"
-        )
-        cursor.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
             "tipo_vinculo VARCHAR(20) NOT NULL DEFAULT 'Funcionario'"
-        )
-        cursor.execute(
-            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
-            "tolerancia_aplicada BOOLEAN NOT NULL DEFAULT FALSE"
-        )
-        cursor.execute(
-            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
-            "condicion_climatica VARCHAR(30) NOT NULL DEFAULT ''"
-        )
-        cursor.execute(
-            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
-            "tipo_incidencia VARCHAR(50) NOT NULL DEFAULT ''"
         )
         cursor.execute(
             """
@@ -251,6 +248,39 @@ class Database:
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """
+        )
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
+            "tolerancia_aplicada BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
+            "condicion_climatica VARCHAR(30) NOT NULL DEFAULT ''"
+        )
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
+            "tipo_incidencia VARCHAR(50) NOT NULL DEFAULT ''"
+        )
+        # Art. 232: las horas ordinarias nocturnas llevan un recargo del 30 %,
+        # así que se liquidan aparte de las ordinarias diurnas.
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
+            "horas_nocturnas INTERVAL NOT NULL DEFAULT '0 seconds'"
+        )
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
+            "tipo_jornada VARCHAR(20) NOT NULL DEFAULT ''"
+        )
+        # El resultado de la verificación biométrica se guarda en la marca en
+        # lugar de descartarse: una marca que el motor no pudo verificar no es
+        # lo mismo que una verificada, y RRHH necesita distinguirlas.
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
+            "verificacion_facial VARCHAR(20) NOT NULL DEFAULT 'No verificada'"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_marcajes_analitica "
+            "ON marcajes (es_tardanza, hora_entrada)"
         )
         cursor.execute(
             """
@@ -386,12 +416,84 @@ class Database:
             ON solicitudes_correccion (estado, fecha_registro)
             """
         )
+        # La condición climática del día la declara Recursos Humanos para toda
+        # la plantilla. Antes la marcaba el propio empleado en el kiosco, que
+        # es justamente quien se beneficia de la tolerancia que activa.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS condiciones_dia (
+                fecha DATE PRIMARY KEY,
+                condicion VARCHAR(40) NOT NULL,
+                tolerancia_min INTEGER NOT NULL DEFAULT 0,
+                nota TEXT NOT NULL DEFAULT '',
+                declarado_por INTEGER NOT NULL REFERENCES users (id),
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        # Solicitudes que el empleado presenta desde el portal. Se validan
+        # contra el catálogo reglamentario antes de guardarse, de modo que a
+        # RRHH solo le llegan pedidos que ya cumplen el artículo invocado.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS solicitudes_permiso (
+                id SERIAL PRIMARY KEY,
+                usuario_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+                tipo_permiso VARCHAR(50) NOT NULL
+                    CHECK (tipo_permiso IN (""" + _TIPOS_SQL + """)),
+                fecha_inicio DATE NOT NULL,
+                fecha_fin DATE NOT NULL,
+                horas_solicitadas NUMERIC(4, 1) NOT NULL DEFAULT 0,
+                motivo TEXT NOT NULL,
+                estado VARCHAR(20) NOT NULL DEFAULT 'Pendiente'
+                    CHECK (estado IN ('Pendiente', 'Aprobado', 'Rechazado')),
+                observacion TEXT NOT NULL DEFAULT '',
+                resuelto_por INTEGER REFERENCES users (id),
+                resuelto_en TIMESTAMPTZ,
+                justificacion_id INTEGER REFERENCES justificaciones (id)
+                    ON DELETE SET NULL,
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_solicitudes_permiso_bandeja
+            ON solicitudes_permiso (estado, fecha_inicio, id)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_solicitudes_permiso_usuario
+            ON solicitudes_permiso (usuario_id, creado_en DESC)
+            """
+        )
         for nombre in ROLES_INICIALES:
             cursor.execute(
                 "INSERT INTO roles (nombre) VALUES (%s) ON CONFLICT (nombre) DO NOTHING",
                 (nombre,),
             )
         self.connection.commit()
+
+    def esquema_listo(self) -> bool:
+        """Indica si las tablas base ya existen sobre la conexión activa.
+
+        Permite que los procesos de larga vida (servidor web) verifiquen el
+        estado del esquema al arrancar en lugar de aplicar el DDL completo,
+        que toma locks exclusivos y no puede correr dentro de una petición.
+        """
+        fila = self._execute(
+            """
+            SELECT COUNT(*) AS presentes
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name IN ('roles', 'users', 'marcajes', 'logs_auditoria',
+                                 'justificaciones', 'solicitudes_correccion', 'alertas',
+                                 'condiciones_dia', 'solicitudes_permiso')
+            """,
+            fetch="one",
+        )
+        return int(fila["presentes"]) == 9
 
     def _execute(
         self, query: str, params: Optional[Tuple[Any, ...]] = None, fetch: str = "none"
@@ -592,12 +694,15 @@ class Database:
         tolerancia_aplicada: bool = False,
         condicion_climatica: str = "",
         sync_id: Optional[str] = None,
+        verificacion_facial: str = "No verificada",
     ) -> Optional[int]:
         """Abre un marcaje de entrada con su estado, incidencia y contexto.
 
         ``tolerancia_aplicada`` indica si se consumió la gracia ordinaria o
-        climática de la Res. 3028/2024; ``condicion_climatica``
-        documenta el evento meteorológico declarado en el kiosco.
+        climática de la Res. 3028/2024; ``condicion_climatica`` documenta la
+        condición que Recursos Humanos declaró para ese día, y
+        ``verificacion_facial`` el resultado del control biométrico
+        (``Verificada``, ``No verificada`` u ``Omitida``).
 
         Si se provee ``sync_id`` (marcación offline) el inserto es
         idempotente: ante un duplicado retorna ``None`` en lugar de crear
@@ -608,25 +713,27 @@ class Database:
                 """
                 INSERT INTO marcajes (user_id, hora_entrada, es_tardanza,
                                       tipo_incidencia, tolerancia_aplicada,
-                                      condicion_climatica, sync_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                      condicion_climatica, verificacion_facial,
+                                      sync_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (sync_id) WHERE sync_id IS NOT NULL DO NOTHING
                 RETURNING id
                 """,
                 (user_id, hora_entrada, es_tardanza, tipo_incidencia,
-                 tolerancia_aplicada, condicion_climatica, sync_id),
+                 tolerancia_aplicada, condicion_climatica, verificacion_facial,
+                 sync_id),
             )
         else:
             cursor = self._execute(
                 """
                 INSERT INTO marcajes (user_id, hora_entrada, es_tardanza,
                                       tipo_incidencia, tolerancia_aplicada,
-                                      condicion_climatica)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                                      condicion_climatica, verificacion_facial)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (user_id, hora_entrada, es_tardanza, tipo_incidencia,
-                 tolerancia_aplicada, condicion_climatica),
+                 tolerancia_aplicada, condicion_climatica, verificacion_facial),
             )
         self.connection.commit()
         fila = cursor.fetchone()
@@ -658,8 +765,14 @@ class Database:
         horas_extra_50: Any,
         horas_extra_100: Any,
         tipo_incidencia: str = "",
+        horas_nocturnas: Any = timedelta(0),
+        tipo_jornada: str = "",
     ) -> None:
-        """Cierra un marcaje persistiendo el desglose horario y la incidencia."""
+        """Cierra un marcaje persistiendo el desglose horario y la incidencia.
+
+        ``horas_nocturnas`` es el subconjunto de las ordinarias trabajado en
+        horario nocturno, que la nómina liquida con el recargo del 30 %.
+        """
         self._execute(
             """
             UPDATE marcajes
@@ -668,7 +781,9 @@ class Database:
                 horas_ordinarias = %s,
                 horas_extra_50 = %s,
                 horas_extra_100 = %s,
-                tipo_incidencia = %s
+                tipo_incidencia = %s,
+                horas_nocturnas = %s,
+                tipo_jornada = %s
             WHERE id = %s
             """,
             (
@@ -678,6 +793,8 @@ class Database:
                 horas_extra_50,
                 horas_extra_100,
                 tipo_incidencia,
+                horas_nocturnas,
+                tipo_jornada,
                 entry_id,
             ),
         )
@@ -855,6 +972,24 @@ class Database:
             fetch="all",
         )
 
+    def contar_marcas_sin_verificar(self, dias: int = 7) -> int:
+        """Marcas recientes que el control biométrico no pudo verificar.
+
+        Es el indicador que reemplaza al silencio anterior: antes esas marcas
+        se daban por buenas y no quedaba rastro de que nadie las comprobó.
+        """
+        fila = self._execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM marcajes
+            WHERE verificacion_facial <> 'Verificada'
+              AND hora_entrada >= NOW() - make_interval(days => %s)
+            """,
+            (dias,),
+            fetch="one",
+        )
+        return int(fila["total"])
+
     def count_marcajes_hoy(self) -> int:
         """Cantidad de marcajes con entrada registrada en la fecha actual."""
         fila = self._execute(
@@ -920,14 +1055,19 @@ class Database:
         self.connection.commit()
 
     def get_horas_extra_year(self, anio: int) -> List[Dict[str, Any]]:
-        """Acumula por empleado las horas extra del año (suma de INTERVAL)."""
+        """Acumula por empleado las horas con recargo del año (suma de INTERVAL).
+
+        Incluye las horas ordinarias nocturnas, que llevan el recargo del
+        30 % del Art. 232 y por lo tanto integran la remuneración anual.
+        """
         inicio = datetime(anio, 1, 1)
         fin = datetime(anio + 1, 1, 1)
         return self._execute(
             """
             SELECT user_id,
                    COALESCE(SUM(horas_extra_50), INTERVAL '0 seconds') AS extra_50,
-                   COALESCE(SUM(horas_extra_100), INTERVAL '0 seconds') AS extra_100
+                   COALESCE(SUM(horas_extra_100), INTERVAL '0 seconds') AS extra_100,
+                   COALESCE(SUM(horas_nocturnas), INTERVAL '0 seconds') AS nocturnas
             FROM marcajes
             WHERE hora_entrada >= %s AND hora_entrada < %s
             GROUP BY user_id
@@ -1009,6 +1149,169 @@ class Database:
             WHERE id = %s
             """,
             (estado, revisado_por, solicitud_id),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Condición climática del día (declarada por Recursos Humanos)
+    # ------------------------------------------------------------------
+
+    def declarar_condicion_dia(
+        self,
+        fecha: Any,
+        condicion: str,
+        tolerancia_min: int,
+        declarado_por: int,
+        nota: str = "",
+    ) -> Dict[str, Any]:
+        """Fija la condición excepcional de un día para toda la plantilla.
+
+        Es un upsert por fecha: redeclarar el mismo día reemplaza la
+        condición anterior y deja registrado quién la firmó.
+        """
+        cursor = self._execute(
+            """
+            INSERT INTO condiciones_dia
+                (fecha, condicion, tolerancia_min, nota, declarado_por)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (fecha) DO UPDATE SET
+                condicion = EXCLUDED.condicion,
+                tolerancia_min = EXCLUDED.tolerancia_min,
+                nota = EXCLUDED.nota,
+                declarado_por = EXCLUDED.declarado_por,
+                creado_en = NOW()
+            RETURNING *
+            """,
+            (fecha, condicion, tolerancia_min, nota, declarado_por),
+        )
+        self.connection.commit()
+        return cursor.fetchone()
+
+    def get_condicion_dia(self, fecha: Any) -> Optional[Dict[str, Any]]:
+        """Condición declarada para una fecha, o ``None`` si el día es normal."""
+        return self._execute(
+            "SELECT * FROM condiciones_dia WHERE fecha = %s",
+            (fecha,),
+            fetch="one",
+        )
+
+    def listar_condiciones_dia(self, limite: int = 30) -> List[Dict[str, Any]]:
+        """Últimas condiciones declaradas, con el nombre de quien las firmó."""
+        return self._execute(
+            """
+            SELECT c.*, u.full_name AS declarante
+            FROM condiciones_dia c
+            JOIN users u ON u.id = c.declarado_por
+            ORDER BY c.fecha DESC
+            LIMIT %s
+            """,
+            (limite,),
+            fetch="all",
+        )
+
+    def borrar_condicion_dia(self, fecha: Any) -> bool:
+        """Revoca la condición de un día; el día vuelve a ser normal."""
+        cursor = self._execute(
+            "DELETE FROM condiciones_dia WHERE fecha = %s", (fecha,)
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Solicitudes de permiso presentadas por el empleado
+    # ------------------------------------------------------------------
+
+    def crear_solicitud_permiso(
+        self,
+        usuario_id: int,
+        tipo_permiso: str,
+        fecha_inicio: Any,
+        fecha_fin: Any,
+        horas_solicitadas: float,
+        motivo: str,
+    ) -> int:
+        """Registra un pedido de permiso del empleado en estado Pendiente."""
+        cursor = self._execute(
+            """
+            INSERT INTO solicitudes_permiso
+                (usuario_id, tipo_permiso, fecha_inicio, fecha_fin,
+                 horas_solicitadas, motivo)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (usuario_id, tipo_permiso, fecha_inicio, fecha_fin,
+             horas_solicitadas, motivo),
+        )
+        self.connection.commit()
+        return cursor.fetchone()["id"]
+
+    def get_solicitud_permiso(self, solicitud_id: int) -> Optional[Dict[str, Any]]:
+        """Devuelve una solicitud con los datos del solicitante y del revisor."""
+        return self._execute(
+            """
+            SELECT s.*, u.username, u.full_name, u.tipo_vinculo,
+                   r.full_name AS revisor
+            FROM solicitudes_permiso s
+            JOIN users u ON u.id = s.usuario_id
+            LEFT JOIN users r ON r.id = s.resuelto_por
+            WHERE s.id = %s
+            """,
+            (solicitud_id,),
+            fetch="one",
+        )
+
+    def listar_solicitudes_permiso(
+        self, usuario_id: Optional[int] = None, solo_pendientes: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Bandeja de solicitudes: del empleado indicado o de toda la plantilla.
+
+        Las pendientes encabezan la lista porque son las accionables; el
+        resto queda por fecha de pedido descendente.
+        """
+        condiciones: List[str] = []
+        parametros: List[Any] = []
+        if usuario_id is not None:
+            condiciones.append("s.usuario_id = %s")
+            parametros.append(usuario_id)
+        if solo_pendientes:
+            condiciones.append("s.estado = 'Pendiente'")
+        filtro = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
+        return self._execute(
+            f"""
+            SELECT s.*, u.username, u.full_name, u.tipo_vinculo,
+                   r.full_name AS revisor
+            FROM solicitudes_permiso s
+            JOIN users u ON u.id = s.usuario_id
+            LEFT JOIN users r ON r.id = s.resuelto_por
+            {filtro}
+            ORDER BY (s.estado = 'Pendiente') DESC, s.creado_en DESC
+            """,
+            tuple(parametros) or None,
+            fetch="all",
+        )
+
+    def resolver_solicitud_permiso(
+        self,
+        solicitud_id: int,
+        estado: str,
+        resuelto_por: int,
+        observacion: str = "",
+        justificacion_id: Optional[int] = None,
+    ) -> bool:
+        """Cierra una solicitud y la ata a la justificación que la materializa.
+
+        Solo avanza sobre solicitudes en estado Pendiente: así dos revisores
+        simultáneos no pueden aprobar dos veces el mismo pedido.
+        """
+        cursor = self._execute(
+            """
+            UPDATE solicitudes_permiso
+            SET estado = %s, resuelto_por = %s, resuelto_en = NOW(),
+                observacion = %s, justificacion_id = %s
+            WHERE id = %s AND estado = 'Pendiente'
+            """,
+            (estado, resuelto_por, observacion, justificacion_id, solicitud_id),
         )
         self.connection.commit()
         return cursor.rowcount > 0

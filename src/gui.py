@@ -36,37 +36,52 @@ from offline_queue import ColaOffline
 
 import psycopg2
 
+# Tres tipografías con oficios distintos: serif para los títulos, grotesca
+# para el cuerpo y monoespaciada para toda cifra, que es lo que mantiene las
+# columnas de horas alineadas.
+SERIF = "Georgia"
 FONT = "Segoe UI"
 MONO = "Consolas"
 
+# Esquinas casi rectas: la identidad la dan las reglas y la tipografía, no
+# los bordes redondeados.
+RADIO = 2
+
+# Paleta compartida con el portal web (``src/static/estilos.css``): planilla
+# de tinta sobre papel. El acento *es* la tinta —el botón principal es un
+# bloque macizo, como el de un formulario impreso— y el único color de
+# reserva es el del sello. ``ON_PRIMARY`` existe porque ese bloque se
+# invierte entre temas.
 TEMA_OSCURO: Dict[str, str] = {
-    "BG": "#0B0B0C",
-    "CARD": "#1E1E24",
-    "CARD_BORDER": "#2A2A32",
-    "INPUT_BG": "#191920",
-    "INPUT_BORDER": "#26262C",
-    "PRIMARY": "#1A56DB",
-    "PRIMARY_HOVER": "#2E66E8",
-    "TEXT": "#F2F2EE",
-    "MUTED": "#8E8E96",
-    "SUCCESS": "#4ADE80",
-    "DANGER": "#F0544F",
-    "ACCENTO": "#F5C26B",
+    "BG": "#15140F",
+    "CARD": "#1D1B15",
+    "CARD_BORDER": "#333026",
+    "INPUT_BG": "#100F0B",
+    "INPUT_BORDER": "#6F6A5A",
+    "PRIMARY": "#EDE9DC",
+    "PRIMARY_HOVER": "#FFFFFF",
+    "ON_PRIMARY": "#15140F",
+    "TEXT": "#EDE9DC",
+    "MUTED": "#8E8875",
+    "SUCCESS": "#6FAE8B",
+    "DANGER": "#D4735C",
+    "ACCENTO": "#D9A441",
 }
 
 TEMA_CLARO: Dict[str, str] = {
-    "BG": "#F8F9FA",
-    "CARD": "#FFFFFF",
-    "CARD_BORDER": "#E4E7EB",
-    "INPUT_BG": "#FFFFFF",
-    "INPUT_BORDER": "#D8DCE1",
-    "PRIMARY": "#1A56DB",
-    "PRIMARY_HOVER": "#2E66E8",
-    "TEXT": "#1A1A1E",
-    "MUTED": "#6B7280",
-    "SUCCESS": "#16A34A",
-    "DANGER": "#DC2626",
-    "ACCENTO": "#B45309",
+    "BG": "#F4F1E9",
+    "CARD": "#FBF9F4",
+    "CARD_BORDER": "#DAD4C6",
+    "INPUT_BG": "#EDE8DC",
+    "INPUT_BORDER": "#8F8874",
+    "PRIMARY": "#17150F",
+    "PRIMARY_HOVER": "#37322A",
+    "ON_PRIMARY": "#F4F1E9",
+    "TEXT": "#17150F",
+    "MUTED": "#6F6857",
+    "SUCCESS": "#2F5D45",
+    "DANGER": "#8C3A2B",
+    "ACCENTO": "#8A5A16",
 }
 
 TEMAS: Dict[str, Dict[str, str]] = {"oscuro": TEMA_OSCURO, "claro": TEMA_CLARO}
@@ -85,11 +100,15 @@ MESES = (
 
 
 def tarjeta(master: ctk.CTkFrame, **kwargs) -> ctk.CTkFrame:
-    """Crea una tarjeta flotante con la identidad visual del sistema."""
+    """Región delimitada por una regla fina, no una tarjeta flotante.
+
+    El fondo apenas se despega del de la ventana: lo que separa una sección
+    de otra es el filete del borde, como en una planilla impresa.
+    """
     tarjeta_widget = ctk.CTkFrame(
         master,
         fg_color=t("CARD"),
-        corner_radius=16,
+        corner_radius=RADIO,
         border_width=1,
         border_color=t("CARD_BORDER"),
         **kwargs,
@@ -99,16 +118,16 @@ def tarjeta(master: ctk.CTkFrame, **kwargs) -> ctk.CTkFrame:
 
 
 def boton_primario(master, texto: str, comando: Callable) -> ctk.CTkButton:
-    """Botón de acción principal en azul eléctrico con transición al hover."""
+    """Acción principal: un bloque macizo de tinta sobre el papel."""
     boton = ctk.CTkButton(
         master,
         text=texto,
         command=comando,
         fg_color=t("PRIMARY"),
         hover_color=t("PRIMARY_HOVER"),
-        text_color="white",
-        font=(FONT, 15, "bold"),
-        corner_radius=8,
+        text_color=t("ON_PRIMARY"),
+        font=(FONT, 14, "bold"),
+        corner_radius=RADIO,
         height=44,
     )
     boton._rol = "primario"
@@ -116,18 +135,23 @@ def boton_primario(master, texto: str, comando: Callable) -> ctk.CTkButton:
 
 
 def boton_secundario(master, texto: str, comando: Callable) -> ctk.CTkButton:
-    """Botón de contorno en azul para acciones secundarias."""
+    """Botón de contorno para acciones secundarias.
+
+    El realce al pasar el mouse es la superficie hundida y no el acento: con
+    la tinta como color principal, rellenarlo dejaría texto oscuro sobre
+    fondo oscuro.
+    """
     boton = ctk.CTkButton(
         master,
         text=texto,
         command=comando,
         fg_color="transparent",
-        hover_color=t("PRIMARY_HOVER"),
-        border_width=2,
+        hover_color=t("INPUT_BG"),
+        border_width=1,
         border_color=t("PRIMARY"),
         text_color=t("PRIMARY"),
-        font=(FONT, 15, "bold"),
-        corner_radius=8,
+        font=(FONT, 14),
+        corner_radius=RADIO,
         height=44,
     )
     boton._rol = "secundario"
@@ -143,7 +167,7 @@ def entrada(master, placeholder: str, ancho: int = 320) -> ctk.CTkEntry:
         fg_color=t("INPUT_BG"),
         border_color=t("INPUT_BORDER"),
         text_color=t("TEXT"),
-        corner_radius=10,
+        corner_radius=RADIO,
         height=46,
         width=ancho,
     )
@@ -206,9 +230,9 @@ class CalendarioPopup(ctk.CTkToplevel):
             command=lambda: self._elegir(hoy),
             fg_color=t("PRIMARY"),
             hover_color=t("PRIMARY_HOVER"),
-            text_color="white",
+            text_color=t("ON_PRIMARY"),
             font=(FONT, 13, "bold"),
-            corner_radius=8,
+            corner_radius=RADIO,
             height=38,
         )
         boton_hoy.pack(pady=(8, 12))
@@ -240,11 +264,11 @@ class CalendarioPopup(ctk.CTkToplevel):
                 text=str(dia),
                 width=40,
                 height=30,
-                font=(FONT, 12, "bold" if es_hoy else "normal"),
+                font=(MONO, 12, "bold" if es_hoy else "normal"),
                 fg_color=t("PRIMARY") if es_hoy else t("INPUT_BG"),
-                hover_color=t("PRIMARY_HOVER"),
-                text_color="white" if es_hoy else t("TEXT"),
-                corner_radius=8,
+                hover_color=t("PRIMARY_HOVER") if es_hoy else t("INPUT_BORDER"),
+                text_color=t("ON_PRIMARY") if es_hoy else t("TEXT"),
+                corner_radius=RADIO,
                 command=partial(self._elegir, fecha),
             )
             boton.grid(
@@ -289,7 +313,7 @@ def campo_fecha(
         fg_color=t("INPUT_BG"),
         border_color=t("INPUT_BORDER"),
         text_color=t("TEXT"),
-        corner_radius=10,
+        corner_radius=RADIO,
         height=40,
         width=ancho,
     )
@@ -297,13 +321,14 @@ def campo_fecha(
     entrada_fecha.pack(side="left", padx=(0, 6))
     boton_cal = ctk.CTkButton(
         fila,
-        text="📅",
-        width=42,
+        text="Elegir",
+        width=62,
         height=40,
         font=(FONT, 13),
         fg_color=t("PRIMARY"),
         hover_color=t("PRIMARY_HOVER"),
-        corner_radius=8,
+        text_color=t("ON_PRIMARY"),
+        corner_radius=RADIO,
         command=abrir_calendario,
     )
     boton_cal.pack(side="left", padx=(0, 6))
@@ -312,13 +337,13 @@ def campo_fecha(
         text="Hoy",
         width=52,
         height=40,
-        font=(FONT, 12, "bold"),
+        font=(FONT, 12),
         fg_color="transparent",
-        hover_color=t("PRIMARY_HOVER"),
-        border_width=2,
+        hover_color=t("INPUT_BG"),
+        border_width=1,
         border_color=t("PRIMARY"),
         text_color=t("PRIMARY"),
-        corner_radius=8,
+        corner_radius=RADIO,
         command=lambda: aplicar(datetime.date.today()),
     )
     boton_hoy.pack(side="left")
@@ -328,9 +353,23 @@ def campo_fecha(
 
 
 def etiqueta(master, texto: str, tamano: int = 14, color: str = t("TEXT"), peso: str = "normal") -> ctk.CTkLabel:
-    """Etiqueta tipográfica limpia del sistema."""
+    """Texto corriente de la interfaz, en la grotesca del sistema."""
     return ctk.CTkLabel(
         master, text=texto, font=(FONT, tamano, peso), text_color=color
+    )
+
+
+def titulo(master, texto: str, tamano: int = 17) -> ctk.CTkLabel:
+    """Encabezado de sección, en serif: separa el rótulo del contenido."""
+    return ctk.CTkLabel(
+        master, text=texto, font=(SERIF, tamano, "bold"), text_color=t("TEXT")
+    )
+
+
+def cifra(master, texto: str, tamano: int = 26, color: str = None) -> ctk.CTkLabel:
+    """Número destacado, siempre monoespaciado para que las columnas alineen."""
+    return ctk.CTkLabel(
+        master, text=texto, font=(MONO, tamano), text_color=color or t("TEXT")
     )
 
 
@@ -362,12 +401,12 @@ def _recolorear(widget, anterior: Dict[str, str], nuevo: Dict[str, str]) -> None
         widget.configure(
             fg_color=nuevo["PRIMARY"],
             hover_color=nuevo["PRIMARY_HOVER"],
-            text_color="#FFFFFF",
+            text_color=nuevo["ON_PRIMARY"],
         )
     elif rol == "secundario":
         widget.configure(
             fg_color="transparent",
-            hover_color=nuevo["PRIMARY_HOVER"],
+            hover_color=nuevo["INPUT_BG"],
             border_color=nuevo["PRIMARY"],
             text_color=nuevo["PRIMARY"],
         )
@@ -377,7 +416,7 @@ def _recolorear(widget, anterior: Dict[str, str], nuevo: Dict[str, str]) -> None
             widget.configure(
                 fg_color=nuevo["PRIMARY"],
                 hover_color=nuevo["PRIMARY_HOVER"],
-                text_color="#FFFFFF",
+                text_color=nuevo["ON_PRIMARY"],
             )
         else:
             widget.configure(
@@ -415,7 +454,7 @@ def _recolorear(widget, anterior: Dict[str, str], nuevo: Dict[str, str]) -> None
             widget.configure(
                 fg_color=nuevo["PRIMARY"],
                 hover_color=nuevo["PRIMARY_HOVER"],
-                text_color="#FFFFFF",
+                text_color=nuevo["ON_PRIMARY"],
             )
         elif color == anterior.get("SUCCESS"):
             widget.configure(
@@ -424,8 +463,8 @@ def _recolorear(widget, anterior: Dict[str, str], nuevo: Dict[str, str]) -> None
         elif color == anterior.get("INPUT_BG"):
             widget.configure(
                 fg_color=nuevo["INPUT_BG"],
-                hover_color=nuevo["PRIMARY_HOVER"],
-                text_color=nuevo["MUTED"],
+                hover_color=nuevo["INPUT_BORDER"],
+                text_color=nuevo["TEXT"],
             )
         elif color == "transparent":
             if (
@@ -439,7 +478,7 @@ def _recolorear(widget, anterior: Dict[str, str], nuevo: Dict[str, str]) -> None
                 )
             elif borde == anterior.get("PRIMARY"):
                 widget.configure(
-                    hover_color=nuevo["PRIMARY_HOVER"],
+                    hover_color=nuevo["INPUT_BG"],
                     border_color=nuevo["PRIMARY"],
                     text_color=nuevo["PRIMARY"],
                 )
@@ -568,7 +607,7 @@ class MarcacionApp(ctk.CTk):
         cabecera = ctk.CTkFrame(self.frame_publico, fg_color="transparent")
         cabecera.grid(row=0, column=0, sticky="ew", padx=24, pady=(24, 0))
         cabecera.grid_columnconfigure(0, weight=1)
-        etiqueta(cabecera, "Sistema de Marcación", 22, t("TEXT"), "bold").grid(
+        titulo(cabecera, "Sistema de Marcación", 22).grid(
             row=0, column=0, sticky="w"
         )
         etiqueta(
@@ -612,7 +651,7 @@ class MarcacionApp(ctk.CTk):
         tarjeta_login = tarjeta(self.zona_empleado)
         tarjeta_login.grid(row=0, column=0, sticky="nsew")
         tarjeta_login.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_login, "Iniciar sesión", 20, t("TEXT"), "bold").grid(
+        titulo(tarjeta_login, "Iniciar sesión", 20).grid(
             row=0, column=0, pady=(30, 4)
         )
         etiqueta(
@@ -680,7 +719,7 @@ class MarcacionApp(ctk.CTk):
         tarjeta_cambio = tarjeta(self.zona_empleado)
         tarjeta_cambio.grid(row=0, column=0, sticky="nsew")
         tarjeta_cambio.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_cambio, "Cambiar contraseña", 20, t("TEXT"), "bold").grid(
+        titulo(tarjeta_cambio, "Cambiar contraseña", 20).grid(
             row=0, column=0, pady=(30, 4)
         )
         etiqueta(
@@ -775,24 +814,17 @@ class MarcacionApp(ctk.CTk):
         boton_primario(self.tarjeta_marcacion, "REGISTRAR ASISTENCIA", self._marcar).grid(
             row=2, column=0, pady=(0, 6)
         )
-        fila_clima = ctk.CTkFrame(self.tarjeta_marcacion, fg_color="transparent")
-        fila_clima.grid(row=3, column=0, pady=(0, 10))
-        self.dia_lluvioso = ctk.BooleanVar(value=False)
-        ctk.CTkSwitch(
-            fila_clima,
-            text="Día de Lluvia Intensa · tolerancia climática 30 min (Res. 3028/2024)",
-            variable=self.dia_lluvioso,
-            font=(FONT, 12),
-            text_color=t("MUTED"),
-            progress_color=t("PRIMARY"),
-            fg_color=t("INPUT_BG"),
-        ).pack(side="left")
+        # La condición del día ya no se declara acá: la fija Recursos Humanos
+        # para toda la plantilla. El kiosco solo la informa.
+        self.lbl_condicion = etiqueta(self.tarjeta_marcacion, "", 12, t("ACCENTO"))
+        self.lbl_condicion.grid(row=3, column=0, pady=(0, 6))
         etiqueta(
             self.tarjeta_marcacion,
             "El sistema detecta automáticamente si corresponde Entrada o Salida",
             12,
             t("MUTED"),
         ).grid(row=4, column=0, pady=(0, 14))
+        self._actualizar_condicion_dia()
         self.lbl_estado = etiqueta(self.tarjeta_marcacion, "", 14, t("SUCCESS"))
         self.lbl_estado.grid(row=5, column=0, pady=(0, 18))
         self.lbl_cola = etiqueta(self.tarjeta_marcacion, "", 12, t("MUTED"))
@@ -811,7 +843,7 @@ class MarcacionApp(ctk.CTk):
             font=(MONO, 12),
             fg_color=t("INPUT_BG"),
             text_color=t("TEXT"),
-            corner_radius=12,
+            corner_radius=RADIO,
             height=150,
             wrap="word",
         )
@@ -848,40 +880,13 @@ class MarcacionApp(ctk.CTk):
         if not user:
             self._mostrar_estado("Empleado no encontrado. Verifique su cédula.", t("DANGER"))
             return
-        if facial.disponible() and self.db.tiene_foto(user["id"]):
-            frame = facial.capturar(segundos=1.0)
-            if frame is None:
-                self._mostrar_estado(
-                    "Cámara no disponible: no se pudo validar el rostro.", t("DANGER")
-                )
-                return
-            ok, detalle = facial.validar(self.db, user["id"], frame)
-            if not ok:
-                self.db.registrar_auditoria(
-                    user["id"],
-                    "FRAUDE",
-                    "users",
-                    user["id"],
-                    nuevos={
-                        "motivo": "intento de suplantación facial en el kiosco",
-                        "detalle": detalle,
-                    },
-                )
-                notifications.registrar_alerta(
-                    self.db,
-                    "fraude_facial",
-                    "alta",
-                    f"Intento de suplantación facial de {user['full_name']}.",
-                    detalle,
-                    usuario_id=user["id"],
-                )
-                self._mostrar_estado(detalle, t("DANGER"))
-                return
+        decision = self._verificar_rostro(user)
+        if not decision.permitir:
+            self._mostrar_estado(decision.motivo, t("DANGER"))
+            return
         engine = ClockEngine(self.db, user)
         try:
-            entry_id, momento, tipo = engine.registrar_asistencia(
-                es_dia_lluvioso=self.dia_lluvioso.get()
-            )
+            entry_id, momento, tipo = engine.registrar_asistencia(decision.marca)
         except ValueError as error:
             self._mostrar_estado(str(error), t("DANGER"))
             return
@@ -899,18 +904,81 @@ class MarcacionApp(ctk.CTk):
             notifications.enviar_correo_ticket(user["email"], ticket)
         self._mostrar_panel_exito(tipo, ticket)
 
+    def _verificar_rostro(self, user: Dict) -> facial.Decision:
+        """Corre el control biométrico y traduce el veredicto en una decisión.
+
+        El rechazo se audita como fraude y siempre bloquea. La imposibilidad
+        de verificar —sin cámara, sin OpenCV o sin foto de referencia— sigue
+        la política de ``BIOMETRIA_OBLIGATORIA``: nunca se da por verificada.
+        """
+        if not facial.disponible():
+            resultado = facial.Resultado(
+                facial.NO_VERIFICABLE, "El motor de visión no está instalado."
+            )
+        else:
+            resultado = facial.validar(
+                self.db, user["id"], facial.capturar(segundos=1.0)
+            )
+        decision = facial.decidir(resultado)
+        if resultado.rechazada:
+            self.db.registrar_auditoria(
+                user["id"],
+                "FRAUDE",
+                "users",
+                user["id"],
+                nuevos={
+                    "motivo": "intento de suplantación facial en el kiosco",
+                    "detalle": resultado.detalle,
+                },
+            )
+            notifications.registrar_alerta(
+                self.db,
+                "fraude_facial",
+                "alta",
+                f"Intento de suplantación facial de {user['full_name']}.",
+                resultado.detalle,
+                usuario_id=user["id"],
+            )
+        elif not resultado.verificada:
+            notifications.registrar_alerta(
+                self.db,
+                "marca_sin_verificar",
+                decision.severidad,
+                f"Marca sin verificación biométrica de {user['full_name']}.",
+                resultado.detalle,
+                usuario_id=user["id"],
+            )
+        return decision
+
     def _marcar_offline(self, username: str) -> None:
         """Guarda la marcación en la cola local cuando PostgreSQL no responde."""
         momento = clock_engine.ahora_local()
-        self.cola.encolar(
-            username, momento, bool(self.dia_lluvioso.get())
-        )
+        self.cola.encolar(username, momento)
         self._mostrar_estado(
             "Servidor central no disponible: la marcación quedó guardada "
             "localmente y se sincronizará automáticamente.",
             t("DANGER"),
         )
         self._actualizar_lbl_cola()
+
+    def _actualizar_condicion_dia(self) -> None:
+        """Muestra en el kiosco la condición que RRHH declaró para hoy."""
+        if not hasattr(self, "lbl_condicion"):
+            return
+        try:
+            excepcion = clock_engine.condicion_declarada(
+                self.db, datetime.date.today()
+            )
+        except Exception:
+            excepcion = {"condicion": "", "tolerancia": datetime.timedelta(0)}
+        if excepcion["condicion"]:
+            minutos = int(excepcion["tolerancia"].total_seconds() // 60)
+            self.lbl_condicion.configure(
+                text=f"{excepcion['condicion']} · tolerancia declarada de {minutos} min"
+            )
+        else:
+            self.lbl_condicion.configure(text="")
+        self.after(300000, self._actualizar_condicion_dia)
 
     def _actualizar_lbl_cola(self) -> None:
         """Refleja en el kiosco cuántas marcaciones esperan sincronizar."""
@@ -919,7 +987,7 @@ class MarcacionApp(ctk.CTk):
         pendientes = len(self.cola)
         if pendientes:
             self.lbl_cola.configure(
-                text=f"▲ {pendientes} marcaciones pendientes de sincronización",
+                text=f"Pendientes de sincronización: {pendientes} marcaciones",
                 text_color=t("DANGER"),
             )
         else:
@@ -931,9 +999,11 @@ class MarcacionApp(ctk.CTk):
         self.after(0, lambda: self._mostrar_estado(alerta["mensaje"], t("DANGER")))
 
     def _mostrar_panel_exito(self, tipo: str, ticket: str) -> None:
-        """Despliega el panel temporal de éxito con check verde y el ticket.
+        """Despliega el comprobante de la marca durante 5 segundos.
 
-        Reemplaza el área de marcación durante 5 segundos y vuelve al kiosco.
+        Lo que la persona necesita confirmar es la hora que quedó grabada,
+        no que la operación salió bien: por eso la hora va primero y en el
+        cuerpo más grande de la pantalla.
         """
         if hasattr(self, "panel_exito"):
             self.panel_exito.destroy()
@@ -941,21 +1011,27 @@ class MarcacionApp(ctk.CTk):
         self.panel_exito.grid(row=1, column=0, rowspan=2, sticky="nsew", padx=24, pady=(0, 24))
         self.panel_exito.grid_columnconfigure(0, weight=1)
         self.panel_exito.grid_rowconfigure(1, weight=1)
-        etiqueta(self.panel_exito, "✓", 54, t("SUCCESS"), "bold").grid(
-            row=0, column=0, pady=(34, 0)
-        )
-        etiqueta(self.panel_exito, f"¡{tipo} Registrada!", 24, t("TEXT"), "bold").grid(
-            row=1, column=0, pady=(6, 0)
-        )
+        ctk.CTkLabel(
+            self.panel_exito,
+            text=datetime.datetime.now().strftime("%H:%M"),
+            font=(MONO, 58),
+            text_color=t("TEXT"),
+        ).grid(row=0, column=0, pady=(38, 0))
+        ctk.CTkLabel(
+            self.panel_exito,
+            text=f"{tipo.upper()} REGISTRADA",
+            font=(FONT, 13, "bold"),
+            text_color=t("SUCCESS"),
+        ).grid(row=1, column=0, pady=(8, 0))
         etiqueta(
-            self.panel_exito, "Comprobante criptográfico · SHA-256", 12, t("MUTED")
-        ).grid(row=2, column=0, pady=(2, 10))
+            self.panel_exito, "Comprobante criptográfico · SHA-256", 11, t("MUTED")
+        ).grid(row=2, column=0, pady=(14, 8))
         caja_ticket = ctk.CTkTextbox(
             self.panel_exito,
             font=(MONO, 11),
             fg_color=t("INPUT_BG"),
             text_color=t("MUTED"),
-            corner_radius=12,
+            corner_radius=RADIO,
             height=110,
             wrap="word",
         )
@@ -1020,7 +1096,7 @@ class EmployeeDashboard(ctk.CTkFrame):
         cabecera = tarjeta(self)
         cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         cabecera.grid_columnconfigure(0, weight=1)
-        etiqueta(cabecera, f"Resumen de {user['full_name']}", 17, t("TEXT"), "bold").grid(
+        titulo(cabecera, f"Resumen de {user['full_name']}", 17).grid(
             row=0, column=0, sticky="w", padx=20, pady=(14, 2)
         )
         etiqueta(
@@ -1065,13 +1141,12 @@ class EmployeeDashboard(ctk.CTkFrame):
             t("MUTED"),
             "bold",
         ).grid(row=0, column=0, padx=18, pady=(16, 2))
-        etiqueta(
-            tarjeta_vacaciones,
-            f"{vacaciones['disponibles']:.0f} días disponibles",
-            22,
-            t("TEXT"),
-            "bold",
-        ).grid(row=1, column=0, padx=18, sticky="w")
+        fila_vacaciones = ctk.CTkFrame(tarjeta_vacaciones, fg_color="transparent")
+        fila_vacaciones.grid(row=1, column=0, padx=18, sticky="w")
+        cifra(fila_vacaciones, f"{vacaciones['disponibles']:.0f}", 26).pack(side="left")
+        etiqueta(fila_vacaciones, "días disponibles", 13, t("MUTED")).pack(
+            side="left", padx=(8, 0), pady=(8, 0)
+        )
         etiqueta(
             tarjeta_vacaciones,
             f"Usufructuados {vacaciones['usadas']:.0f} de {vacaciones['devengadas']:.0f} devengados",
@@ -1090,13 +1165,12 @@ class EmployeeDashboard(ctk.CTkFrame):
             t("MUTED"),
             "bold",
         ).grid(row=0, column=0, padx=18, pady=(16, 2))
-        etiqueta(
-            tarjeta_permisos,
-            f"{self.resumen['permisos_mes']['total']} permisos utilizados",
-            22,
-            t("TEXT"),
-            "bold",
-        ).grid(row=1, column=0, padx=18, sticky="w")
+        fila_permisos = ctk.CTkFrame(tarjeta_permisos, fg_color="transparent")
+        fila_permisos.grid(row=1, column=0, padx=18, sticky="w")
+        cifra(fila_permisos, str(self.resumen["permisos_mes"]["total"]), 26).pack(side="left")
+        etiqueta(fila_permisos, "permisos utilizados", 13, t("MUTED")).pack(
+            side="left", padx=(8, 0), pady=(8, 0)
+        )
         etiqueta(
             tarjeta_permisos,
             texto_detalle or "Sin permisos en el mes en curso",
@@ -1124,7 +1198,7 @@ class EmployeeDashboard(ctk.CTkFrame):
                 row=2, column=0, columnspan=2, sticky="w", pady=(4, 6)
             )
             for permiso in permisos:
-                fila = ctk.CTkFrame(self.area, fg_color=t("INPUT_BG"), corner_radius=10)
+                fila = ctk.CTkFrame(self.area, fg_color=t("INPUT_BG"), corner_radius=RADIO)
                 fila.grid(row=3, column=0, columnspan=2, sticky="ew", pady=3)
                 fila.grid_columnconfigure(0, weight=1)
                 etiqueta(
@@ -1141,7 +1215,8 @@ class EmployeeDashboard(ctk.CTkFrame):
                     font=(FONT, 12),
                     fg_color=t("PRIMARY"),
                     hover_color=t("PRIMARY_HOVER"),
-                    corner_radius=8,
+                    text_color=t("ON_PRIMARY"),
+                    corner_radius=RADIO,
                     command=partial(self._descargar_pdf, permiso["id"]),
                 )
                 boton_pdf._rol = "primario"
@@ -1161,7 +1236,7 @@ class EmployeeDashboard(ctk.CTkFrame):
             row=fila_inicio, column=0, columnspan=2, sticky="nsew", pady=(12, 12)
         )
         tarjeta_historial.grid_columnconfigure(1, weight=1)
-        etiqueta(tarjeta_historial, "Historial de marcas", 16, t("TEXT"), "bold").grid(
+        titulo(tarjeta_historial, "Historial de marcas", 16).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=18, pady=(14, 2)
         )
         etiqueta(
@@ -1188,7 +1263,7 @@ class EmployeeDashboard(ctk.CTkFrame):
             row=3, column=0, columnspan=2, sticky="w", padx=18, pady=(10, 0)
         )
         self.scroll_hist = ctk.CTkScrollableFrame(
-            tarjeta_historial, fg_color=t("INPUT_BG"), corner_radius=10, height=230
+            tarjeta_historial, fg_color=t("INPUT_BG"), corner_radius=RADIO, height=230
         )
         self.scroll_hist.grid(
             row=4, column=0, columnspan=2, sticky="ew", padx=14, pady=(8, 14)
@@ -1227,7 +1302,7 @@ class EmployeeDashboard(ctk.CTkFrame):
             ).pack(anchor="w", padx=12, pady=10)
             return
         for marca in historial["marcas"]:
-            fila = ctk.CTkFrame(self.scroll_hist, fg_color=t("CARD"), corner_radius=8)
+            fila = ctk.CTkFrame(self.scroll_hist, fg_color=t("CARD"), corner_radius=RADIO)
             fila.pack(fill="x", pady=3)
             fila.grid_columnconfigure(1, weight=1)
             etiqueta(fila, marca["fecha"], 12, t("TEXT"), "bold").grid(
@@ -1235,7 +1310,7 @@ class EmployeeDashboard(ctk.CTkFrame):
             )
             etiqueta(
                 fila,
-                f"{marca['entrada']} → {marca['salida'] or '—'} · "
+                f"{marca['entrada']} – {marca['salida'] or '—'} · "
                 f"ordinarias {marca['ordinarias']} · extra 50% {marca['extra_50']} · "
                 f"extra 100% {marca['extra_100']}",
                 11,
@@ -1301,14 +1376,19 @@ class PanelGestion(ctk.CTkFrame):
     emergentes. La sección de Auditoría expone el log JSONB completo.
     """
 
+    # Secciones numeradas como las de un formulario: el número es un asidero
+    # estable para señalarlas por teléfono ("andá a la 4"), cosa que un ícono
+    # decorativo no permite.
     SECCIONES: List[tuple] = [
-        ("▦", "Personal", "Gestión de Personal"),
-        ("✦", "Justificaciones", "Permisos y PDFs"),
-        ("▤", "Reportes", "Centro de Reportes"),
-        ("✎", "Correcciones", "Solicitudes de Corrección"),
-        ("◉", "Analítica", "Dashboard Analítico"),
-        ("◈", "Auditoría", "Log JSONB de Auditoría"),
-        ("🔔", "Alertas", "Notificaciones en Tiempo Real"),
+        ("Personal", "Gestión de Personal"),
+        ("Pedidos de permiso", "Bandeja del portal del empleado"),
+        ("Justificaciones", "Permisos y PDFs"),
+        ("Condiciones del día", "Tolerancias declaradas"),
+        ("Reportes", "Centro de Reportes"),
+        ("Correcciones", "Solicitudes de Corrección"),
+        ("Analítica", "Dashboard Analítico"),
+        ("Auditoría", "Log JSONB de Auditoría"),
+        ("Alertas", "Notificaciones en Tiempo Real"),
     ]
 
     def __init__(
@@ -1333,9 +1413,9 @@ class PanelGestion(ctk.CTkFrame):
         sidebar = tarjeta(self)
         sidebar.grid(row=0, column=0, sticky="nsew", padx=(24, 12), pady=24)
         sidebar.grid_columnconfigure(0, weight=1)
-        etiqueta(sidebar, "Panel de Gestión", 18, t("TEXT"), "bold").grid(
-            row=0, column=0, sticky="w", padx=16, pady=(18, 2)
-        )
+        ctk.CTkLabel(
+            sidebar, text="Panel de Gestión", font=(SERIF, 18, "bold"), text_color=t("TEXT")
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(18, 2))
         etiqueta(
             sidebar,
             f"{self.actor['full_name']}\n{auth.get_role_name(self.db, self.actor)}",
@@ -1344,24 +1424,24 @@ class PanelGestion(ctk.CTkFrame):
         ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 14))
         interruptor_tema(sidebar, self.master).grid(row=2, column=0, sticky="w", padx=16)
         self.botones_seccion: List[ctk.CTkButton] = []
-        for indice, (icono, titulo, detalle) in enumerate(self.SECCIONES):
+        for indice, (titulo, detalle) in enumerate(self.SECCIONES):
             boton = ctk.CTkButton(
                 sidebar,
-                text=f"{icono}   {titulo}",
+                text=f"{indice + 1:02d}    {titulo}",
                 command=lambda i=indice: self._seleccionar(i),
                 fg_color="transparent",
                 hover_color=t("INPUT_BG"),
                 text_color=t("MUTED"),
-                font=(FONT, 14, "bold"),
-                corner_radius=12,
-                height=54,
+                font=(FONT, 14),
+                corner_radius=RADIO,
+                height=46,
                 anchor="w",
             )
             boton.grid(row=3 + indice, column=0, sticky="ew", padx=10, pady=3)
             boton._rol = "plano"
             self.botones_seccion.append(boton)
         boton_secundario(sidebar, "Volver a Marcación", self.on_cerrar).grid(
-            row=10, column=0, sticky="ew", padx=10, pady=(18, 14)
+            row=3 + len(self.SECCIONES), column=0, sticky="ew", padx=10, pady=(18, 14)
         )
 
     def _construir_contenido(self) -> None:
@@ -1373,15 +1453,21 @@ class PanelGestion(ctk.CTkFrame):
         self.personal_tab = PersonalTab(
             contenido, self.db, self.actor, self._refrescar_empleados
         )
+        self.solicitudes_tab = SolicitudesPermisoTab(contenido, self.db, self.actor)
         self.justificaciones_tab = JustificacionesTab(contenido, self.db, self.actor)
+        self.condiciones_tab = CondicionesTab(contenido, self.db, self.actor)
         self.reportes_tab = ReportesTab(contenido, self.db, self.actor)
         self.correcciones_tab = CorreccionesTab(contenido, self.db, self.actor)
         self.dashboard_tab = DashboardTab(contenido, self.db)
         self.auditoria_tab = AuditoriaTab(contenido, self.db)
         self.alertas_tab = AlertasTab(contenido, self.db)
+        # El orden replica al de SECCIONES: el índice del botón es el índice
+        # de la pestaña.
         self.pestanas = [
             self.personal_tab,
+            self.solicitudes_tab,
             self.justificaciones_tab,
+            self.condiciones_tab,
             self.reportes_tab,
             self.correcciones_tab,
             self.dashboard_tab,
@@ -1423,7 +1509,7 @@ class PanelGestion(ctk.CTkFrame):
         self._parpadeando = False
         boton = self.botones_seccion[-1]
         if self.indice_activo == len(self.SECCIONES) - 1:
-            boton.configure(fg_color=t("PRIMARY"), text_color="white")
+            boton.configure(fg_color=t("PRIMARY"), text_color=t("ON_PRIMARY"))
         else:
             boton.configure(fg_color="transparent")
 
@@ -1440,7 +1526,7 @@ class PanelGestion(ctk.CTkFrame):
             seleccionado = posicion == indice
             boton.configure(
                 fg_color=t("PRIMARY") if seleccionado else "transparent",
-                text_color="white" if seleccionado else t("MUTED"),
+                text_color=t("ON_PRIMARY") if seleccionado else t("MUTED"),
                 hover_color=t("PRIMARY_HOVER") if seleccionado else t("INPUT_BG"),
             )
 
@@ -1460,7 +1546,7 @@ class AlertasTab(ctk.CTkFrame):
         cabecera = tarjeta(self)
         cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         cabecera.grid_columnconfigure(0, weight=1)
-        etiqueta(cabecera, "Notificaciones en Tiempo Real", 16, t("TEXT"), "bold").grid(
+        titulo(cabecera, "Notificaciones en Tiempo Real", 16).grid(
             row=0, column=0, sticky="w", padx=20, pady=(14, 2)
         )
         etiqueta(
@@ -1496,16 +1582,18 @@ class AlertasTab(ctk.CTkFrame):
                 "baja": t("MUTED"),
             }
             color = colores.get(alerta["severidad"], t("MUTED"))
-            titulo = alerta["mensaje"]
-            if not alerta["leida"]:
-                titulo = "● " + titulo
+            sin_leer = not alerta["leida"]
             etiqueta(
                 fila,
-                titulo,
+                alerta["mensaje"],
                 13,
                 color,
-                "bold" if not alerta["leida"] else "normal",
+                "bold" if sin_leer else "normal",
             ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+            if sin_leer:
+                etiqueta(fila, "SIN LEER", 9, color, "bold").grid(
+                    row=0, column=1, sticky="e", padx=14, pady=(10, 0)
+                )
             if alerta.get("detalle"):
                 etiqueta(fila, alerta["detalle"], 11, t("MUTED")).grid(
                     row=1, column=0, sticky="w", padx=14, pady=(2, 0)
@@ -1534,7 +1622,7 @@ class AuditoriaTab(ctk.CTkFrame):
         cabecera = tarjeta(self)
         cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         cabecera.grid_columnconfigure(0, weight=1)
-        etiqueta(cabecera, "Log de Auditoría · JSONB", 16, t("TEXT"), "bold").grid(
+        titulo(cabecera, "Log de Auditoría · JSONB", 16).grid(
             row=0, column=0, sticky="w", padx=20, pady=(14, 2)
         )
         etiqueta(
@@ -1612,7 +1700,8 @@ class CorreccionesTab(ctk.CTkFrame):
             font=(FONT, 12),
             fg_color=t("PRIMARY"),
             hover_color=t("PRIMARY_HOVER"),
-            corner_radius=8,
+            text_color=t("ON_PRIMARY"),
+            corner_radius=RADIO,
         )
         boton_refrescar.grid(row=0, column=1, rowspan=2, padx=16, sticky="e")
         self.lbl_resultado = etiqueta(cabecera, "", 12, t("SUCCESS"))
@@ -1661,9 +1750,9 @@ class CorreccionesTab(ctk.CTkFrame):
                     height=32,
                     font=(FONT, 12),
                     fg_color=t("SUCCESS"),
-                    hover_color="#3BBF6B",
-                    text_color="#0B1F14",
-                    corner_radius=8,
+                    hover_color=t("PRIMARY_HOVER"),
+                    text_color=t("ON_PRIMARY"),
+                    corner_radius=RADIO,
                     command=partial(self._resolver, solicitud["id"], True),
                 )
                 boton_aprobar.grid(row=0, column=1, rowspan=3, padx=(0, 6), sticky="e")
@@ -1678,7 +1767,7 @@ class CorreccionesTab(ctk.CTkFrame):
                     border_width=1,
                     border_color=t("DANGER"),
                     text_color=t("DANGER"),
-                    corner_radius=8,
+                    corner_radius=RADIO,
                     command=partial(self._resolver, solicitud["id"], False),
                 )
                 boton_rechazar.grid(row=0, column=2, rowspan=3, padx=(0, 14), sticky="e")
@@ -1698,6 +1787,322 @@ class CorreccionesTab(ctk.CTkFrame):
         self._refrescar()
 
 
+class SolicitudesPermisoTab(ctk.CTkFrame):
+    """Bandeja de pedidos de permiso presentados por el personal.
+
+    Los pedidos llegan validados contra el catálogo reglamentario, así que
+    acá no se controlan cuotas: se decide. Al aprobar se emite la
+    justificación oficial y su PDF sin ningún paso adicional.
+    """
+
+    def __init__(self, master, db: Database, actor: Dict) -> None:
+        super().__init__(master, fg_color="transparent")
+        self.db = db
+        self.actor = actor
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        cabecera = tarjeta(self)
+        cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        cabecera.grid_columnconfigure(0, weight=1)
+        titulo(cabecera, "Pedidos de permiso del personal", 16).grid(
+            row=0, column=0, sticky="w", padx=20, pady=(14, 4)
+        )
+        etiqueta(
+            cabecera,
+            "Validados contra el reglamento al presentarse · aprobar emite la justificación",
+            12,
+            t("MUTED"),
+        ).grid(row=1, column=0, sticky="w", padx=20)
+        ctk.CTkButton(
+            cabecera,
+            text="Refrescar",
+            command=self._refrescar,
+            width=100,
+            height=32,
+            font=(FONT, 12),
+            fg_color=t("PRIMARY"),
+            hover_color=t("PRIMARY_HOVER"),
+            text_color=t("ON_PRIMARY"),
+            corner_radius=RADIO,
+        ).grid(row=0, column=1, rowspan=2, padx=16, sticky="e")
+        self.lbl_resultado = etiqueta(cabecera, "", 12, t("SUCCESS"))
+        self.lbl_resultado.grid(
+            row=2, column=0, columnspan=2, sticky="w", padx=20, pady=(2, 12)
+        )
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
+        self.scroll.grid(row=1, column=0, sticky="nsew")
+        self._refrescar()
+
+    def _refrescar(self) -> None:
+        for hijo in self.scroll.winfo_children():
+            hijo.destroy()
+        solicitudes = self.db.listar_solicitudes_permiso()
+        if not solicitudes:
+            etiqueta(self.scroll, "No hay pedidos de permiso.", 13, t("MUTED")).pack(pady=20)
+            return
+        for solicitud in solicitudes:
+            self._pintar_solicitud(solicitud)
+
+    def _pintar_solicitud(self, solicitud: Dict) -> None:
+        fila = tarjeta(self.scroll)
+        fila.pack(fill="x", pady=5)
+        fila.grid_columnconfigure(0, weight=1)
+        cantidad = (
+            f"{float(solicitud['horas_solicitadas']):g} h"
+            if float(solicitud["horas_solicitadas"] or 0)
+            else f"{(solicitud['fecha_fin'] - solicitud['fecha_inicio']).days + 1} días"
+        )
+        etiqueta(
+            fila,
+            f"#{solicitud['id']} · {solicitud['full_name']} · "
+            f"{solicitud['tipo_permiso']} · {cantidad}",
+            14,
+            t("TEXT"),
+            "bold",
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 2))
+        estado = solicitud["estado"]
+        if solicitud["revisor"]:
+            estado += f" por {solicitud['revisor']}"
+        etiqueta(
+            fila,
+            f"{solicitud['fecha_inicio']} – {solicitud['fecha_fin']} · "
+            f"{solicitud['tipo_vinculo'] or 'Funcionario'} · {estado}",
+            12,
+            t("MUTED"),
+        ).grid(row=1, column=0, sticky="w", padx=14)
+        detalle = f"Motivo: {solicitud['motivo']}"
+        if solicitud["observacion"]:
+            detalle += f"\nRespuesta: {solicitud['observacion']}"
+        etiqueta(fila, detalle, 12, t("TEXT")).grid(
+            row=2, column=0, sticky="w", padx=14, pady=(2, 10)
+        )
+        if solicitud["estado"] != "Pendiente":
+            return
+        ctk.CTkButton(
+            fila,
+            text="Aprobar",
+            width=90,
+            height=32,
+            font=(FONT, 12),
+            fg_color=t("SUCCESS"),
+            hover_color=t("PRIMARY_HOVER"),
+            text_color=t("ON_PRIMARY"),
+            corner_radius=RADIO,
+            command=partial(self._resolver, solicitud["id"], True),
+        ).grid(row=0, column=1, rowspan=3, padx=(0, 6), sticky="e")
+        ctk.CTkButton(
+            fila,
+            text="Rechazar",
+            width=90,
+            height=32,
+            font=(FONT, 12),
+            fg_color="transparent",
+            hover_color=t("DANGER"),
+            border_width=1,
+            border_color=t("DANGER"),
+            text_color=t("DANGER"),
+            corner_radius=RADIO,
+            command=partial(self._resolver, solicitud["id"], False),
+        ).grid(row=0, column=2, rowspan=3, padx=(0, 14), sticky="e")
+
+    def _resolver(self, solicitud_id: int, aprobar: bool) -> None:
+        observacion = ""
+        if not aprobar:
+            observacion = (
+                ctk.CTkInputDialog(
+                    text="Motivo del rechazo (lo ve el empleado):",
+                    title="Rechazar pedido",
+                ).get_input()
+                or ""
+            ).strip()
+            if len(observacion) < 10:
+                self.lbl_resultado.configure(
+                    text="Explicá el motivo del rechazo (al menos 10 caracteres).",
+                    text_color=t("DANGER"),
+                )
+                return
+        try:
+            resultado = auth.resolver_solicitud_permiso(
+                self.db, self.actor, solicitud_id, aprobar, observacion
+            )
+        except ValueError as error:
+            self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
+            return
+        mensaje = f"Pedido #{solicitud_id} {resultado['estado'].lower()}."
+        if resultado["justificacion_id"]:
+            mensaje += f" Justificación #{resultado['justificacion_id']} emitida."
+        self.lbl_resultado.configure(text=mensaje, text_color=t("SUCCESS"))
+        self._refrescar()
+
+
+class CondicionesTab(ctk.CTkFrame):
+    """Declaración de condiciones excepcionales del día.
+
+    Reemplaza a la casilla que el propio empleado marcaba en el kiosco: la
+    tolerancia climática de la Res. 3028/2024 la reconoce la empresa para
+    toda la plantilla, queda firmada y es auditable.
+    """
+
+    CONDICIONES = (
+        ("Lluvia intensa", 30),
+        ("Corte de rutas o manifestación", 30),
+        ("Corte de energía", 30),
+        ("Paro de transporte público", 60),
+    )
+
+    def __init__(self, master, db: Database, actor: Dict) -> None:
+        super().__init__(master, fg_color="transparent")
+        self.db = db
+        self.actor = actor
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        formulario = tarjeta(self)
+        formulario.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        formulario.grid_columnconfigure(1, weight=1)
+        titulo(formulario, "Declarar una condición del día", 16).grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=20, pady=(14, 2)
+        )
+        etiqueta(
+            formulario,
+            "Alcanza a toda la plantilla y se suma a la tolerancia ordinaria",
+            12,
+            t("MUTED"),
+        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=20, pady=(0, 12))
+
+        self.campo_fecha = campo_fecha(formulario, "AAAA-MM-DD")
+        self.campo_fecha.grid(row=2, column=0, sticky="w", padx=(20, 8), pady=(0, 10))
+        self.campo_fecha.entrada.insert(0, datetime.date.today().isoformat())
+
+        self.menu_condicion = ctk.CTkOptionMenu(
+            formulario,
+            values=[c[0] for c in self.CONDICIONES],
+            font=(FONT, 13),
+            fg_color=t("INPUT_BG"),
+            button_color=t("PRIMARY"),
+            button_hover_color=t("PRIMARY_HOVER"),
+            text_color=t("TEXT"),
+            dropdown_fg_color=t("INPUT_BG"),
+            command=self._sugerir_tolerancia,
+            width=220,
+        )
+        self.menu_condicion.grid(row=2, column=1, sticky="w", pady=(0, 10))
+
+        self.entrada_tolerancia = entrada(formulario, "Minutos", ancho=110)
+        self.entrada_tolerancia.grid(row=2, column=2, sticky="w", padx=8, pady=(0, 10))
+        self.entrada_tolerancia.insert(0, "30")
+
+        self.entrada_nota = entrada(formulario, "Nota interna (opcional)", ancho=420)
+        self.entrada_nota.grid(
+            row=3, column=0, columnspan=2, sticky="w", padx=(20, 8), pady=(0, 12)
+        )
+        boton_primario(formulario, "Declarar", self._declarar).grid(
+            row=3, column=2, sticky="w", padx=8, pady=(0, 12)
+        )
+        self.lbl_resultado = etiqueta(formulario, "", 12, t("SUCCESS"))
+        self.lbl_resultado.grid(
+            row=4, column=0, columnspan=3, sticky="w", padx=20, pady=(0, 12)
+        )
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
+        self.scroll.grid(row=1, column=0, sticky="nsew")
+        self._refrescar()
+
+    def _sugerir_tolerancia(self, elegida: str) -> None:
+        """Precarga la tolerancia habitual de la condición sin fijarla."""
+        minutos = dict(self.CONDICIONES).get(elegida, 30)
+        self.entrada_tolerancia.delete(0, "end")
+        self.entrada_tolerancia.insert(0, str(minutos))
+
+    def _declarar(self) -> None:
+        try:
+            fecha = datetime.date.fromisoformat(self.campo_fecha.entrada.get().strip())
+        except ValueError:
+            self.lbl_resultado.configure(
+                text="Fecha inválida. Use AAAA-MM-DD.", text_color=t("DANGER")
+            )
+            return
+        try:
+            minutos = int(self.entrada_tolerancia.get().strip())
+        except ValueError:
+            self.lbl_resultado.configure(
+                text="La tolerancia se expresa en minutos enteros.", text_color=t("DANGER")
+            )
+            return
+        try:
+            auth.declarar_condicion_dia(
+                self.db,
+                self.actor,
+                fecha,
+                self.menu_condicion.get(),
+                minutos,
+                self.entrada_nota.get().strip(),
+            )
+        except ValueError as error:
+            self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
+            return
+        self.lbl_resultado.configure(
+            text=f"{self.menu_condicion.get()} declarada para el {fecha.isoformat()}.",
+            text_color=t("SUCCESS"),
+        )
+        self._refrescar()
+
+    def _revocar(self, fecha: datetime.date) -> None:
+        self.db.borrar_condicion_dia(fecha)
+        self.db.registrar_auditoria(
+            self.actor["id"], "REVOCAR", "condiciones_dia", 0,
+            anterior={"fecha": fecha.isoformat()},
+        )
+        self.lbl_resultado.configure(
+            text=f"Condición del {fecha.isoformat()} revocada.", text_color=t("MUTED")
+        )
+        self._refrescar()
+
+    def _refrescar(self) -> None:
+        for hijo in self.scroll.winfo_children():
+            hijo.destroy()
+        condiciones = self.db.listar_condiciones_dia()
+        if not condiciones:
+            etiqueta(self.scroll, "Ningún día con condición declarada.", 13, t("MUTED")).pack(
+                pady=20
+            )
+            return
+        for condicion in condiciones:
+            fila = tarjeta(self.scroll)
+            fila.pack(fill="x", pady=5)
+            fila.grid_columnconfigure(0, weight=1)
+            etiqueta(
+                fila,
+                f"{condicion['fecha']} · {condicion['condicion']} · "
+                f"{condicion['tolerancia_min']} min",
+                14,
+                t("TEXT"),
+                "bold",
+            ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 2))
+            detalle = f"Firmó {condicion['declarante']}"
+            if condicion["nota"]:
+                detalle += f" · {condicion['nota']}"
+            etiqueta(fila, detalle, 12, t("MUTED")).grid(
+                row=1, column=0, sticky="w", padx=14, pady=(0, 10)
+            )
+            ctk.CTkButton(
+                fila,
+                text="Revocar",
+                width=90,
+                height=32,
+                font=(FONT, 12),
+                fg_color="transparent",
+                hover_color=t("DANGER"),
+                border_width=1,
+                border_color=t("DANGER"),
+                text_color=t("DANGER"),
+                corner_radius=RADIO,
+                command=partial(self._revocar, condicion["fecha"]),
+            ).grid(row=0, column=1, rowspan=2, padx=(0, 14), sticky="e")
+
+
 class DashboardTab(ctk.CTkFrame):
     """Analítica visual de RRHH: tardanzas del mes, horas extra por
     departamento y proyección del aguinaldo proporcional en Guaraníes."""
@@ -1711,9 +2116,7 @@ class DashboardTab(ctk.CTkFrame):
         cabecera = tarjeta(self)
         cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         cabecera.grid_columnconfigure(0, weight=1)
-        etiqueta(
-            cabecera, "Dashboard Analítico de Recursos Humanos", 16, t("TEXT"), "bold"
-        ).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 2))
+        titulo(cabecera, "Dashboard Analítico de Recursos Humanos", 16).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 2))
         self.lbl_actualizado = etiqueta(
             cabecera, "Cargando métricas…", 12, t("MUTED")
         )
@@ -1727,7 +2130,8 @@ class DashboardTab(ctk.CTkFrame):
             font=(FONT, 12),
             fg_color=t("PRIMARY"),
             hover_color=t("PRIMARY_HOVER"),
-            corner_radius=8,
+            text_color=t("ON_PRIMARY"),
+            corner_radius=RADIO,
         ).grid(row=0, column=1, rowspan=2, padx=16, sticky="e")
 
         self.area = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
@@ -1774,9 +2178,9 @@ class DashboardTab(ctk.CTkFrame):
         ).grid(row=1, column=0, sticky="w", padx=24, pady=(2, 0))
         etiqueta(
             tarjeta_aguinaldo,
-            f"≈ {millones:,.2f} millones de Guaraníes acumulados",
+            f"{millones:,.2f} millones de Guaraníes acumulados (estimado)",
             15,
-            "#F5C26B",
+            t("ACCENTO"),
             "bold",
         ).grid(row=2, column=0, sticky="w", padx=24, pady=(0, 4))
         resumen = (
@@ -1804,11 +2208,11 @@ class DashboardTab(ctk.CTkFrame):
 
     def _estilizar_ejes(self, eje) -> None:
         eje.set_facecolor(t("BG"))
-        eje.grid(True, color="#34343B", alpha=0.35, linestyle="--", linewidth=0.8)
+        eje.grid(True, color=t("CARD_BORDER"), alpha=0.6, linestyle="--", linewidth=0.8)
         for borde in ("top", "right"):
             eje.spines[borde].set_visible(False)
         for borde in ("left", "bottom"):
-            eje.spines[borde].set_color("#34343B")
+            eje.spines[borde].set_color(t("CARD_BORDER"))
 
     def _construir_grafico_tardanzas(self, fila: int, columna: int) -> None:
         tarjeta_grafico = tarjeta(self.area)
@@ -1887,13 +2291,13 @@ class DashboardTab(ctk.CTkFrame):
                 [p - ancho_barra / 2 for p in posiciones],
                 [e["horas_50"] for e in self.extras],
                 width=ancho_barra, color=t("PRIMARY"), label="Recargo 50%",
-                edgecolor="#26262C",
+                edgecolor=t("CARD"),
             )
             eje.bar(
                 [p + ancho_barra / 2 for p in posiciones],
                 [e["horas_100"] for e in self.extras],
-                width=ancho_barra, color="#F5C26B", label="Recargo 100%",
-                edgecolor="#26262C",
+                width=ancho_barra, color=t("ACCENTO"), label="Recargo 100%",
+                edgecolor=t("CARD"),
             )
             for indice, extra in enumerate(self.extras):
                 eje.text(
@@ -1937,7 +2341,7 @@ class PersonalTab(ctk.CTkFrame):
     def _construir_formulario(self) -> None:
         formulario = tarjeta(self)
         formulario.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        etiqueta(formulario, "Agregar empleado", 17, t("TEXT"), "bold").pack(
+        titulo(formulario, "Agregar empleado", 17).pack(
             anchor="w", padx=20, pady=(18, 14)
         )
         self.ent_usuario = entrada(formulario, "Usuario / cédula", ancho=280)
@@ -1989,7 +2393,7 @@ class PersonalTab(ctk.CTkFrame):
         listado.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
         listado.grid_columnconfigure(0, weight=1)
         listado.grid_rowconfigure(1, weight=1)
-        etiqueta(listado, "Personal registrado", 17, t("TEXT"), "bold").grid(
+        titulo(listado, "Personal registrado", 17).grid(
             row=0, column=0, sticky="w", padx=20, pady=(18, 12)
         )
         self.scroll = ctk.CTkScrollableFrame(
@@ -2003,7 +2407,7 @@ class PersonalTab(ctk.CTkFrame):
             hijo.destroy()
         for usuario in self.db.list_users():
             vinculo = usuario.get("tipo_vinculo") or "Funcionario"
-            fila = ctk.CTkFrame(self.scroll, fg_color=t("INPUT_BG"), corner_radius=10)
+            fila = ctk.CTkFrame(self.scroll, fg_color=t("INPUT_BG"), corner_radius=RADIO)
             fila.pack(fill="x", pady=4)
             fila.grid_columnconfigure(0, weight=1)
             etiqueta(
@@ -2026,7 +2430,8 @@ class PersonalTab(ctk.CTkFrame):
                 font=(FONT, 12),
                 fg_color=t("PRIMARY"),
                 hover_color=t("PRIMARY_HOVER"),
-                corner_radius=8,
+                text_color=t("ON_PRIMARY"),
+                corner_radius=RADIO,
                 command=partial(self._editar, usuario),
             )
             boton_editar.grid(row=0, column=1, padx=(0, 6))
@@ -2041,14 +2446,14 @@ class PersonalTab(ctk.CTkFrame):
                 border_width=1,
                 border_color=t("DANGER"),
                 text_color=t("DANGER"),
-                corner_radius=8,
+                corner_radius=RADIO,
                 command=partial(self._eliminar, usuario),
             )
             boton_eliminar.grid(row=0, column=2, padx=(0, 10))
             tiene_foto = self.db.tiene_foto(usuario["id"])
             boton_foto = ctk.CTkButton(
                 fila,
-                text="Foto ✓" if tiene_foto else "Foto",
+                text="Foto cargada" if tiene_foto else "Foto",
                 width=70,
                 height=30,
                 font=(FONT, 12),
@@ -2057,7 +2462,7 @@ class PersonalTab(ctk.CTkFrame):
                 border_width=1,
                 border_color=t("ACCENTO") if tiene_foto else t("MUTED"),
                 text_color=t("ACCENTO") if tiene_foto else t("MUTED"),
-                corner_radius=8,
+                corner_radius=RADIO,
                 command=partial(self._registrar_foto, usuario),
             )
             boton_foto.grid(row=0, column=3, padx=(0, 10))
@@ -2234,7 +2639,7 @@ class JustificacionesTab(ctk.CTkFrame):
         formulario = tarjeta(self)
         formulario.grid(row=0, column=0, sticky="ew")
         formulario.grid_columnconfigure(0, weight=1)
-        etiqueta(formulario, "Registrar justificación aprobada", 17, t("TEXT"), "bold").grid(
+        titulo(formulario, "Registrar justificación aprobada", 17).grid(
             row=0, column=0, pady=(18, 14)
         )
         self.menu_empleado = ctk.CTkOptionMenu(
@@ -2284,7 +2689,7 @@ class JustificacionesTab(ctk.CTkFrame):
             row=9, column=0, pady=(4, 6)
         )
         self.scroll_disp = ctk.CTkScrollableFrame(
-            formulario, fg_color=t("INPUT_BG"), corner_radius=10, height=180
+            formulario, fg_color=t("INPUT_BG"), corner_radius=RADIO, height=180
         )
         self.scroll_disp.grid(row=10, column=0, sticky="ew", padx=20, pady=(0, 18))
         self.refrescar_empleados()
@@ -2293,7 +2698,7 @@ class JustificacionesTab(ctk.CTkFrame):
         listado.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
         listado.grid_columnconfigure(0, weight=1)
         listado.grid_rowconfigure(1, weight=1)
-        etiqueta(listado, "Justificaciones emitidas", 16, t("TEXT"), "bold").grid(
+        titulo(listado, "Justificaciones emitidas", 16).grid(
             row=0, column=0, sticky="w", padx=20, pady=(16, 8)
         )
         self.scroll_just = ctk.CTkScrollableFrame(
@@ -2307,7 +2712,7 @@ class JustificacionesTab(ctk.CTkFrame):
         for hijo in self.scroll_just.winfo_children():
             hijo.destroy()
         for justificacion in self.db.list_justificaciones():
-            fila = ctk.CTkFrame(self.scroll_just, fg_color=t("INPUT_BG"), corner_radius=10)
+            fila = ctk.CTkFrame(self.scroll_just, fg_color=t("INPUT_BG"), corner_radius=RADIO)
             fila.pack(fill="x", pady=4)
             fila.grid_columnconfigure(0, weight=1)
             etiqueta(
@@ -2318,7 +2723,7 @@ class JustificacionesTab(ctk.CTkFrame):
             ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
             etiqueta(
                 fila,
-                f"{justificacion['fecha_inicio'].strftime('%d/%m/%Y')} → "
+                f"{justificacion['fecha_inicio'].strftime('%d/%m/%Y')} – "
                 f"{justificacion['fecha_fin'].strftime('%d/%m/%Y')}"
                 + (
                     f" · {float(justificacion['horas_usadas'] or 0):g} h"
@@ -2418,7 +2823,7 @@ class JustificacionesTab(ctk.CTkFrame):
             return
         nombres_unidad = {"dias": "días", "horas": "horas", "veces": "veces"}
         for disp in reglamento.disponibilidad_permisos(self.db, empleado):
-            fila = ctk.CTkFrame(self.scroll_disp, fg_color=t("CARD"), corner_radius=8)
+            fila = ctk.CTkFrame(self.scroll_disp, fg_color=t("CARD"), corner_radius=RADIO)
             fila.pack(fill="x", pady=3)
             fila.grid_columnconfigure(1, weight=1)
             unidad = nombres_unidad.get(disp["unidad"], disp["unidad"])
@@ -2498,7 +2903,7 @@ class ReportesTab(ctk.CTkFrame):
         tarjeta_asistencia = tarjeta(self)
         tarjeta_asistencia.grid(row=0, column=0, sticky="ew", pady=(0, 20))
         tarjeta_asistencia.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_asistencia, "Reporte Mensual de Asistencia", 17, t("TEXT"), "bold").grid(
+        titulo(tarjeta_asistencia, "Reporte Mensual de Asistencia", 17).grid(
             row=0, column=0, pady=(20, 4)
         )
         etiqueta(
@@ -2520,7 +2925,7 @@ class ReportesTab(ctk.CTkFrame):
         tarjeta_aguinaldo = tarjeta(self)
         tarjeta_aguinaldo.grid(row=1, column=0, sticky="ew")
         tarjeta_aguinaldo.grid_columnconfigure(0, weight=1)
-        etiqueta(tarjeta_aguinaldo, "Proyección de Aguinaldos", 17, t("TEXT"), "bold").grid(
+        titulo(tarjeta_aguinaldo, "Proyección de Aguinaldos", 17).grid(
             row=0, column=0, pady=(20, 4)
         )
         etiqueta(

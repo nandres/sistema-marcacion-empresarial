@@ -29,7 +29,10 @@ jobs:
       DB_NAME: marcacion_test
       DB_USER: marcacion
       DB_PASSWORD: marcacion
+      # Solo para CI. Ambas son obligatorias y exigen 32+ caracteres:
+      # sin ellas el proceso aborta en lugar de firmar con una clave conocida.
       JWT_SECRET_KEY: clave-de-ci-no-usar-en-produccion
+      COMPROBANTE_CLAVE: clave-de-comprobantes-de-ci-no-usar-en-produccion
     steps:
       - uses: actions/checkout@v4
 
@@ -49,8 +52,29 @@ jobs:
       - name: Compilación de todos los módulos
         run: python -m py_compile src/*.py
 
+      - name: Aplicar el esquema (base limpia)
+        run: python src/migrate.py
+
+      - name: Script del portal parsea (node --check)
+        run: python tests/smoke_portal_js.py
+
+      - name: Motor de liquidación · turnos frontera (Ley 213)
+        run: python tests/test_motor_horario.py
+
+      - name: Paleta · contraste WCAG y paridad web/escritorio
+        run: xvfb-run -a python tests/test_paleta.py
+
       - name: Preparar usuarios de prueba
         run: python tests/setup_ci.py
+
+      - name: Antifraude · condición del día declarada por RRHH (P1-1)
+        run: python tests/test_condicion_dia.py
+
+      - name: Autoservicio de permisos · ciclo completo y cuota reservada
+        run: python tests/smoke_permisos_autoservicio.py
+
+      - name: Formularios automáticos · planilla de extras y constancia
+        run: python tests/test_planilla_extras.py
 
       - name: Reglas Art. 14 y reglamento (headless)
         run: |
@@ -74,9 +98,14 @@ jobs:
           curl -fsS -X POST http://127.0.0.1:8000/api/login \
             -H "Content-Type: application/json" \
             -d '{"cedula":"admin","password":"admin123"}' | grep -q '"token"'
-          curl -fsS -X POST http://127.0.0.1:8000/api/alertas \
+          # Publicar una alerta sin credenciales debe rechazarse: se difunde a
+          # todos los clientes conectados.
+          codigo=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8000/api/alertas \
             -H "Content-Type: application/json" \
-            -d '{"tipo":"ci","severidad":"baja","mensaje":"alerta CI","detalle":""}'
+            -d '{"tipo":"ci","severidad":"baja","mensaje":"alerta CI","detalle":""}')
+          test "$codigo" = "401" || { echo "esperaba 401, recibí $codigo"; exit 1; }
+          # Cabeceras de seguridad presentes en toda respuesta.
+          curl -fsSI http://127.0.0.1:8000/ | grep -qi "content-security-policy"
 
       - name: Kiosco web + Panel de Gestión (RRHH)
         run: |
