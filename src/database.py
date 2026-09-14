@@ -2171,6 +2171,14 @@ class Database:
         )
         return int(fila["total"]) if fila else 0
 
+    def get_alerta(self, alerta_id: int) -> Optional[Dict[str, Any]]:
+        """Recupera una alerta puntual, para repetirla entre procesos."""
+        return self._execute(
+            "SELECT * FROM alertas WHERE empresa_id = %s AND id = %s",
+            (self.empresa, alerta_id),
+            fetch="one",
+        )
+
     def marcar_alertas_leidas(self) -> int:
         """Marca todas las alertas como leídas y devuelve la cantidad."""
         cursor = self._execute(

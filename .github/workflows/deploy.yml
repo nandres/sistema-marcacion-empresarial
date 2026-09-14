@@ -85,6 +85,9 @@ jobs:
       - name: Cola offline firmada y con techo de reintentos (P3-10)
         run: python tests/test_cola_firmada.py
 
+      - name: Alertas en vivo entre procesos (P3-4)
+        run: python tests/test_bus_alertas.py
+
       - name: Aislamiento entre empresas alojadas
         run: |
           python tests/guardia_arrendamiento.py

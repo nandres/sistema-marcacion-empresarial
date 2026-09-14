@@ -114,11 +114,10 @@ Decirlo por adelantado evita una venta mal hecha.
 | Falta | Consecuencia | Detalle |
 | --- | --- | --- |
 | **Prueba de vida a prueba de video** | El gesto que pide el kiosco deja afuera una foto quieta, pero no a quien mueva el teléfono siguiendo la consigna. Lo cierra una cámara con infrarrojo o un modelo anti-suplantación | P1-2b |
-| **Bus de alertas fuera del proceso** | Con varios workers, una alerta en vivo llega solo a los clientes conectados a ese worker | P3-4 |
 | **Pool de conexiones** | Cada petición abre y cierra su conexión; irrelevante para una empresa, relevante para muchas | — |
 | **Calendario de rotación automática** | La rotación semana A / semana B se carga a mano, tramo por tramo | [[Turnos y Rotación de Horarios]] |
 
-Lo primero de esa lista es lo que más se va a pedir: el **bus de alertas fuera del proceso**, porque con varios workers RRHH pierde tres de cada cuatro avisos en vivo sin enterarse.
+Lo primero de esa lista es lo que más se va a pedir: el **pool de conexiones**, porque con varios clientes alojados cada petición abriendo su propia conexión se nota.
 
 ## Verificación post-instalación
 

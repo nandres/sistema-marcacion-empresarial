@@ -75,7 +75,25 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             )
     finally:
         db.cerrar()
-    yield
+    # El bus de alertas vive en la memoria de un worker y el servidor corre
+    # con varios: sin esta escucha, una alerta publicada en uno no llega a los
+    # WebSockets conectados a los otros.
+    escucha = notifications.EscuchaAlertas(_conexion_de_escucha)
+    escucha.start()
+    try:
+        yield
+    finally:
+        escucha.detener()
+
+
+def _conexion_de_escucha() -> Optional[database.Database]:
+    """Conexión propia del hilo que escucha el canal de alertas."""
+    try:
+        db = database.Database()
+        db.connect()
+        return db
+    except Exception:
+        return None
 
 
 app = FastAPI(

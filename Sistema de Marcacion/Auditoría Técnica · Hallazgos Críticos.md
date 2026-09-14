@@ -356,13 +356,19 @@ Al recargar la página el script ya no sabe quién es —no puede leer la cookie
 
 `POST /api/login` no tiene *rate limiting* ni bloqueo progresivo. Doble consecuencia: fuerza bruta contra contraseñas de empleados (que en la práctica serán débiles), y **vector de DoS** — bcrypt es caro por diseño, así que un atacante satura la CPU con peticiones de login inválidas.
 
-### P3-4 · Las alertas en vivo solo llegan al 25 % de los clientes
+### P3-4 · Las alertas en vivo solo llegan al 25 % de los clientes ✅ corregido
 
 `src/notifications.py:54` → `BUS = BusAlertas()` es un pub/sub **en memoria del proceso**. El Dockerfile arranca `gunicorn -w 4`.
 
 Una alerta publicada en el worker 1 no alcanza a los WebSockets conectados a los workers 2, 3 y 4. El panel de RRHH pierde silenciosamente tres de cada cuatro alertas de fraude.
 
-**Corrección**: mover el bus a Redis Pub/Sub (o NOTIFY/LISTEN de PostgreSQL, ya que la dependencia existe).
+**Corrección aplicada**: `LISTEN`/`NOTIFY` de PostgreSQL, no Redis: la base ya es una dependencia del sistema, y una pieza de infraestructura más es una pieza más que instalar, monitorear y explicar en la puesta en marcha de cada cliente.
+
+Cada proceso levanta un hilo que escucha el canal `alertas_marcacion` y repite en su bus local lo que publicaron los demás. El aviso lleva solo el identificador y la empresa: el payload de `NOTIFY` tiene un tope de 8 kB y el detalle de una alerta no tiene ninguno, así que mandarlo entero funcionaría hasta el día en que alguien escriba una nota larga.
+
+El que publica también recibe su propio aviso, así que el bus recuerda los últimos identificadores que sacó y no los repite. Y la empresa viaja con la alerta: un canal compartido por toda la instalación es justamente donde se cruzarían dos clientes.
+
+**Verificado con un proceso de verdad.** La primera versión de la prueba publicaba la alerta desde el mismo proceso que escuchaba: pasaba en verde aunque el canal no existiera, porque el bus local ya la entregaba por su cuenta. Ahora el emisor es un subproceso.
 
 ### P3-5 · Una excepción envenena toda la petición ✅ corregido
 

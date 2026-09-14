@@ -1521,6 +1521,20 @@ class PanelGestion(ctk.CTkFrame):
             pestana.grid_remove()
         self._revision_alertas()
         notifications.BUS.suscribir(self._alerta_entrante)
+        # El escritorio también escucha el canal: una alerta que nace en el
+        # servidor web tiene que encender la campana del panel de gestión.
+        self._escucha = notifications.EscuchaAlertas(self._conexion_de_escucha)
+        self._escucha.start()
+
+    @staticmethod
+    def _conexion_de_escucha():
+        """Conexión propia del hilo que escucha el canal de alertas."""
+        try:
+            db = Database()
+            db.connect()
+            return db
+        except Exception:
+            return None
 
     def _revision_alertas(self) -> None:
         """Revisa alertas no leídas y activa el parpadeo de la campana."""
