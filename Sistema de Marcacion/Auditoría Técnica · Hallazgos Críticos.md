@@ -315,7 +315,7 @@ Tampoco hay política de retención: la foto sobrevive a la baja del empleado.
 
 Sigue pendiente lo de fondo del reconocimiento: LBPH no tiene prueba de vida y una foto en la pantalla de un celular pasa la verificación.
 
-### P3-2 · El token viaja en la query string
+### P3-2 · El token viaja en la query string ✅ corregido
 
 `src/web_server.py:465` y `:726` — la descarga de PDF pasa el JWT como parámetro de URL:
 
@@ -324,6 +324,12 @@ window.open('/api/permiso/' + id + '/pdf?token=' + encodeURIComponent(obtenerTok
 ```
 
 El token queda en los logs de acceso del servidor, en el historial del navegador y en la cabecera `Referer` hacia cualquier recurso externo. Mismo problema en el WebSocket (`/ws/alertas?token=`).
+
+**Corrección aplicada**: la descarga de PDF ya usaba `fetch` con la cabecera `Authorization` y un blob. Lo que quedaba era el WebSocket, y ahí el navegador no puede poner cabeceras en el saludo: la sesión pasó a una cookie `HttpOnly`, `SameSite=Strict`, que el navegador manda sola en el handshake.
+
+Eso cierra de paso el otro punto de la lista: el token ya no vive en `localStorage`, donde lo alcanzaba cualquier script que llegara a correr. `SameSite=Strict` es lo que reemplaza a la inmunidad natural del Bearer frente a CSRF: el navegador no manda la cookie en peticiones que nacen de otro sitio. La cabecera `Authorization` se sigue aceptando para los clientes que no son un navegador.
+
+Al recargar la página el script ya no sabe quién es —no puede leer la cookie—, así que lo pregunta: `GET /api/sesion`. Y el cierre necesita un endpoint propio (`POST /api/logout`), porque una cookie `HttpOnly` la borra el servidor y no el navegador.
 
 **Corrección**: cookie `HttpOnly` + `Secure` + `SameSite=Strict`, que además cierra el vector de robo por XSS del P0-3.
 

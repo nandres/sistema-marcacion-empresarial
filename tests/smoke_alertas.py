@@ -20,7 +20,7 @@ print("publicar sin token", r4.status_code)
 r5 = c.post("/api/alertas", json={"tipo": "test", "severidad": "alta", "mensaje": "alerta publicada", "detalle": "desde api"}, headers={"Authorization": f"Bearer {token}"})
 print("publicar con token", r5.status_code, r5.json()["id"])
 
-with c.websocket_connect("/ws/alertas?token=" + token) as ws:
+with c.websocket_connect("/ws/alertas", cookies={"marcacion_sesion": token}) as ws:
     m = ws.receive_json()
     print("ws primer mensaje:", m["mensaje"])
     ws.send_text("ping")
@@ -47,7 +47,8 @@ r7 = c.post(
 )
 print("publicar como Empleado (espera 403):", r7.status_code)
 assert r7.status_code == 403, f"un Empleado pudo publicar una alerta: {r7.status_code}"
-with c.websocket_connect("/ws/alertas?token=" + token_juan) as ws:
+with c.websocket_connect("/ws/alertas",
+                         cookies={"marcacion_sesion": token_juan}) as ws:
     m = ws.receive_json()
     print("ws juan recibió:", m["mensaje"], "usuario_id", m.get("usuario_id"))
 

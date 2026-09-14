@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 import jwt
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -144,61 +145,103 @@ def _cliente_de(usuario: Dict[str, Any]) -> database.Database:
     return _cliente(usuario["empresa_id"])
 
 
-def _usuario_autenticado(
-    authorization: Optional[str] = Header(None),
-) -> Dict[str, Any]:
-    """Extrae y valida el Bearer Token, devolviendo el usuario autenticado."""
-    if not authorization or not authorization.lower().startswith("bearer "):
+COOKIE_SESION: str = "marcacion_sesion"
+"""Nombre de la cookie de sesión del navegador.
+
+El token dejó de viajar en la URL del WebSocket y dejó de guardarse en
+`localStorage`. En la URL quedaba escrito en los logs de acceso del servidor,
+en el historial del navegador y en la cabecera `Referer` hacia cualquier
+recurso externo; en `localStorage` lo alcanza cualquier script que llegue a
+correr en la página.
+
+La cookie es `HttpOnly` —ningún script la lee— y `SameSite=Strict`, que es lo
+que la vuelve inmune a CSRF: el navegador no la manda en peticiones que nacen
+de otro sitio. El encabezado `Authorization` se sigue aceptando para los
+clientes que no son un navegador.
+"""
+
+
+def _asegurada(request: Request) -> bool:
+    """Indica si la cookie puede marcarse ``Secure`` sin romper el acceso.
+
+    Sobre HTTP plano una cookie ``Secure`` no se guarda y nadie entraría. Se
+    marca cuando la conexión es HTTPS, contemplando el encabezado que pone el
+    proxy de las plataformas cloud, que son las que terminan el TLS.
+    """
+    if request.url.scheme == "https":
+        return True
+    return request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
+
+
+def _abrir_sesion(respuesta: Response, request: Request, token: str) -> None:
+    """Deja la sesión del navegador en una cookie que ningún script puede leer."""
+    respuesta.set_cookie(
+        COOKIE_SESION,
+        token,
+        max_age=auth.JWT_EXPIRACION_HORAS * 3600,
+        httponly=True,
+        samesite="strict",
+        secure=_asegurada(request),
+        path="/",
+    )
+
+
+def _cerrar_sesion(respuesta: Response) -> None:
+    """Borra la cookie de sesión."""
+    respuesta.delete_cookie(COOKIE_SESION, path="/", samesite="strict")
+
+
+def _token_de(request: Request, authorization: Optional[str]) -> str:
+    """Toma el token del encabezado o, si no viene, de la cookie de sesión.
+
+    El encabezado tiene prioridad porque es lo que usan los clientes que no
+    son un navegador (la suite de pruebas, un kiosco propio, una integración).
+    """
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip()
+    return request.cookies.get(COOKIE_SESION, "")
+
+
+def _usuario_del_token(token: str) -> Dict[str, Any]:
+    """Resuelve el usuario de un token firmado, o eleva 401.
+
+    La empresa sale del token y acota la búsqueda del propio usuario: si el
+    identificador y la empresa no se corresponden, el token no resuelve a
+    nadie en lugar de resolver a alguien de otro cliente.
+    """
+    sin_sesion = HTTPException(
+        status_code=401,
+        detail="Sesión inválida o expirada.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if not token:
         raise HTTPException(
             status_code=401,
             detail="Se requiere un token de acceso.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = authorization.split(" ", 1)[1].strip()
-    claims = {}
     try:
         claims = auth.verificar_token_acceso(token)
     except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=401,
-            detail="Sesión inválida o expirada.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    # La empresa sale del token firmado y acota la búsqueda del propio
-    # usuario: si el identificador y la empresa no se corresponden, el token
-    # no resuelve a nadie en lugar de resolver a alguien de otro cliente.
+        raise sin_sesion
     db = _cliente(claims.get("emp"))
     try:
         usuario = db.get_user_by_id(int(claims["sub"]))
         if not usuario:
             raise ValueError("Usuario del token inexistente.")
         return usuario
-    except (jwt.InvalidTokenError, ValueError, KeyError):
-        raise HTTPException(
-            status_code=401,
-            detail="Sesión inválida o expirada.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    except (ValueError, KeyError):
+        raise sin_sesion
     finally:
         db.cerrar()
 
 
-def _usuario_por_token_query(token: str) -> Dict[str, Any]:
-    """Resuelve el usuario desde un token recibido por query string (PDFs)."""
-    try:
-        claims = auth.verificar_token_acceso(token)
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Sesión inválida o expirada.")
-    db = _cliente(claims.get("emp"))
-    try:
-        usuario = db.get_user_by_id(int(claims["sub"]))
-        if not usuario:
-            raise ValueError("Usuario del token inexistente.")
-        return usuario
-    except (jwt.InvalidTokenError, ValueError, KeyError):
-        raise HTTPException(status_code=401, detail="Sesión inválida o expirada.")
-    finally:
-        db.cerrar()
+def _usuario_autenticado(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Resuelve el usuario de la petición, por encabezado o por cookie."""
+    return _usuario_del_token(_token_de(request, authorization))
 
 
 def _alerta_json(alerta: Dict[str, Any]) -> Dict[str, Any]:
@@ -210,15 +253,18 @@ def _alerta_json(alerta: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @app.websocket("/ws/alertas")
-async def ws_alertas(websocket: WebSocket, token: str = "") -> None:
+async def ws_alertas(websocket: WebSocket) -> None:
     """Push en tiempo real: cada alerta publicada en el bus llega al cliente.
 
     Un empleado recibe solo sus propias alertas (marcación con incidencia);
     las alertas globales (cuota bloqueada, fraude) llegan a todos los
     conectados autenticados. Se entrega el historial no leído al conectar.
     """
+    # El navegador no puede poner encabezados en el saludo de un WebSocket,
+    # así que acá la cookie es el único camino: es justamente lo que reemplaza
+    # al token en la URL, que quedaba escrito en los logs del servidor.
     try:
-        usuario = _usuario_por_token_query(token)
+        usuario = _usuario_del_token(websocket.cookies.get(COOKIE_SESION, ""))
     except HTTPException:
         await websocket.close(code=4401)
         return
@@ -365,8 +411,15 @@ def _limpiar_freno(request: Request, cedula: str) -> None:
 
 
 @app.post("/api/login")
-def api_login(payload: LoginRequest, request: Request) -> Dict[str, Any]:
-    """Valida credenciales con bcrypt y emite el JWT de acceso."""
+def api_login(
+    payload: LoginRequest, request: Request, respuesta: Response
+) -> Dict[str, Any]:
+    """Valida credenciales con bcrypt y abre la sesión.
+
+    Devuelve el token para los clientes que no son un navegador y además lo
+    deja en una cookie ``HttpOnly``: en el navegador el token no vuelve a
+    pasar por JavaScript ni por ninguna URL.
+    """
     cedula = payload.cedula.strip()
     _frenar(request, cedula)
     db = _cliente()
@@ -378,12 +431,46 @@ def api_login(payload: LoginRequest, request: Request) -> Dict[str, Any]:
         _limpiar_freno(request, cedula)
         rol = auth.get_role_name(db, user)
         token = auth.crear_token_acceso(user["id"], rol, user["empresa_id"])
+        _abrir_sesion(respuesta, request, token)
         return {
             "token": token,
             "rol": rol,
             "nombre": user["full_name"],
             "empresa": user.get("empresa_nombre", ""),
             "vigencia_horas": auth.JWT_EXPIRACION_HORAS,
+        }
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/logout")
+def api_logout(respuesta: Response) -> Dict[str, str]:
+    """Cierra la sesión borrando la cookie.
+
+    Hace falta un endpoint porque la cookie es ``HttpOnly``: el navegador no
+    puede borrarla por su cuenta, que es exactamente la propiedad que la
+    protege de un script inyectado.
+    """
+    _cerrar_sesion(respuesta)
+    return {"mensaje": "Sesión cerrada."}
+
+
+@app.get("/api/sesion")
+def api_sesion(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Quién es el usuario de la sesión en curso.
+
+    Con la sesión en una cookie que ningún script lee, al recargar la página
+    el navegador no sabe quién es: lo pregunta acá.
+    """
+    db = _cliente_de(usuario)
+    try:
+        empresa = db.get_empresa(usuario["empresa_id"])
+        return {
+            "nombre": usuario["full_name"],
+            "rol": usuario["role_name"],
+            "empresa": empresa["razon_social"] if empresa else "",
         }
     finally:
         db.cerrar()

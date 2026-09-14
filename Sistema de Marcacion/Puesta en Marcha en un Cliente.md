@@ -113,7 +113,6 @@ Decirlo por adelantado evita una venta mal hecha.
 | --- | --- | --- |
 | **Prueba de vida en el reconocimiento facial** | Una foto en la pantalla de un celular pasa la verificación | P1-2, parte de fondo |
 | **Bus de alertas fuera del proceso** | Con varios workers, una alerta en vivo llega solo a los clientes conectados a ese worker | P3-4 |
-| **Cookie `HttpOnly` para la sesión** | El token vive en `localStorage` | P3-2 |
 | **Pool de conexiones** | Cada petición abre y cierra su conexión; irrelevante para una empresa, relevante para muchas | — |
 | **Calendario de rotación automática** | La rotación semana A / semana B se carga a mano, tramo por tramo | [[Turnos y Rotación de Horarios]] |
 

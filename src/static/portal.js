@@ -91,14 +91,17 @@
   function pedir(ruta, opciones) {
     opciones = opciones || {};
     var config = { method: opciones.metodo || "GET", headers: {} };
-    if (sesion.token) config.headers.Authorization = "Bearer " + sesion.token;
+    /* La sesión vive en una cookie HttpOnly: el navegador la manda sola y
+       este script no puede leerla, que es justamente la idea. `same-origin`
+       se declara igual para no depender del valor por omisión. */
+    config.credentials = "same-origin";
     if (opciones.cuerpo !== undefined) {
       config.headers["Content-Type"] = "application/json";
       config.body = JSON.stringify(opciones.cuerpo);
       config.method = opciones.metodo || "POST";
     }
     return fetch(ruta, config).then(function (respuesta) {
-      if (respuesta.status === 401 && sesion.token) {
+      if (respuesta.status === 401 && sesion.activa) {
         cerrarSesion("Tu sesión expiró. Ingresá de nuevo.");
         return Promise.reject(new Error("sesion"));
       }
@@ -116,7 +119,7 @@
   /* Los PDF se descargan con el token en la cabecera y no en la URL: así no
      quedan credenciales en los registros del servidor ni en el historial. */
   function descargarPdf(ruta, nombre) {
-    return fetch(ruta, { headers: { Authorization: "Bearer " + sesion.token } })
+    return fetch(ruta, { credentials: "same-origin" })
       .then(function (r) {
         if (!r.ok) throw new Error("No se pudo generar el documento.");
         return r.blob();
@@ -272,14 +275,10 @@
       return;
     }
     pedir("/api/login", { cuerpo: cuerpo }).then(function (datos) {
-      sesion.token = datos.token;
+      sesion.activa = true;
       sesion.rol = datos.rol;
       sesion.nombre = datos.nombre;
       sesion.empresa = datos.empresa;
-      almacenar("marcacion_jwt", datos.token);
-      almacenar("marcacion_rol", datos.rol);
-      almacenar("marcacion_nombre", datos.nombre);
-      almacenar("marcacion_empresa", datos.empresa);
       $("a-clave").value = "";
       entrarALaApp();
     }).catch(function (error) {
@@ -300,12 +299,13 @@
   }
 
   function cerrarSesion(mensaje) {
-    sesion.token = sesion.rol = sesion.nombre = sesion.resumen = null;
+    sesion.activa = false;
+    sesion.rol = sesion.nombre = sesion.resumen = null;
     sesion.empresa = null;
-    almacenar("marcacion_jwt", null);
-    almacenar("marcacion_rol", null);
-    almacenar("marcacion_nombre", null);
-    almacenar("marcacion_empresa", null);
+    /* La cookie es HttpOnly: este script no puede borrarla y el servidor sí.
+       El aviso se muestra igual aunque la llamada falle. */
+    fetch("/api/logout", { method: "POST", credentials: "same-origin" })
+      .catch(function () { /* la sesión ya no sirve de todos modos */ });
     if (sesion.socket) { sesion.socket.onclose = null; sesion.socket.close(); sesion.socket = null; }
     mostrar("acceso");
     if (mensaje) avisar("a-aviso", mensaje);
@@ -1720,11 +1720,11 @@
   }
 
   function conectarAlertas() {
-    if (!sesion.token) return;
+    if (!sesion.activa) return;
     if (sesion.socket) { sesion.socket.onclose = null; sesion.socket.close(); }
     var protocolo = location.protocol === "https:" ? "wss://" : "ws://";
     sesion.socket = new WebSocket(
-      protocolo + location.host + "/ws/alertas?token=" + encodeURIComponent(sesion.token)
+      protocolo + location.host + "/ws/alertas"
     );
     sesion.socket.onmessage = function (evento) {
       var alerta;
@@ -1732,7 +1732,7 @@
       notificar(alerta.mensaje, alerta.detalle, alerta.severidad);
     };
     sesion.socket.onclose = function () {
-      if (sesion.token) setTimeout(conectarAlertas, 5000);
+      if (sesion.activa) setTimeout(conectarAlertas, 5000);
     };
   }
 
@@ -1828,12 +1828,18 @@
     cargarCondicionDia();
     setInterval(cargarCondicionDia, 300000);
 
-    sesion.token = recuperar("marcacion_jwt");
-    sesion.rol = recuperar("marcacion_rol");
-    sesion.nombre = recuperar("marcacion_nombre");
-    sesion.empresa = recuperar("marcacion_empresa");
-    if (sesion.token) entrarALaApp();
-    else mostrar("kiosco");
+    /* Ya no hay token guardado que mirar: la sesión está en una cookie que
+       este script no puede leer, así que al recargar se le pregunta al
+       servidor quién es. Mientras responde se muestra el kiosco, que es lo
+       que corresponde si no hay sesión. */
+    mostrar("kiosco");
+    pedir("/api/sesion").then(function (datos) {
+      sesion.activa = true;
+      sesion.rol = datos.rol;
+      sesion.nombre = datos.nombre;
+      sesion.empresa = datos.empresa;
+      entrarALaApp();
+    }).catch(function () { /* sin sesión: el kiosco ya está a la vista */ });
   }
 
   if (document.readyState === "loading") {

@@ -132,6 +132,7 @@ jobs:
           timeout 25 python src/web_server.py &
           sleep 6
           WEB_BASE=http://127.0.0.1:8000 python tests/smoke_web_panel.py
+          WEB_BASE=http://127.0.0.1:8000 python tests/test_sesion_cookie.py
 
       - name: GUI login / cambio de clave / temas (pantalla virtual)
         run: xvfb-run -a python tests/smoke_login.py

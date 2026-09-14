@@ -191,6 +191,7 @@ python tests/test_turnos.py          # Horarios por empleado, rotación, jornada
 python tests/guardia_arrendamiento.py  # Ninguna consulta de datos de cliente sin acotar
 python tests/test_multiempresa.py    # Dos clientes alojados: ningún dato cruzado
 python tests/test_cola_firmada.py    # La cola offline rechaza marcas fabricadas a mano
+python tests/test_sesion_cookie.py   # Sesión en cookie HttpOnly: ni en la URL ni en localStorage
 python tests/test_antiguedad_y_bajas.py  # Antigüedad desde el contrato y baja lógica
 python tests/test_seguridad_datos.py # Biometría cifrada y freno de intentos fallidos
 python tests/validar_art14.py        # Límites de cuota y usos del Art. 14
