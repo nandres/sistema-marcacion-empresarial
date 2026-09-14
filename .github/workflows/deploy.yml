@@ -76,6 +76,15 @@ jobs:
       - name: Formularios automáticos · planilla de extras y constancia
         run: python tests/test_planilla_extras.py
 
+      - name: Turno nocturno y jornadas sin cierre (P2-2, P2-6)
+        run: python tests/test_turno_nocturno.py
+
+      - name: Antigüedad desde el contrato y baja lógica (P3-6)
+        run: python tests/test_antiguedad_y_bajas.py
+
+      - name: Biometría cifrada y freno de intentos (P3-1, P3-3)
+        run: python tests/test_seguridad_datos.py
+
       - name: Reglas Art. 14 y reglamento (headless)
         run: |
           python tests/validar_art14.py

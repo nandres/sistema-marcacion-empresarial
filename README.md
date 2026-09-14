@@ -27,6 +27,8 @@ Ambas interfaces comparten un lenguaje visual llamado **Planilla**, tomado del o
 
 *   **Kiosco de Escritorio:** `CustomTkinter` con gráficos en vivo por `matplotlib`, temas claro/oscuro y paleta tokenizada.
 *   **Web (Kiosco + Portal + Gestión):** `FastAPI` + `WebSockets` sirviendo una interfaz en archivos propios (`src/static`). El portal del empleado se ordena por lo que la persona realmente pregunta: **si marcó hoy**, cómo viene el mes en un registro día por día, cuántos días le quedan, y un pedido de corrección que nace desde el día que se toca. El panel de RRHH abre por **excepción** —lo que está sin resolver— y no por contadores de plantilla.
+*   **Turnos reales:** un turno que entra un día y sale al siguiente se cierra normalmente —la acción se decide por el estado del empleado, no por el calendario— y una entrada que nadie cerró no lo deja trabado: pasadas 18 horas se marca como sin cierre, se avisa a Recursos Humanos y la hora se repone por el circuito de correcciones.
+*   **Legajo con historia:** la antigüedad sale de la **fecha de ingreso del contrato**, de la que dependen los días de vacaciones y los meses de aguinaldo. La baja es lógica: el empleado pierde el acceso y sale de la nómina, pero sus marcajes y comprobantes se conservan para el archivo laboral.
 *   **Autoservicio real:** el empleado pide cualquiera de los **32 artículos** del reglamento desde el portal, con su saldo y sus condiciones a la vista; el pedido se valida contra el artículo invocado antes de guardarse y una solicitud pendiente ya compromete la cuota. Aprobar emite la justificación y su PDF sin ningún paso extra. La **planilla de horas extraordinarias** (Art. 232/233/234) y la **constancia de asistencia** se componen solas desde los marcajes liquidados: ningún formulario se llena a mano.
 
 ### Backend, Datos y Resiliencia
@@ -34,7 +36,7 @@ Ambas interfaces comparten un lenguaje visual llamado **Planilla**, tomado del o
 *   **Arquitectura Tolerante a Fallos:** Si el servidor central PostgreSQL no responde, `offline_queue.py` captura localmente las marcas en `SQLite`. El componente `sync_worker.py` procesa la cola de fondo de manera **idempotente** (vía `sync_id` único), preservando el *timestamp* original de la marca sin duplicar registros.
 
 ### Hardware & Visión Artificial
-*   **Validación Biométrica:** Integración directa por protocolo `TCP/IP` (Puerto 4370) con relojes biométricos `ZKTeco` para sincronización de personal.
+*   **Validación Biométrica:** Integración directa por protocolo `TCP/IP` (Puerto 4370) con relojes biométricos `ZKTeco` para sincronización de personal. Las plantillas faciales se guardan **cifradas con AES-256-GCM** y se destruyen con la baja del empleado, conforme a la Ley N.º 6534/2020 de protección de datos personales.
 *   **Seguridad y Auditoría:** Validación facial integrada con `OpenCV` (algoritmo LBPH) con **tres veredictos**, no dos. Un rostro que no coincide bloquea siempre y dispara una alerta de **FRAUDE**. Lo que el motor no puede verificar —sin foto de referencia, sin cámara— nunca se da por verificado: según `BIOMETRIA_OBLIGATORIA`, se bloquea o se registra en `marcajes.verificacion_facial` como *No verificada* con aviso a RRHH.
 
 ---
@@ -103,6 +105,12 @@ COMPROBANTE_CLAVE=clave_firma_comprobantes
 # apagada: una plantilla recién migrada no tiene fotos cargadas.
 BIOMETRIA_OBLIGATORIA=0
 
+# Cifra las plantillas faciales en reposo (Ley 6534/2020). Si se pierde,
+# las fotos registradas quedan ilegibles y hay que volver a tomarlas.
+# Generar con:
+#   python -c "import sys; sys.path.insert(0,'src'); import biometria; print(biometria.generar_clave())"
+BIOMETRIA_CLAVE=clave_de_32_bytes_en_base64
+
 # Opcionales
 SMTP_HOST=smtp.tuproveedor.com   # Notificaciones por correo
 SMTP_PORT=587
@@ -151,6 +159,9 @@ python tests/test_paleta.py          # Contraste WCAG, paridad web/escritorio y 
 python tests/test_condicion_dia.py   # Antifraude: la tolerancia la declara RRHH, no el empleado
 python tests/smoke_permisos_autoservicio.py  # Pedido, cuota reservada, aprobación y PDF
 python tests/test_planilla_extras.py # Planilla de horas extra y constancia de asistencia
+python tests/test_turno_nocturno.py  # Turnos que cruzan la medianoche y jornadas sin cierre
+python tests/test_antiguedad_y_bajas.py  # Antigüedad desde el contrato y baja lógica
+python tests/test_seguridad_datos.py # Biometría cifrada y freno de intentos fallidos
 python tests/validar_art14.py        # Límites de cuota y usos del Art. 14
 python tests/validar_reglamento.py   # Catálogo y cuotas de permisos por reglamento
 python tests/smoke_sync.py           # Motor offline/online transaccional

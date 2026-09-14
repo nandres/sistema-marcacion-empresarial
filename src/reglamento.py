@@ -468,6 +468,26 @@ def _vacaciones_funcionario(antiguedad_anios: float) -> int:
     return 30
 
 
+def fecha_ingreso(user: Dict[str, Any]) -> date:
+    """Fecha desde la que se cuenta la antigüedad del empleado.
+
+    Es la del contrato (``fecha_ingreso``) y no la del alta en el sistema:
+    al migrar una plantilla, ``created_at`` es el día de la migración y
+    dejaría a todo el mundo con cero años de servicio, o sea con 12 días de
+    vacaciones en lugar de los 20 o 30 que le corresponden. El respaldo
+    sobre ``created_at`` cubre a los registros anteriores a la columna.
+    """
+    contrato = user.get("fecha_ingreso")
+    if contrato:
+        return contrato if isinstance(contrato, date) else date.fromisoformat(str(contrato))
+    return user["created_at"].date()
+
+
+def antiguedad_anios(user: Dict[str, Any], hoy: Optional[date] = None) -> float:
+    """Años de servicio cumplidos a la fecha indicada."""
+    return ((hoy or date.today()) - fecha_ingreso(user)).days / 365.25
+
+
 def articulos_aplicables(vinculo: str) -> List[Dict[str, Any]]:
     """Devuelve los artículos del reglamento que aplican a un vínculo."""
     vinculo = vinculo or "Funcionario"
@@ -541,10 +561,8 @@ def disponibilidad_permisos(
     """
     hoy = fecha or date.today()
     vinculo = user.get("tipo_vinculo") or "Funcionario"
-    antiguedad = (hoy - user["created_at"].date()).days / 365.25
-    todas = [
-        j for j in db.list_justificaciones() if j["usuario_id"] == user["id"]
-    ]
+    antiguedad = antiguedad_anios(user, hoy)
+    todas = db.list_justificaciones(user["id"])
     try:
         pendientes_usuario = db.listar_solicitudes_permiso(
             user["id"], solo_pendientes=True

@@ -150,6 +150,19 @@ El rediseño de la fase 14 arregló la **jerarquía** pero conservó la **forma*
 
 **Cobertura nueva**: `test_condicion_dia.py` (P1-1 en motor, API e interfaces), `smoke_permisos_autoservicio.py` (ciclo completo y cuota reservada) y `test_planilla_extras.py` (detalle, totales y liquidación). `smoke_facial.py` reescrito para los tres estados. La suite pasó de 11 a 14 conjuntos.
 
+### 17. Endurecimiento para operación y venta
+*2026-09-14 · cierre de siete hallazgos*
+
+**Lo que trababa la operación.** `detectar_accion_hoy` decidía por calendario, así que un turno que entraba el lunes 22:00 y salía el martes 06:00 dejaba al empleado sin poder marcar nada (P2-2); y una entrada sin cierre lo bloqueaba para siempre (P2-6). Ahora la decisión mira el estado real y las entradas vencidas pasan a *abandonadas* con aviso a RRHH, sin inventar la hora de salida. Además `_execute` deshace la transacción ante un error (P3-5): antes una consulta fallida dejaba la conexión inservible para todo lo que viniera después.
+
+**Lo que costaba dinero.** La antigüedad se contaba desde el alta en el sistema (P3-6), así que migrar una plantilla dejaba a todos con cero años de servicio: 12 días de vacaciones en lugar de 20 o 30. Ahora hay `users.fecha_ingreso` y un único resolutor. Se sumó la **baja lógica**, que faltaba: antes solo existía el borrado, y borrar a quien se va destruye el respaldo de las liquidaciones que ya se le pagaron.
+
+**Lo legal para vender.** La plantilla facial se guardaba en `BYTEA` plano; bajo la Ley 6534/2020 es dato de categoría especial (P3-1). Ahora va cifrada con AES-256-GCM, con la clave fuera de la base, ligada al empleado como dato autenticado y destruida con la baja. El login no tenía límite de intentos (P3-3) y el contenedor corría como root (P3-11).
+
+**Lo que atajó la verificación**: `smoke_web_panel` falló contra un usuario con varias entradas trabadas y destapó que el descarte liberaba solo la última. También reveló que ese bloque de la prueba nunca se había ejecutado: esperaba `"Entrada"` capitalizado cuando la API siempre devolvió `"ENTRADA"`.
+
+**Cobertura nueva**: `test_turno_nocturno.py`, `test_antiguedad_y_bajas.py` y `test_seguridad_datos.py`. La suite pasó de 14 a 17 conjuntos.
+
 ## Cómo ejecutar
 
 | Componente | Comando |

@@ -302,7 +302,8 @@
     en_curso: "Jornada en curso",
     cerrada: "Jornada completa",
     sin_marcar: "Todavía no marcaste",
-    descanso: "Día de descanso"
+    descanso: "Día de descanso",
+    sin_cierre: "Tu jornada quedó sin cerrar"
   };
 
   function pintarParte(hoy) {
@@ -311,6 +312,9 @@
       detalle = "Entrada registrada a las " + esc(hoy.entrada) + " · sin salida";
     } else if (hoy.estado === "cerrada") {
       detalle = "Entrada " + esc(hoy.entrada) + " · salida " + esc(hoy.salida);
+    } else if (hoy.estado === "sin_cierre") {
+      detalle = "Entraste a las " + esc(hoy.entrada) +
+        " y no quedó registrada tu salida. Pedí la corrección desde el día.";
     } else if (hoy.estado === "descanso") {
       detalle = "No corresponde marcar. Si trabajás, se liquida con recargo del 100 %.";
     } else {
@@ -345,7 +349,8 @@
 
   var NOVEDAD = {
     tardanza: "Tardanza", ausente: "Sin marcar", justificado: "Justificado",
-    descanso: "Descanso", en_curso: "En curso", normal: "", futuro: ""
+    descanso: "Descanso", en_curso: "En curso", sin_cierre: "Sin cierre",
+    normal: "", futuro: ""
   };
 
   /* El mes se lee como una planilla: una fila por día, la novedad al margen
@@ -691,7 +696,8 @@
 
   var ETIQUETA_DIA = {
     normal: "Normal", tardanza: "Llegada tardía", ausente: "Sin marcar",
-    justificado: "Justificado", descanso: "Descanso", en_curso: "En curso", futuro: "Pendiente"
+    justificado: "Justificado", descanso: "Descanso", en_curso: "En curso",
+    sin_cierre: "Salida no registrada", futuro: "Pendiente"
   };
 
   function abrirDia(fecha) {
@@ -1065,29 +1071,37 @@
   function pintarPersonal(editando) {
     var filas = sesion.personal.map(function (p) {
       if (p.id === editando) {
-        return '<tr><td colspan="5"><div class="rejilla-campos">' +
+        return '<tr><td colspan="6"><div class="rejilla-campos">' +
           '<div><label>Nombre</label><input id="e-nombre" value="' + esc(p.full_name) + '"></div>' +
           "<div><label>Rol</label><select id=\"e-rol\">" + opciones(sesion.roles, p.role_name) + "</select></div>" +
           "<div><label>Vínculo</label><select id=\"e-vinculo\">" +
             opciones(["Funcionario", "Pasante"], p.tipo_vinculo) + "</select></div>" +
           '<div><label>Salario mensual</label><input id="e-salario" type="number" min="0" step="100000" value="' +
             esc(p.salario_mensual || 0) + '"></div>' +
+          '<div><label>Fecha de ingreso</label><input id="e-ingreso" type="date" value="' +
+            esc(p.fecha_ingreso || "") + '"></div>' +
           '<div><label>Nueva contraseña</label><input id="e-clave" type="password" placeholder="dejar vacío = sin cambio"></div>' +
           '</div><div class="acciones fin" style="margin-top:14px">' +
             '<button class="btn-suave btn-chico" data-cancelar="1">Cancelar</button>' +
             '<button class="btn-chico" data-guardar="' + esc(p.id) + '">Guardar</button>' +
           "</div></td></tr>";
       }
-      return "<tr><td><b>" + esc(p.full_name) + "</b><br>" +
-        '<span class="apunte">' + esc(p.username) + "</span></td>" +
+      var baja = p.activo === false;
+      return '<tr' + (baja ? ' class="futuro"' : "") + "><td><b>" + esc(p.full_name) + "</b>" +
+        (baja ? ' <span class="sello t-ausente">Baja ' + esc(p.fecha_baja || "") + "</span>" : "") +
+        '<br><span class="apunte">' + esc(p.username) + "</span></td>" +
         "<td>" + esc(p.role_name) + "</td>" +
         "<td>" + esc(p.tipo_vinculo || "—") + "</td>" +
+        '<td class="num">' + esc(p.fecha_ingreso || "—") + "</td>" +
         '<td class="num">' + esc(guaranies(p.salario_mensual)) + "</td>" +
         '<td><div class="acciones fin">' +
-          '<button class="btn-suave btn-chico" data-extras="' + esc(p.id) +
-            '" data-nombre="' + esc(p.username) + '">Extras</button>' +
-          '<button class="btn-suave btn-chico" data-editar="' + esc(p.id) + '">Editar</button>' +
-          '<button class="btn-riesgo btn-chico" data-borrar="' + esc(p.id) + '">Eliminar</button>' +
+          (baja
+            ? '<button class="btn-suave btn-chico" data-reincorporar="' + esc(p.id) +
+              '">Reincorporar</button>'
+            : '<button class="btn-suave btn-chico" data-extras="' + esc(p.id) +
+              '" data-nombre="' + esc(p.username) + '">Extras</button>' +
+              '<button class="btn-suave btn-chico" data-editar="' + esc(p.id) + '">Editar</button>' +
+              '<button class="btn-riesgo btn-chico" data-baja="' + esc(p.id) + '">Dar de baja</button>') +
         "</div></td></tr>";
     }).join("");
 
@@ -1101,12 +1115,13 @@
           "<div><label>Vínculo</label><select id=\"n-vinculo\">" +
             opciones(["Funcionario", "Pasante"], "Funcionario") + "</select></div>" +
           '<div><label>Salario mensual</label><input id="n-salario" type="number" min="0" step="100000" value="0"></div>' +
+          '<div><label>Fecha de ingreso</label><input id="n-ingreso" type="date" value="' + iso(new Date()) + '"></div>' +
         "</div>" +
         '<div class="acciones fin" style="margin-top:16px"><button id="n-crear">Crear empleado</button></div>' +
         '<div id="n-aviso"></div></div>' +
       '<div class="bloque"><div class="rubro"><h3>Personal registrado</h3></div>' +
         '<div class="marco"><table><thead><tr><th>Nombre</th><th>Rol</th><th>Vínculo</th>' +
-        '<th class="num">Salario</th><th></th></tr></thead>' +
+        '<th class="num">Ingreso</th><th class="num">Salario</th><th></th></tr></thead>' +
         "<tbody>" + filas + "</tbody></table></div></div>";
     $("n-crear").addEventListener("click", crearPersonal);
   }
@@ -1118,7 +1133,8 @@
       full_name: $("n-nombre").value.trim(),
       role_name: $("n-rol").value,
       tipo_vinculo: $("n-vinculo").value,
-      salario_mensual: parseFloat($("n-salario").value) || 0
+      salario_mensual: parseFloat($("n-salario").value) || 0,
+      fecha_ingreso: $("n-ingreso").value || null
     };
     if (!cuerpo.username || !cuerpo.password || !cuerpo.full_name) {
       avisar("n-aviso", "Completá usuario, contraseña y nombre."); return;
@@ -1136,7 +1152,8 @@
       full_name: $("e-nombre").value.trim(),
       role_name: $("e-rol").value,
       tipo_vinculo: $("e-vinculo").value,
-      salario_mensual: parseFloat($("e-salario").value) || 0
+      salario_mensual: parseFloat($("e-salario").value) || 0,
+      fecha_ingreso: $("e-ingreso").value || null
     };
     if ($("e-clave").value) cuerpo.password = $("e-clave").value;
     pedir("/api/panel/personal/" + id, { cuerpo: cuerpo, metodo: "PUT" }).then(function () {
@@ -1145,6 +1162,38 @@
     }).catch(function (error) {
       if (error.message !== "sesion") notificar("No se pudo guardar", error.message, "alta");
     });
+  }
+
+  /* Dar de baja conserva el legajo; eliminar lo destruye. Son dos acciones
+     distintas y la que se ofrece en el panel es la primera. */
+  function confirmarBaja(id) {
+    var persona = sesion.personal.find(function (p) { return String(p.id) === String(id); });
+    abrirModal(
+      '<div class="modal-cabeza"><div><h2>Dar de baja a ' +
+        esc(persona ? persona.full_name : "") + "</h2>" +
+      '<p class="apunte">Pierde el acceso y sale de la nómina. Sus marcajes, ' +
+      "permisos y comprobantes se conservan para el archivo laboral.</p></div></div>" +
+      '<div class="acciones fin">' +
+        '<button class="btn-suave" data-cerrar="1">Cancelar</button>' +
+        '<button class="btn-riesgo" id="b-confirmar">Dar de baja</button>' +
+      "</div>"
+    );
+    $("b-confirmar").addEventListener("click", function () {
+      cerrarModal();
+      pedir("/api/panel/personal/" + id + "/baja", { cuerpo: {} })
+        .then(function (d) { notificar("Baja registrada", d.mensaje, "media"); cargarPersonal(); })
+        .catch(function (e) {
+          if (e.message !== "sesion") notificar("No se pudo dar de baja", e.message, "alta");
+        });
+    });
+  }
+
+  function reincorporar(id) {
+    pedir("/api/panel/personal/" + id + "/reincorporar", { cuerpo: {} })
+      .then(function (d) { notificar("Reincorporado", d.mensaje, "baja"); cargarPersonal(); })
+      .catch(function (e) {
+        if (e.message !== "sesion") notificar("No se pudo reincorporar", e.message, "alta");
+      });
   }
 
   function borrarPersonal(id) {
@@ -1298,10 +1347,13 @@
     var objetivo = evento.target.closest("[data-vista],[data-panel],[data-fecha],[data-pdf]," +
       "[data-pdf-panel],[data-cerrar],[data-reclamar],[data-aprobar],[data-rechazar]," +
       "[data-editar],[data-guardar],[data-borrar],[data-cancelar],[data-confirmar-borrado]," +
-      "[data-permiso-ok],[data-permiso-no],[data-revocar],[data-extras]");
+      "[data-permiso-ok],[data-permiso-no],[data-revocar],[data-extras]," +
+      "[data-baja],[data-reincorporar]");
     if (!objetivo) return;
     var d = objetivo.dataset;
 
+    if (d.baja) { confirmarBaja(d.baja); return; }
+    if (d.reincorporar) { reincorporar(d.reincorporar); return; }
     if (d.permisoOk) { resolverPermiso(d.permisoOk, true); return; }
     if (d.permisoNo) { rechazarPermiso(d.permisoNo); return; }
     if (d.revocar) { revocarCondicion(d.revocar); return; }

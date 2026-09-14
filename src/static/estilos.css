@@ -157,6 +157,7 @@ section { margin-bottom: 40px; }
 .parte.es-en_curso { border-top-color: var(--curso); }
 .parte.es-cerrada { border-top-color: var(--tinta); }
 .parte.es-sin_marcar { border-top-color: var(--tardanza); }
+.parte.es-sin_cierre { border-top-color: var(--ausente); }
 .parte.es-descanso { border-top-color: var(--regla-fuerte); }
 
 .parte-estado {
@@ -164,6 +165,7 @@ section { margin-bottom: 40px; }
 }
 .parte.es-en_curso .parte-estado { color: var(--curso); }
 .parte.es-sin_marcar .parte-estado { color: var(--tardanza); }
+.parte.es-sin_cierre .parte-estado { color: var(--ausente); }
 .parte-detalle { color: var(--tinta-media); font-size: .875rem; margin-top: 4px; }
 .parte-conteo { margin-left: auto; text-align: right; }
 .reloj { font-size: 2.125rem; font-weight: 500; letter-spacing: -.02em; line-height: 1; }
@@ -229,7 +231,7 @@ section { margin-bottom: 40px; }
   border-bottom: 1px solid currentColor; padding-bottom: 1px; white-space: nowrap;
 }
 .sello.t-tardanza { color: var(--tardanza); }
-.sello.t-ausente { color: var(--ausente); }
+.sello.t-ausente, .sello.t-sin_cierre { color: var(--ausente); }
 .sello.t-justificado { color: var(--justificado); }
 .sello.t-en_curso { color: var(--curso); }
 .sello.t-normal, .sello.t-descanso, .sello.t-futuro { border-bottom-color: transparent; }

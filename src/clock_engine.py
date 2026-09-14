@@ -66,6 +66,12 @@ TOLERANCIA_FUNCIONARIO: timedelta = timedelta(minutes=15)
 TOLERANCIA_CLIMATICA: timedelta = timedelta(minutes=30)
 MAX_TARDANZAS_PASANTE: int = 3
 
+# Más allá de este lapso una entrada sin salida deja de ser una jornada en
+# curso y pasa a ser un olvido. El techo cubre con holgura el turno legal más
+# largo (nocturno de 7 h) y cualquier extra razonable encima.
+MAX_JORNADA_ABIERTA: timedelta = timedelta(hours=18)
+INCIDENCIA_SIN_CIERRE: str = "Salida no registrada"
+
 FERIADOS_FIJOS: Tuple[Tuple[int, int, str], ...] = (
     (1, 1, "Año Nuevo"),
     (3, 1, "Día de los Héroes"),
@@ -455,6 +461,7 @@ class ClockEngine:
             Tupla con el identificador del marcaje y el instante exacto
             registrado (para el comprobante digital).
         """
+        self._descartar_jornadas_abandonadas()
         open_entry = self.db.get_open_entry(self.user["id"])
         if open_entry:
             raise ValueError("Ya hay una entrada abierta sin salida registrada.")
@@ -528,26 +535,57 @@ class ClockEngine:
             return " y ".join(p for p in (incidencia_entrada, "Salida Anticipada") if p)
         return incidencia_entrada
 
-    def detectar_accion_hoy(self) -> str:
-        """Detecta la acción automática del botón maestro consultando el día.
+    def _descartar_jornadas_abandonadas(self) -> List[Dict]:
+        """Saca del camino las entradas que superaron el máximo de jornada abierta.
 
-        Reglas de auto-detección basadas en PostgreSQL:
-        - Sin marcajes hoy: corresponde registrar la ``ENTRADA``.
-        - Con entrada abierta (hora_salida vacía): corresponde la ``SALIDA``,
-          que liquida los recargos de la Ley N.º 213.
-        - Jornada completa: se rechaza con error para evitar duplicados.
+        Si nadie marcó la salida, la hora no se puede inventar; pero dejar la
+        entrada abierta condenaba al empleado a que **todas** sus marcaciones
+        futuras fallaran con "Ya hay una entrada abierta". Se marcan como
+        abandonadas, se avisa a Recursos Humanos y el empleado vuelve a marcar
+        normalmente: la hora real se repone por el circuito de correcciones.
+
+        Returns:
+            Los marcajes descartados; lista vacía si no había ninguno vencido.
+        """
+        limite = ahora_local() - MAX_JORNADA_ABIERTA
+        vencidas = self.db.abandonar_jornadas_vencidas(
+            self.user["id"], limite, INCIDENCIA_SIN_CIERRE
+        )
+        if not vencidas:
+            return []
+        dias = ", ".join(
+            v["hora_entrada"].astimezone().strftime("%d/%m/%Y %H:%M") for v in vencidas
+        )
+        notifications.registrar_alerta(
+            self.db,
+            "jornada_sin_cierre",
+            "media",
+            f"{len(vencidas)} jornada(s) sin salida registrada de "
+            f"{self.user['full_name']}.",
+            f"Entradas sin cierre: {dias}. Corregir la salida desde el panel "
+            f"de gestión.",
+            usuario_id=self.user["id"],
+        )
+        return vencidas
+
+    def detectar_accion_hoy(self) -> str:
+        """Decide si corresponde ENTRADA o SALIDA según el estado del empleado.
+
+        La decisión mira el **estado real** y no el calendario: un turno que
+        entra el lunes a las 22:00 y sale el martes a las 06:00 no tiene
+        marcajes con fecha de martes, así que decidir por fecha respondía
+        ``ENTRADA`` y dejaba al empleado sin poder marcar ni la salida ni una
+        entrada nueva.
 
         Returns:
             ``ENTRADA`` o ``SALIDA`` según el estado actual del empleado.
         """
-        hoy = ahora_local().date()
-        registros = self.db.get_entries_by_date(self.user["id"], hoy)
-        if not registros:
-            return "ENTRADA"
-        abierto = next((r for r in registros if r["hora_salida"] is None), None)
-        if abierto is not None:
+        self._descartar_jornadas_abandonadas()
+        if self.db.get_open_entry(self.user["id"]) is not None:
             return "SALIDA"
-        raise ValueError("Ya registró su entrada y su salida de hoy.")
+        if self.db.get_entries_by_date(self.user["id"], ahora_local().date()):
+            raise ValueError("Ya registró su entrada y su salida de hoy.")
+        return "ENTRADA"
 
     def registrar_asistencia(
         self, verificacion_facial: str = "No verificada"

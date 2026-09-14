@@ -161,11 +161,17 @@ def require_role(db: Database, user: Dict, allowed_roles: tuple) -> str:
 
 
 def authenticate(db: Database, username: str, password: str) -> Optional[Dict]:
-    """Autentica credenciales contra el hash bcrypt de la base de datos."""
+    """Autentica credenciales contra el hash bcrypt de la base de datos.
+
+    Un empleado dado de baja no entra ni marca aunque su contraseña siga
+    siendo válida: la baja conserva el legajo, no el acceso.
+    """
     user = db.get_user_by_username(username)
-    if user and verify_password(password, user["password_hash"]):
-        return user
-    return None
+    if not user or not verify_password(password, user["password_hash"]):
+        return None
+    if user.get("activo") is False:
+        return None
+    return user
 
 
 def prompt_login(db: Database) -> Optional[Dict]:
@@ -179,7 +185,7 @@ def crear_primer_admin(
     db: Database, username: str, password: str, full_name: str
 ) -> int:
     """Crea el primer Administrador (bootstrap, solo con tabla de usuarios vacía)."""
-    if db.list_users():
+    if db.list_users(incluir_bajas=True):
         raise PermissionError("El administrador inicial ya fue creado.")
     role = db.get_role_by_name(ROLE_ADMIN)
     return db.create_user(username, hash_password(password), full_name, role["id"])
@@ -206,8 +212,13 @@ def create_user(
     role_name: str,
     salario_mensual: float = 0.0,
     tipo_vinculo: str = "Funcionario",
+    fecha_ingreso: Optional[Any] = None,
 ) -> int:
-    """Crea un usuario auditando la acción; solo el Admin asigna otro Admin."""
+    """Crea un usuario auditando la acción; solo el Admin asigna otro Admin.
+
+    ``fecha_ingreso`` es la del contrato: de ella dependen los días de
+    vacaciones y los meses de aguinaldo. Si se omite, se asume hoy.
+    """
     if role_name == ROLE_ADMIN:
         require_role(db, actor, (ROLE_ADMIN,))
     if tipo_vinculo not in TIPOS_VINCULO:
@@ -224,6 +235,7 @@ def create_user(
         role["id"],
         salario_mensual,
         tipo_vinculo,
+        fecha_ingreso,
     )
     db.registrar_auditoria(
         actor["id"],
@@ -236,6 +248,7 @@ def create_user(
             "role_id": role["id"],
             "salario_mensual": salario_mensual,
             "tipo_vinculo": tipo_vinculo,
+            "fecha_ingreso": str(fecha_ingreso) if fecha_ingreso else "hoy",
         },
     )
     return user_id
@@ -251,6 +264,7 @@ def update_user(
     role_name: Optional[str] = None,
     salario_mensual: Optional[float] = None,
     tipo_vinculo: Optional[str] = None,
+    fecha_ingreso: Optional[Any] = None,
 ) -> None:
     """Edita un usuario auditando los valores anterior y nuevo."""
     if role_name == ROLE_ADMIN:
@@ -275,6 +289,7 @@ def update_user(
         role_id=role_id,
         salario_mensual=salario_mensual,
         tipo_vinculo=tipo_vinculo,
+        fecha_ingreso=fecha_ingreso,
     )
     nuevos = _valores_auditoria(
         {
@@ -675,6 +690,67 @@ def declarar_condicion_dia(
         f"firmó {actor['full_name']}",
     )
     return fila
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def dar_de_baja(
+    db: Database, actor: Dict, user_id: int, fecha_baja: Optional[Any] = None
+) -> Dict[str, Any]:
+    """Da de baja a un empleado conservando su historial.
+
+    Es lo que corresponde cuando alguien deja la empresa: pierde el acceso y
+    sale de la nómina, pero sus marcajes, justificaciones y comprobantes
+    siguen existiendo. Borrarlo destruiría el respaldo de liquidaciones ya
+    pagadas, que es justo lo que un archivo laboral tiene que poder exhibir.
+    """
+    empleado = db.get_user_by_id(user_id)
+    if not empleado:
+        raise ValueError("El empleado no existe.")
+    if int(user_id) == int(actor["id"]):
+        raise ValueError("No podés darte de baja a vos mismo.")
+    if empleado.get("activo") is False:
+        raise ValueError(f"{empleado['full_name']} ya estaba dado de baja.")
+    baja = fecha_baja or datetime.now().date()
+    db.cambiar_estado_usuario(user_id, False, baja)
+    # La plantilla facial se conserva mientras hay una relación laboral que la
+    # justifique. Terminada la relación, el fin que legitimaba el tratamiento
+    # desaparece y el dato se destruye (Ley 6534/2020). El resto del legajo se
+    # conserva porque lo exige el archivo laboral.
+    biometria_borrada = db.tiene_foto(user_id)
+    if biometria_borrada:
+        db.eliminar_foto(user_id)
+    db.registrar_auditoria(
+        actor["id"], "BAJA", "users", user_id,
+        anterior={"activo": True},
+        nuevos={
+            "activo": False,
+            "fecha_baja": baja.isoformat(),
+            "biometria_eliminada": biometria_borrada,
+        },
+    )
+    return {
+        "id": user_id,
+        "nombre": empleado["full_name"],
+        "fecha_baja": baja,
+        "biometria_eliminada": biometria_borrada,
+    }
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def reincorporar(db: Database, actor: Dict, user_id: int) -> Dict[str, Any]:
+    """Reincorpora a un empleado dado de baja, devolviéndole el acceso."""
+    empleado = db.get_user_by_id(user_id)
+    if not empleado:
+        raise ValueError("El empleado no existe.")
+    if empleado.get("activo") is not False:
+        raise ValueError(f"{empleado['full_name']} ya está activo.")
+    db.cambiar_estado_usuario(user_id, True)
+    db.registrar_auditoria(
+        actor["id"], "REINCORPORAR", "users", user_id,
+        anterior={"activo": False},
+        nuevos={"activo": True},
+    )
+    return {"id": user_id, "nombre": empleado["full_name"]}
 
 
 @autorizado(ROLE_ADMIN,)

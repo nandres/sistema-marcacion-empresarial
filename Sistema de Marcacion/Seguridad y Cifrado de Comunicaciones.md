@@ -88,6 +88,36 @@ Lo que esta nota afirma y el código no sostiene, ordenado por gravedad:
 4. *Rate limiting* en autenticación.
 5. Cifrado de la columna biométrica con clave gestionada fuera de la base.
 
+## Datos biométricos en reposo (Ley N.º 6534/2020)
+
+La plantilla facial es dato personal de **categoría especial**: a diferencia de una contraseña, la persona no puede cambiarla si se filtra. Guardarla como JPEG plano en la columna `fotos.imagen` significaba que un volcado de la base —o una copia de seguridad extraviada— entregaba el rostro de toda la plantilla laboral.
+
+`src/biometria.py` la sella con **AES-256-GCM** antes de que salga del proceso:
+
+| Decisión | Por qué |
+| --- | --- |
+| Cifrado **autenticado** (GCM) | Una foto alterada en la base no se descifra en silencio: falla |
+| El `user_id` viaja como dato asociado | Mover la foto de una fila a otra la vuelve ilegible; no se reasigna un rostro editando la base |
+| Clave en `BIOMETRIA_CLAVE`, fuera de la base | Quien obtiene un backup no obtiene con qué abrirlo |
+| Prefijo `BIO1` en el blob | Distingue lo cifrado de lo que quedó en claro y permite migrar sin perder registros |
+| Sin clave, `descifrar` devuelve `None` | El control queda en *no verificable* y avisa, en vez de tumbar el kiosco |
+
+**Retención**: la baja del empleado destruye la plantilla facial. El fin que legitimaba el tratamiento se acaba con la relación laboral; el resto del legajo se conserva porque lo exige el archivo laboral.
+
+Lo que **no** cubre: LBPH no tiene prueba de vida, así que una foto en la pantalla de un celular sigue pasando la verificación. Eso es un cambio de motor, no de cifrado.
+
+## Freno a la fuerza bruta
+
+La cédula es pública en Paraguay, así que sin límite de intentos la contraseña de cualquier empleado cae por diccionario; el costo de bcrypt no alcanza cuando el atacante paraleliza.
+
+`src/rate_limit.py` cuenta los fallos en una ventana deslizante: **8 intentos por 5 minutos, bloqueo de 15**, contabilizados por cédula **y** por IP de origen. Por cédula para que un diccionario contra una persona se agote; por origen para que recorrer la plantilla entera probando una contraseña común tampoco salga gratis.
+
+Es honesto decir qué no cubre: la ventana vive en memoria del proceso, así que con cuatro workers el umbral efectivo se multiplica por cuatro. Frena un ataque de diccionario y no reemplaza a un límite en el proxy de entrada.
+
+## El contenedor no corre como root
+
+El `Dockerfile` crea el usuario `marcacion` (uid 10001) y cambia a él antes del `CMD`. El proceso no necesita privilegios, y correr como root convierte cualquier lectura de archivo arbitraria en acceso total al contenedor.
+
 ## Vinculación
 
 - [[Auditoría Técnica · Hallazgos Críticos]]

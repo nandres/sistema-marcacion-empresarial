@@ -229,10 +229,11 @@ def calcular_aguinaldo(db: Database, anio: int) -> List[Dict[str, Any]]:
     fin_anio = date(anio, 12, 31)
     extras = {r["user_id"]: r for r in db.get_horas_extra_year(anio)}
     resultados: List[Dict[str, Any]] = []
-    for usuario in db.list_users():
+    # El aguinaldo del año alcanza también a quien se fue en julio: la
+    # baja saca de la nómina, no del período ya devengado.
+    for usuario in db.list_users(incluir_bajas=True):
         salario = float(usuario["salario_mensual"] or 0)
-        creado = usuario["created_at"]
-        base = max(creado.date(), inicio_anio)
+        base = max(reglamento.fecha_ingreso(usuario), inicio_anio)
         if base > fin_anio:
             meses = 0
         else:
@@ -419,7 +420,7 @@ def aguinaldo_periodo(
         Diccionario con ``meses_periodo``, ``valor_extras`` y ``aguinaldo``.
     """
     salario = float(user["salario_mensual"] or 0)
-    alta = user["created_at"].date()
+    alta = reglamento.fecha_ingreso(user)
     base = max(desde.replace(day=1), alta.replace(day=1))
     meses = 0
     cursor = base
@@ -645,8 +646,12 @@ def _estado_del_dia(
     El carácter de día no laborable viaja aparte, en ``descanso``.
     """
     if marcas:
-        if any(m["hora_salida"] is None for m in marcas):
+        if any(m["hora_salida"] is None and not m.get("abandonado") for m in marcas):
             return "en_curso"
+        # Una entrada que nadie cerró no es una jornada en curso ni una normal:
+        # es un día que espera corrección y tiene que verse como tal.
+        if any(m.get("abandonado") for m in marcas):
+            return "sin_cierre"
         return "tardanza" if any(m["es_tardanza"] for m in marcas) else "normal"
     if clock_engine.es_dia_de_descanso(dia):
         return "descanso"
@@ -710,7 +715,10 @@ def _linea_de_tiempo(
 def _estado_de_hoy(marcajes: List[Dict[str, Any]], hoy: date) -> Dict[str, Any]:
     """Resuelve la pregunta que el empleado se hace primero: ¿marqué hoy?"""
     marcas = [m for m in marcajes if _dia_local(m["hora_entrada"]) == hoy]
-    abierta = next((m for m in marcas if m["hora_salida"] is None), None)
+    abierta = next(
+        (m for m in marcas if m["hora_salida"] is None and not m.get("abandonado")),
+        None,
+    )
     if abierta is not None:
         entrada = abierta["hora_entrada"].astimezone()
         transcurrido = datetime.now().astimezone() - entrada
@@ -722,7 +730,6 @@ def _estado_de_hoy(marcajes: List[Dict[str, Any]], hoy: date) -> Dict[str, Any]:
             "incidencia": abierta.get("tipo_incidencia") or "",
         }
     if marcas:
-        cerrada = marcas[-1]
         trabajado = sum(
             (
                 (m["horas_ordinarias"] or timedelta(0))
@@ -732,6 +739,21 @@ def _estado_de_hoy(marcajes: List[Dict[str, Any]], hoy: date) -> Dict[str, Any]:
             ),
             timedelta(0),
         )
+        # La última marca puede ser una entrada abandonada, que no tiene hora
+        # de salida: el cierre del día es la última que sí la tenga.
+        cerrada = next(
+            (m for m in reversed(marcas) if m["hora_salida"] is not None), None
+        )
+        if cerrada is None:
+            sin_cierre = marcas[-1]
+            return {
+                "estado": "sin_cierre",
+                "entrada": sin_cierre["hora_entrada"].astimezone().strftime("%H:%M"),
+                "salida": None,
+                "minutos": 0,
+                "incidencia": sin_cierre.get("tipo_incidencia")
+                or clock_engine.INCIDENCIA_SIN_CIERRE,
+            }
         return {
             "estado": "cerrada",
             "entrada": marcas[0]["hora_entrada"].astimezone().strftime("%H:%M"),
@@ -772,10 +794,8 @@ def resumen_empleado(
     """
     hoy = fecha or date.today()
     vinculo = user.get("tipo_vinculo") or "Funcionario"
-    antiguedad = (hoy - user["created_at"].date()).days / 365.25
-    justificaciones = [
-        j for j in db.list_justificaciones() if j["usuario_id"] == user["id"]
-    ]
+    antiguedad = reglamento.antiguedad_anios(user, hoy)
+    justificaciones = db.list_justificaciones(user["id"])
     tipo_vacaciones = "Vacaciones" if vinculo == "Funcionario" else "Licencia de Pasante"
     vacaciones_usadas = sum(
         (j["fecha_fin"] - j["fecha_inicio"]).days + 1
@@ -1173,10 +1193,8 @@ def generar_pdf_constancia(
     )
     justificaciones = [
         j
-        for j in db.list_justificaciones()
-        if j["usuario_id"] == user["id"]
-        and j["fecha_inicio"] <= hasta
-        and j["fecha_fin"] >= desde
+        for j in db.list_justificaciones(user["id"])
+        if j["fecha_inicio"] <= hasta and j["fecha_fin"] >= desde
     ]
 
     sello = hashlib.sha256(
@@ -1281,10 +1299,7 @@ def generar_pdf_permiso(solicitud_id: int) -> str:
     db.ensure_database()
     db.connect()
     try:
-        justificacion = next(
-            (j for j in db.list_justificaciones() if j["id"] == solicitud_id),
-            None,
-        )
+        justificacion = db.get_justificacion(solicitud_id)
         if not justificacion:
             raise ValueError(f"El permiso #{solicitud_id} no existe.")
         empleado = db.get_user_by_id(justificacion["usuario_id"])

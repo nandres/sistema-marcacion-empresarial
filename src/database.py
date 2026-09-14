@@ -21,6 +21,7 @@ from urllib.parse import unquote, urlparse
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 
+import biometria
 import reglamento
 
 # Lista SQL de tipos de permiso válidos (catálogo reglamentario + histórico)
@@ -233,6 +234,21 @@ class Database:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
             "tipo_vinculo VARCHAR(20) NOT NULL DEFAULT 'Funcionario'"
         )
+        # La antigüedad define los días de vacaciones (12/20/30) y los meses de
+        # aguinaldo. Calcularla desde `created_at` significaba que al migrar la
+        # plantilla todo el mundo pasaba a tener cero años de servicio.
+        cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS fecha_ingreso DATE")
+        cursor.execute(
+            "UPDATE users SET fecha_ingreso = created_at::date "
+            "WHERE fecha_ingreso IS NULL"
+        )
+        # Baja lógica: un empleado que se va deja de operar pero sus marcajes
+        # tienen que sobrevivir para el archivo laboral.
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "activo BOOLEAN NOT NULL DEFAULT TRUE"
+        )
+        cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS fecha_baja DATE")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS marcajes (
@@ -277,6 +293,18 @@ class Database:
         cursor.execute(
             "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
             "verificacion_facial VARCHAR(20) NOT NULL DEFAULT 'No verificada'"
+        )
+        # Una entrada que nadie cerró no se puede inventar, pero tampoco puede
+        # dejar al empleado sin marcar el resto de su vida laboral: se marca
+        # como abandonada, sale del camino y queda para que RRHH la corrija.
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS "
+            "abandonado BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_marcajes_abiertos "
+            "ON marcajes (user_id, hora_entrada DESC) "
+            "WHERE hora_salida IS NULL AND NOT abandonado"
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_marcajes_analitica "
@@ -498,9 +526,23 @@ class Database:
     def _execute(
         self, query: str, params: Optional[Tuple[Any, ...]] = None, fetch: str = "none"
     ) -> Any:
-        """Ejecuta una consulta con cursor de diccionario y opción de fetch."""
+        """Ejecuta una consulta con cursor de diccionario y opción de fetch.
+
+        Una consulta que falla aborta la transacción en PostgreSQL: todo lo
+        que venga después sobre la misma conexión revienta con
+        ``InFailedSqlTransaction`` aunque sea válido. Deshacer acá deja la
+        conexión utilizable, de modo que un error puntual no arrastre al
+        resto de la petición ni al proceso de larga vida que la reutiliza.
+        """
         cursor = self.connection.cursor(cursor_factory=RealDictCursor)
-        cursor.execute(query, params or ())
+        try:
+            cursor.execute(query, params or ())
+        except psycopg2.Error:
+            try:
+                self.connection.rollback()
+            except psycopg2.Error:
+                pass
+            raise
         if fetch == "one":
             return cursor.fetchone()
         if fetch == "all":
@@ -578,16 +620,23 @@ class Database:
         role_id: int,
         salario_mensual: float = 0.0,
         tipo_vinculo: str = "Funcionario",
+        fecha_ingreso: Optional[Any] = None,
     ) -> int:
-        """Inserta un usuario y retorna su identificador."""
+        """Inserta un usuario y retorna su identificador.
+
+        ``fecha_ingreso`` es la del contrato, no la del alta en el sistema:
+        de ella dependen los días de vacaciones y los meses de aguinaldo. Si
+        no se indica, se asume que el empleado ingresa hoy.
+        """
         cursor = self._execute(
             """
             INSERT INTO users (username, password_hash, full_name, role_id,
-                               salario_mensual, tipo_vinculo)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                               salario_mensual, tipo_vinculo, fecha_ingreso)
+            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_DATE))
             RETURNING id
             """,
-            (username, password_hash, full_name, role_id, salario_mensual, tipo_vinculo),
+            (username, password_hash, full_name, role_id, salario_mensual,
+             tipo_vinculo, fecha_ingreso),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
@@ -616,17 +665,39 @@ class Database:
             fetch="one",
         )
 
-    def list_users(self) -> List[Dict[str, Any]]:
-        """Lista todos los usuarios con su rol, salario y vínculo laboral."""
+    def list_users(self, incluir_bajas: bool = False) -> List[Dict[str, Any]]:
+        """Lista el personal con su rol, salario, vínculo y fecha de ingreso.
+
+        Por defecto devuelve solo la plantilla activa: una baja conserva sus
+        marcajes para el archivo laboral pero no forma parte de la nómina.
+        """
+        filtro = "" if incluir_bajas else "WHERE u.activo"
         return self._execute(
-            """
+            f"""
             SELECT u.id, u.username, u.full_name, u.salario_mensual,
-                   u.tipo_vinculo, r.nombre AS role_name, u.created_at
+                   u.tipo_vinculo, r.nombre AS role_name, u.created_at,
+                   u.fecha_ingreso, u.activo, u.fecha_baja
             FROM users u JOIN roles r ON r.id = u.role_id
+            {filtro}
             ORDER BY u.id
             """,
             fetch="all",
         )
+
+    def cambiar_estado_usuario(
+        self, user_id: int, activo: bool, fecha_baja: Optional[Any] = None
+    ) -> bool:
+        """Da de baja o reincorpora a un empleado sin tocar sus marcajes."""
+        cursor = self._execute(
+            """
+            UPDATE users
+            SET activo = %s, fecha_baja = %s
+            WHERE id = %s
+            """,
+            (activo, fecha_baja if not activo else None, user_id),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
 
     def update_user(
         self,
@@ -636,6 +707,7 @@ class Database:
         role_id: Optional[int] = None,
         salario_mensual: Optional[float] = None,
         tipo_vinculo: Optional[str] = None,
+        fecha_ingreso: Optional[Any] = None,
     ) -> bool:
         """Actualiza los campos provistos de un usuario y retorna si hubo cambios."""
         updates: List[str] = []
@@ -655,6 +727,9 @@ class Database:
         if tipo_vinculo is not None:
             updates.append("tipo_vinculo = %s")
             params.append(tipo_vinculo)
+        if fecha_ingreso is not None:
+            updates.append("fecha_ingreso = %s")
+            params.append(fecha_ingreso)
         if not updates:
             return False
         params.append(user_id)
@@ -801,16 +876,64 @@ class Database:
         self.connection.commit()
 
     def get_open_entry(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Retorna el marcaje abierto más reciente del usuario, si existe."""
+        """Retorna el marcaje abierto más reciente del usuario, si existe.
+
+        Los abandonados no cuentan como abiertos: ya salieron del circuito de
+        marcación y esperan la corrección de Recursos Humanos.
+        """
         return self._execute(
             """
             SELECT * FROM marcajes
-            WHERE user_id = %s AND hora_salida IS NULL
+            WHERE user_id = %s AND hora_salida IS NULL AND NOT abandonado
             ORDER BY id DESC
             LIMIT 1
             """,
             (user_id,),
             fetch="one",
+        )
+
+    def abandonar_jornadas_vencidas(
+        self, user_id: int, limite: datetime, incidencia: str
+    ) -> List[Dict[str, Any]]:
+        """Saca del circuito **todas** las entradas sin cierre anteriores al límite.
+
+        No inventa la hora de salida —nadie la registró— pero deja constancia
+        de la incidencia para que aparezcan en la bandeja de correcciones.
+
+        Las descarta todas de una vez y no de a una: un empleado que estuvo
+        de licencia puede acumular varias, y liberar solo la última lo dejaba
+        igual de trabado en la siguiente marcación.
+        """
+        filas = self._execute(
+            """
+            UPDATE marcajes
+            SET abandonado = TRUE, tipo_incidencia = %s
+            WHERE user_id = %s
+              AND hora_salida IS NULL
+              AND NOT abandonado
+              AND hora_entrada < %s
+            RETURNING id, hora_entrada
+            """,
+            (incidencia, user_id, limite),
+            fetch="all",
+        )
+        self.connection.commit()
+        return filas
+
+    def listar_marcajes_abandonados(self, limite: int = 50) -> List[Dict[str, Any]]:
+        """Entradas sin cierre que esperan corrección, con su empleado."""
+        return self._execute(
+            """
+            SELECT m.id, m.user_id, m.hora_entrada, m.tipo_incidencia,
+                   u.full_name, u.username
+            FROM marcajes m
+            JOIN users u ON u.id = m.user_id
+            WHERE m.abandonado AND m.hora_salida IS NULL
+            ORDER BY m.hora_entrada DESC
+            LIMIT %s
+            """,
+            (limite,),
+            fetch="all",
         )
 
     def get_entries_by_date(self, user_id: int, date) -> List[Dict[str, Any]]:
@@ -907,18 +1030,51 @@ class Database:
             fetch="one",
         )
 
-    def list_justificaciones(self) -> List[Dict[str, Any]]:
-        """Lista las justificaciones con datos del empleado y del aprobador."""
+    def list_justificaciones(
+        self, usuario_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Lista las justificaciones con datos del empleado y del aprobador.
+
+        Filtrar por empleado en la base y no en Python importa: el tablero
+        personal calcula la disponibilidad de cada artículo en cada carga, y
+        sin el filtro traía el historial completo de toda la plantilla para
+        descartar el 99 % en memoria.
+        """
+        filtro = "WHERE j.usuario_id = %s" if usuario_id is not None else ""
         return self._execute(
-            """
+            f"""
             SELECT j.*, u.username, u.full_name, a.username AS aprobador
             FROM justificaciones j
             JOIN users u ON u.id = j.usuario_id
             JOIN users a ON a.id = j.aprobado_por
+            {filtro}
             ORDER BY j.fecha_inicio
             """,
+            (usuario_id,) if usuario_id is not None else None,
             fetch="all",
         )
+
+    def get_justificacion(self, justificacion_id: int) -> Optional[Dict[str, Any]]:
+        """Recupera una justificación puntual sin recorrer toda la tabla."""
+        return self._execute(
+            """
+            SELECT j.*, u.username, u.full_name, u.tipo_vinculo,
+                   u.departamento, a.username AS aprobador
+            FROM justificaciones j
+            JOIN users u ON u.id = j.usuario_id
+            JOIN users a ON a.id = j.aprobado_por
+            WHERE j.id = %s
+            """,
+            (justificacion_id,),
+            fetch="one",
+        )
+
+    def contar_justificaciones(self) -> int:
+        """Total de justificaciones emitidas, sin traerlas todas."""
+        fila = self._execute(
+            "SELECT COUNT(*) AS total FROM justificaciones", fetch="one"
+        )
+        return int(fila["total"])
 
     def crear_alerta(
         self,
@@ -1016,14 +1172,19 @@ class Database:
         self.connection.commit()
 
     def guardar_foto(self, user_id: int, imagen_jpg: bytes) -> None:
-        """Almacena (o reemplaza) la foto biométrica del usuario en JPEG."""
+        """Almacena (o reemplaza) la plantilla facial del usuario, cifrada.
+
+        El dato biométrico es de categoría especial bajo la Ley 6534/2020 y
+        nunca toca la base en claro: se sella con AES-256-GCM antes de salir
+        del proceso. Ver ``src/biometria.py``.
+        """
         self._execute(
             """
             INSERT INTO fotos (user_id, imagen) VALUES (%s, %s)
             ON CONFLICT (user_id) DO UPDATE SET imagen = EXCLUDED.imagen,
                                                 actualizado_en = NOW()
             """,
-            (user_id, psycopg2.Binary(imagen_jpg)),
+            (user_id, psycopg2.Binary(biometria.cifrar(imagen_jpg, user_id))),
         )
         self.connection.commit()
 
@@ -1032,9 +1193,9 @@ class Database:
         fila = self._execute(
             "SELECT imagen FROM fotos WHERE user_id = %s", (user_id,), fetch="one"
         )
-        if not fila:
+        if not fila or fila["imagen"] is None:
             return None
-        return bytes(fila["imagen"]) if fila["imagen"] is not None else None
+        return biometria.descifrar(bytes(fila["imagen"]), user_id)
 
     def tiene_foto(self, user_id: int) -> bool:
         """Indica si el usuario tiene una foto biométrica registrada."""
@@ -1043,11 +1204,25 @@ class Database:
         )
         return fila is not None
 
-    def list_fotos(self) -> List[Dict[str, Any]]:
-        """Lista todas las fotos biométricas para entrenar el modelo facial."""
-        return self._execute(
+    def list_fotos(self, descifrar: bool = True) -> List[Dict[str, Any]]:
+        """Lista las plantillas faciales para entrenar el modelo.
+
+        ``descifrar=False`` devuelve el contenido tal como está guardado, que
+        es lo que necesita la migración de fotos antiguas; una plantilla que
+        no supera la verificación de integridad se descarta en lugar de
+        entrenar el modelo con basura.
+        """
+        filas = self._execute(
             "SELECT user_id, imagen FROM fotos ORDER BY user_id", fetch="all"
         )
+        if not descifrar:
+            return filas
+        abiertas: List[Dict[str, Any]] = []
+        for fila in filas:
+            imagen = biometria.descifrar(bytes(fila["imagen"]), fila["user_id"])
+            if imagen is not None:
+                abiertas.append({"user_id": fila["user_id"], "imagen": imagen})
+        return abiertas
 
     def eliminar_foto(self, user_id: int) -> None:
         """Elimina la foto biométrica del usuario."""

@@ -86,13 +86,17 @@ with httpx.Client(timeout=30) as c:
     r, d = pedir(c, "GET", "/api/panel/resumen", token_juan)
     assert r.status_code == 403, "un Empleado no debe ver el panel"
 
-    r, d = pedir(c, "POST", "/api/marcar", cuerpo={"cedula": "juan", "password": "clave123", "es_dia_lluvioso": False})
+    # El kiosco responde en mayúsculas (ENTRADA / SALIDA), que es lo que el
+    # motor devuelve. La comprobación anterior esperaba capitalización y nunca
+    # llegó a ejecutarse porque este usuario arrastraba una entrada trabada.
+    r, d = pedir(c, "POST", "/api/marcar", cuerpo={"cedula": "juan", "password": "clave123"})
     if r.status_code == 200:
-        assert d["tipo"] in ("Entrada", "Salida") and "ticket" in d, d
-        assert "EMPRESA|3028/2024" in d["ticket"], "el ticket debe llevar la serie EMPRESA"
-        if d["tipo"] == "Entrada":
+        assert d["tipo"] in ("ENTRADA", "SALIDA"), d
+        assert "COMPROBANTE DE MARCACIÓN" in d["ticket"], "falta el encabezado del ticket"
+        assert "Hash de seguridad" in d["ticket"], "el ticket debe llevar su firma"
+        if d["tipo"] == "ENTRADA":
             r2, d2 = pedir(c, "POST", "/api/marcar", cuerpo={"cedula": "juan", "password": "clave123"})
-            assert r2.status_code == 200 and d2["tipo"] == "Salida", d2
+            assert r2.status_code == 200 and d2["tipo"] == "SALIDA", d2
     elif r.status_code == 400 and any(
         m in d["detail"] for m in ("entrada abierta", "entrada y su salida de hoy")
     ):

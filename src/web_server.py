@@ -32,6 +32,7 @@ import clock_engine
 import database
 import facial
 import notifications
+import rate_limit
 import reglamento
 import reports
 
@@ -300,14 +301,48 @@ def index() -> FileResponse:
     return FileResponse(ESTATICOS / "index.html", media_type="text/html")
 
 
+def _frenar(request: Request, cedula: str) -> str:
+    """Aplica el freno de intentos y devuelve la clave con que se contabiliza.
+
+    Se cuenta por cédula **y** por origen: por cédula para que un diccionario
+    contra una persona se agote, y por IP para que recorrer la plantilla
+    entera probando una contraseña común tampoco salga gratis.
+    """
+    origen = request.client.host if request.client else "desconocido"
+    for clave in (f"u:{cedula.lower()}", f"ip:{origen}"):
+        try:
+            rate_limit.ACCESO.verificar(clave)
+        except rate_limit.LimiteExcedido as limite:
+            raise HTTPException(status_code=429, detail=str(limite))
+    return f"u:{cedula.lower()}"
+
+
+def _registrar_fallo(request: Request, cedula: str) -> None:
+    """Contabiliza el intento fallido en las dos dimensiones."""
+    origen = request.client.host if request.client else "desconocido"
+    rate_limit.ACCESO.fallo(f"u:{cedula.lower()}")
+    rate_limit.ACCESO.fallo(f"ip:{origen}")
+
+
+def _limpiar_freno(request: Request, cedula: str) -> None:
+    """Una autenticación válida cierra el episodio de esa identidad."""
+    origen = request.client.host if request.client else "desconocido"
+    rate_limit.ACCESO.exito(f"u:{cedula.lower()}")
+    rate_limit.ACCESO.exito(f"ip:{origen}")
+
+
 @app.post("/api/login")
-def api_login(payload: LoginRequest) -> Dict[str, Any]:
+def api_login(payload: LoginRequest, request: Request) -> Dict[str, Any]:
     """Valida credenciales con bcrypt y emite el JWT de acceso."""
+    cedula = payload.cedula.strip()
+    _frenar(request, cedula)
     db = _cliente()
     try:
-        user = auth.authenticate(db, payload.cedula.strip(), payload.password)
+        user = auth.authenticate(db, cedula, payload.password)
         if not user:
+            _registrar_fallo(request, cedula)
             raise HTTPException(status_code=401, detail="Cédula o contraseña incorrectas.")
+        _limpiar_freno(request, cedula)
         rol = auth.get_role_name(db, user)
         token = auth.crear_token_acceso(user["id"], rol)
         return {
@@ -346,9 +381,7 @@ def api_permiso_pdf(
     """
     db = _cliente()
     try:
-        justificacion = next(
-            (j for j in db.list_justificaciones() if j["id"] == solicitud_id), None
-        )
+        justificacion = db.get_justificacion(solicitud_id)
         if not justificacion or justificacion["usuario_id"] != usuario["id"]:
             raise HTTPException(status_code=404, detail="Permiso no encontrado.")
     finally:
@@ -573,6 +606,7 @@ class PersonalNuevo(BaseModel):
     role_name: str
     salario_mensual: float = 0.0
     tipo_vinculo: str = "Funcionario"
+    fecha_ingreso: Optional[str] = None
 
 
 class PersonalEditar(BaseModel):
@@ -581,6 +615,7 @@ class PersonalEditar(BaseModel):
     role_name: Optional[str] = None
     salario_mensual: Optional[float] = None
     tipo_vinculo: Optional[str] = None
+    fecha_ingreso: Optional[str] = None
 
 
 class JustificacionRRHH(BaseModel):
@@ -609,6 +644,8 @@ def _personal_publico(fila: Dict[str, Any]) -> Dict[str, Any]:
             "salario_mensual",
             "tipo_vinculo",
             "activo",
+            "fecha_ingreso",
+            "fecha_baja",
             "creado_en",
         )
         if k in fila
@@ -634,20 +671,24 @@ def api_condicion_hoy() -> Dict[str, Any]:
 
 
 @app.post("/api/marcar")
-def api_marcar(payload: MarcarRequest) -> Dict[str, Any]:
+def api_marcar(payload: MarcarRequest, request: Request) -> Dict[str, Any]:
     """Kiosco web: registra entrada/salida con cédula y contraseña.
 
     El navegador no tiene acceso a la cámara del kiosco, así que la marca
     nace como no verificable. Con ``BIOMETRIA_OBLIGATORIA`` activo la vía web
     queda cerrada y solo marca el kiosco físico, que sí tiene cámara.
     """
+    cedula = payload.cedula.strip()
+    _frenar(request, cedula)
     db = _cliente()
     try:
-        usuario = auth.authenticate(db, payload.cedula.strip(), payload.password)
+        usuario = auth.authenticate(db, cedula, payload.password)
         if not usuario:
+            _registrar_fallo(request, cedula)
             raise HTTPException(
                 status_code=401, detail="Cédula o contraseña incorrectas."
             )
+        _limpiar_freno(request, cedula)
         decision = facial.decidir(
             facial.Resultado(
                 facial.NO_VERIFICABLE,
@@ -696,7 +737,7 @@ def api_panel_resumen(
         return {
             "personal": len(db.list_users()),
             "marcas_hoy": db.count_marcajes_hoy(),
-            "justificaciones": len(db.list_justificaciones()),
+            "justificaciones": db.contar_justificaciones(),
             "correcciones_pendientes": sum(
                 1
                 for c in db.list_solicitudes_correccion()
@@ -725,7 +766,9 @@ def api_panel_personal(
     try:
         return {
             "roles": [r["nombre"] for r in db.list_roles()],
-            "personal": [_personal_publico(u) for u in db.list_users()],
+            "personal": [
+                _personal_publico(u) for u in db.list_users(incluir_bajas=True)
+            ],
         }
     finally:
         db.cerrar()
@@ -750,6 +793,8 @@ def api_panel_personal_crear(
                 payload.role_name,
                 payload.salario_mensual,
                 payload.tipo_vinculo,
+                _fecha(payload.fecha_ingreso, "Fecha de ingreso")
+                if payload.fecha_ingreso else None,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error))
@@ -778,10 +823,51 @@ def api_panel_personal_editar(
                 role_name=payload.role_name or None,
                 salario_mensual=payload.salario_mensual,
                 tipo_vinculo=payload.tipo_vinculo or None,
+                fecha_ingreso=_fecha(payload.fecha_ingreso, "Fecha de ingreso")
+                if payload.fecha_ingreso else None,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error))
         return {"mensaje": "Personal actualizado correctamente."}
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/personal/{user_id}/baja")
+def api_panel_personal_baja(
+    user_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Da de baja a un empleado conservando su historial de marcajes."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            baja = auth.dar_de_baja(db, usuario, user_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {
+            "mensaje": f"{baja['nombre']} dado de baja el {baja['fecha_baja']}. "
+            "Su historial se conserva."
+        }
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/personal/{user_id}/reincorporar")
+def api_panel_personal_reincorporar(
+    user_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Reincorpora a un empleado dado de baja."""
+    _exigir_rrhh(usuario)
+    db = _cliente()
+    try:
+        try:
+            alta = auth.reincorporar(db, usuario, user_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"mensaje": f"{alta['nombre']} reincorporado."}
     finally:
         db.cerrar()
 

@@ -237,7 +237,9 @@ TypeError: can't compare offset-naive and offset-aware datetimes
 
 Todo reclamo de tipo "Salida" que RRHH intente aprobar responde 500. El flujo de corrección —la red de seguridad del sistema cuando el biométrico falla— está caído para la mitad de los casos.
 
-### P2-2 · El turno nocturno no se puede cerrar
+### P2-2 · El turno nocturno no se puede cerrar ✅ corregido
+
+> Cerrado el 2026-09-14. `detectar_accion_hoy` decide por `get_open_entry()` —el estado real— y no por el calendario. Verificado en `tests/test_turno_nocturno.py` con un turno que entra un día y sale el siguiente.
 
 `src/clock_engine.py:332-339` → `detectar_accion_hoy()` consulta `get_entries_by_date(user, hoy)`.
 
@@ -245,7 +247,7 @@ Un empleado entra el lunes 22:00 y quiere salir el martes 06:00. El martes no ha
 
 **El empleado queda atrapado: no puede marcar salida ni entrada.** Es exactamente el caso de uso que el README promociona como soportado.
 
-**Corrección**: la decisión debe basarse en `get_open_entry()` (estado real del empleado), no en el calendario.
+**Corrección aplicada**: la decisión se basa en `get_open_entry()` (estado real del empleado) y no en el calendario. El guardia de "ya marcó entrada y salida hoy" se conserva, pero después de resolver la jornada abierta.
 
 ### P2-3 · El sistema queda ciego a partir de enero de 2027 ✅
 
@@ -276,21 +278,33 @@ Hoy el defecto está latente porque el `.env` coincide con el valor por defecto.
 
 Más de fondo: **la hora de entrada es una constante global del proceso**. No existe la entidad "turno", así que el sistema no puede modelar horarios rotativos, turnos por sucursal ni jornadas partidas.
 
-### P2-6 · Un marcaje abierto bloquea al empleado para siempre
+### P2-6 · Un marcaje abierto bloquea al empleado para siempre ✅ corregido
 
-`get_open_entry` no filtra por antigüedad. Si alguien olvida marcar la salida, la entrada queda abierta indefinidamente y **todas** sus marcaciones futuras fallan con "Ya hay una entrada abierta". No hay auto-cierre ni escalamiento a RRHH.
+> Cerrado el 2026-09-14 junto con P2-2.
+
+`get_open_entry` no filtraba por antigüedad. Si alguien olvidaba marcar la salida, la entrada quedaba abierta indefinidamente y **todas** sus marcaciones futuras fallaban con "Ya hay una entrada abierta". No había auto-cierre ni escalamiento a RRHH.
+
+**Corrección aplicada**: pasadas 18 horas (`MAX_JORNADA_ABIERTA`, que cubre con holgura el turno nocturno de 7 h más extras) la entrada se marca como **abandonada** con la incidencia *Salida no registrada*, se avisa a Recursos Humanos y el empleado vuelve a marcar. No se inventa la hora de salida: la repone el circuito de correcciones, que ya existía.
+
+Se descartan **todas** las vencidas de una sola vez y no la última. Liberar solo una dejaba al empleado igual de trabado en la marcación siguiente; lo detectó `smoke_web_panel` contra un usuario con una cola acumulada.
 
 ---
 
 ## P3 · Datos, cumplimiento y escala
 
-### P3-1 · Datos biométricos sin cifrar
+### P3-1 · Datos biométricos sin cifrar ✅ corregido
+
+> Cerrado el 2026-09-14. Cifrado AES-256-GCM en `src/biometria.py`, clave fuera de la base y destrucción del dato con la baja.
 
 La tabla `fotos` (`database.py:328`) guarda el rostro en `BYTEA` plano. Bajo la **Ley 6534/2020** de protección de datos personales, un dato biométrico es de categoría especial y exige medidas reforzadas. Un `SELECT` sobre un backup expone la plantilla facial de toda la plantilla.
 
 Tampoco hay política de retención: la foto sobrevive a la baja del empleado.
 
-**Corrección**: cifrado a nivel de columna con clave gestionada fuera de la base (KMS/Vault), y borrado en cascada con la baja.
+**Corrección aplicada**: cifrado a nivel de columna con **AES-256-GCM**, clave en `BIOMETRIA_CLAVE` fuera de la base. El cifrado es autenticado y liga la foto al empleado como dato asociado: una plantilla movida de una fila a otra deja de descifrar, así que no se puede reasignar un rostro editando la base. Las fotos de instalaciones anteriores se detectan por prefijo y las cifra `migrate.py`.
+
+**Retención**: la baja del empleado destruye la plantilla facial, porque el fin que legitimaba el tratamiento desaparece con la relación laboral. El resto del legajo se conserva, que es lo que exige el archivo laboral.
+
+Sigue pendiente lo de fondo del reconocimiento: LBPH no tiene prueba de vida y una foto en la pantalla de un celular pasa la verificación.
 
 ### P3-2 · El token viaja en la query string
 
@@ -304,7 +318,9 @@ El token queda en los logs de acceso del servidor, en el historial del navegador
 
 **Corrección**: cookie `HttpOnly` + `Secure` + `SameSite=Strict`, que además cierra el vector de robo por XSS del P0-3.
 
-### P3-3 · Login sin límite de intentos
+### P3-3 · Login sin límite de intentos ✅ corregido
+
+> Cerrado el 2026-09-14. `src/rate_limit.py`: 8 intentos por ventana de 5 minutos y bloqueo de 15, contados por cédula **y** por origen. La ventana es en memoria del proceso, así que con varios workers el umbral efectivo se multiplica: alcanza contra un diccionario y no reemplaza a un límite en el proxy de entrada.
 
 `POST /api/login` no tiene *rate limiting* ni bloqueo progresivo. Doble consecuencia: fuerza bruta contra contraseñas de empleados (que en la práctica serán débiles), y **vector de DoS** — bcrypt es caro por diseño, así que un atacante satura la CPU con peticiones de login inválidas.
 
@@ -316,13 +332,17 @@ Una alerta publicada en el worker 1 no alcanza a los WebSockets conectados a los
 
 **Corrección**: mover el bus a Redis Pub/Sub (o NOTIFY/LISTEN de PostgreSQL, ya que la dependencia existe).
 
-### P3-5 · Una excepción envenena toda la petición
+### P3-5 · Una excepción envenena toda la petición ✅ corregido
+
+> Cerrado el 2026-09-14. `Database._execute` deshace la transacción ante un error de PostgreSQL antes de propagarlo, de modo que la conexión queda utilizable.
 
 `database._execute` (línea 396) nunca cierra cursores y **no hace `rollback`** ante un error. Con `autocommit = False`, la primera excepción deja la transacción en estado abortado y toda consulta posterior de esa conexión falla con *"current transaction is aborted"*.
 
 `notifications.registrar_alerta` agrava el patrón: captura `except Exception` y sigue adelante como si nada, dejando la conexión rota para el resto del request y **perdiendo la evidencia de la alerta de fraude** que intentaba guardar.
 
-### P3-6 · La antigüedad se calcula desde el alta en el sistema
+### P3-6 · La antigüedad se calcula desde el alta en el sistema ✅ corregido
+
+> Cerrado el 2026-09-14. Columna `users.fecha_ingreso` con relleno desde `created_at`, y un único resolutor (`reglamento.fecha_ingreso`) que reemplaza a los tres cálculos que había sueltos. Verificado en `tests/test_antiguedad_y_bajas.py`: un legajo migrado hoy con contrato de hace 12 años recibe 30 días de vacaciones y no 12.
 
 `reglamento.py:522` y `reports.py:215-220` usan `user["created_at"]` como fecha de ingreso.
 
@@ -338,7 +358,9 @@ Falta el campo `fecha_ingreso`, que es un dato de negocio independiente de cuán
 
 `reglamento._en_periodo` (línea 477) imputa el permiso completo al período de su `fecha_inicio`. Una licencia del 28 de diciembre al 10 de enero descuenta trece días del año que termina y cero del que empieza.
 
-### P3-9 · Escaneo completo de justificaciones por consulta
+### P3-9 · Escaneo completo de justificaciones por consulta ✅ corregido
+
+> Cerrado el 2026-09-14. `list_justificaciones(usuario_id)` filtra en la base; se agregaron `get_justificacion(id)` y `contar_justificaciones()` para los tres llamadores que traían la tabla entera para quedarse con una fila o con un número.
 
 `reglamento.disponibilidad_permisos` (línea 523) trae **todas las justificaciones de la empresa** y filtra en Python:
 
@@ -354,7 +376,9 @@ Con 500 empleados y tres años de histórico, cada apertura del portal arrastra 
 
 Además, una marca que falla de forma permanente (usuario inexistente) se reintenta cada 15 segundos para siempre: no hay contador de reintentos ni cola de descarte.
 
-### P3-11 · El contenedor corre como root
+### P3-11 · El contenedor corre como root ✅ corregido
+
+> Cerrado el 2026-09-14. El Dockerfile crea el usuario `marcacion` (uid 10001) y cambia a él antes del `CMD`.
 
 El `Dockerfile` no crea usuario sin privilegios. Cualquier ejecución de código en el proceso web obtiene root dentro del contenedor.
 
@@ -370,8 +394,11 @@ El `Dockerfile` no crea usuario sin privilegios. Cualquier ejecución de código
 | 3b | Escapes de JavaScript en la plantilla + guarda de regresión | P0-5 | ✅ hecho |
 | 4 | Reescritura del motor horario (jornada única, tramos por día, +30 % nocturno) | P1-3, P1-4, P1-5, P2-3 | ✅ hecho |
 | 5 | Clima declarado por RRHH + biometría fail-closed | P1-1, P1-2 | ✅ hecho |
-| 6 | `detectar_accion_hoy` por estado, no por calendario | P2-2 | pendiente (P2-1 ya cerrado) |
-| 7 | Entidad `turnos` + `fecha_ingreso` | P2-5, P3-6 | pendiente |
+| 6 | `detectar_accion_hoy` por estado, no por calendario | P2-2, P2-6 | ✅ hecho |
+| 7 | `fecha_ingreso` y baja lógica | P3-6 | ✅ hecho |
+| 8 | Biometría cifrada, freno de intentos y contenedor sin privilegios | P3-1, P3-3, P3-11 | ✅ hecho |
+| 9 | Entidad `turnos` (multi-turno, jornada partida) | P2-5 | pendiente |
+| 10 | Cookie `HttpOnly` y bus de alertas fuera del proceso | P3-2, P3-4 | pendiente |
 
 El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].
 

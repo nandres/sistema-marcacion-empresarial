@@ -17,22 +17,32 @@ import sys
 import psycopg2
 
 import auth
+import biometria
 from database import Database
 
 
-def aplicar() -> None:
-    """Crea la base si falta, aplica el esquema y valida los secretos."""
+def aplicar() -> int:
+    """Crea la base si falta, aplica el esquema y valida los secretos.
+
+    Returns:
+        Cantidad de plantillas faciales que quedaron cifradas en esta corrida.
+    """
     auth.verificar_secretos()
     db = Database()
     try:
         db.initialize()
+        # Una instalación anterior guardaba las fotos en claro. Migrarlas es
+        # parte del despliegue y no una tarea que alguien deba recordar.
+        if biometria.configurada():
+            return biometria.migrar_fotos(db)
+        return 0
     finally:
         db.cerrar()
 
 
 def main() -> int:
     try:
-        aplicar()
+        cifradas = aplicar()
     except psycopg2.errors.LockNotAvailable:
         print(
             "Migración fallida: otra sesión mantiene una transacción abierta "
@@ -48,6 +58,14 @@ def main() -> int:
         print(f"Migración fallida: {error}", file=sys.stderr)
         return 1
     print("Esquema aplicado correctamente.")
+    if cifradas:
+        print(f"Plantillas faciales cifradas en reposo: {cifradas}.")
+    elif not biometria.configurada():
+        print(
+            f"Aviso: {biometria.VARIABLE_CLAVE} no está configurada. "
+            "El registro de fotos biométricas va a fallar hasta definirla.",
+            file=sys.stderr,
+        )
     return 0
 
 
