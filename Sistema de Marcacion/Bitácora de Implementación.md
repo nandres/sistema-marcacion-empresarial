@@ -209,6 +209,29 @@ Se verificó con el rol restringido y consultas **deliberadamente sin acotar** �
 
 **Cobertura nueva**: `test_multiempresa.py` (40 verificaciones, seis de ellas contra la base con el rol restringido) y `guardia_arrendamiento.py`, que además corre solo en CI. La suite pasó de 19 a 20 conjuntos.
 
+### 20. RLS, y después la lista entera
+*2026-09-14 · los 29 hallazgos de la auditoría cerrados*
+
+**La base impone el aislamiento.** Cada tabla de datos de cliente quedó con una política por fila acotada a `app.empresa_id`. Dos obstáculos, los dos resueltos: el login cruza empresas a propósito y vive en una función `SECURITY DEFINER` que devuelve lo mínimo para decidir un acceso; y las políticas son inertes bajo un superusuario, así que `migrate.py rol-app` crea el rol restringido y `migrate.py` dice en cada corrida si el aislamiento está en vigor. Verificado atacándolo con ese rol, y después corriendo el servidor entero bajo él.
+
+**La cuota por días, en tres frentes a la vez.** `crear_justificacion` validaba solo las horas, así que un artículo de cinco días al año admitía una justificación de enero a diciembre (P1-6). El Art. 23 y la fuerza mayor se cuentan en días hábiles y se contaban corridos (P3-7). Y un permiso a caballo entre dos años se imputaba entero al primero (P3-8). Los tres vivían en el mismo cálculo. Al unificarlo apareció que `resumen_empleado` tenía su **propia copia**: el saldo del portal no era el que aplicaba la cuota al aprobar.
+
+**La cola offline dejaba fabricar horas.** Cada fila se firma ahora con HMAC sobre todo lo que el servidor va a creer, y la clave vive fuera del archivo. Lo que no verifica se aparta con su motivo en lugar de aplicarse o de borrarse en silencio; lo que falla por otra razón se reintenta hasta un techo y después se aparta igual (P3-10).
+
+**La sesión salió de la URL y de `localStorage`.** Cookie `HttpOnly`, `SameSite=Strict`. El WebSocket es el caso que lo forzaba: el navegador no puede poner cabeceras en un saludo (P3-2).
+
+**Prueba de vida**, con lo que hay: el kiosco sortea un gesto y lo exige. Deja afuera la foto quieta y no más que eso, y así quedó escrito.
+
+**Las alertas cruzan de un worker a otro** por `LISTEN`/`NOTIFY`, no por Redis: la base ya es dependencia (P3-4). **Pool de conexiones** en el proceso que atiende, con la empresa borrada al devolver la conexión. **Ciclos de rotación** que se calculan en lugar de cargarse semana por semana. Y **subdominio** y **cupo del plan** por cliente.
+
+**Lo que atajaron las pruebas.** Tres veces la prueba falló y tenía razón:
+
+- La del bus publicaba la alerta desde el mismo proceso que escuchaba: pasaba en verde aunque el canal no existiera. Reescrita con un subproceso, destapó que el hilo no podía pasar a autocommit.
+- La del subdominio tumbó el heurístico de contar etiquetas: `miapp.com.py` tiene tres sin tener subdominio, y `127.0.0.1` resolvía al "cliente 127".
+- La de la cola destapó que una entrada vieja sin cerrar hacía que toda marca posterior pareciera ya cubierta y se descartara.
+
+**Cobertura nueva**: `test_cola_firmada`, `test_sesion_cookie`, `test_bus_alertas`, `test_rotacion`. La suite pasó de 20 a 25 conjuntos, y la auditoría quedó sin un solo hallazgo abierto.
+
 ## Cómo ejecutar
 
 | Componente | Comando |
@@ -289,6 +312,14 @@ Las dos primeras filas son la brecha de mayor valor: el motor horario es lógica
 - **Una política que no se aplica es peor que no tenerla.** Las políticas RLS de PostgreSQL son inertes bajo un superusuario. Instalarlas no alcanza: hay que crear el rol restringido, correr el servicio con él, y que la herramienta de migración diga en voz alta cuál de los dos casos es el actual.
 - **Una defensa se prueba atacándola, no leyéndola.** Comprobar que la política existe en `pg_policies` no dice nada. Lo que lo dice es conectar con el rol restringido y lanzar un `SELECT` sin `WHERE`.
 - **Una capa de seguridad que rompe la aplicación no se va a activar.** Por eso el servidor completo se corrió bajo el rol restringido con la suite entera: hizo falta separar `initialize()` de `migrar()`, porque el rol que atiende tráfico no puede —ni debe— alterar tablas.
+
+### Agregadas al cerrar la lista (2026-09-14)
+
+- **Una prueba que pasa sin probar es peor que ninguna.** La del bus publicaba la alerta desde el proceso que escuchaba, así que habría pasado en verde aunque el canal entre procesos no existiera. Si la prueba puede pasar con la funcionalidad apagada, no está probando la funcionalidad.
+- **La misma regla escrita dos veces diverge.** El saldo de vacaciones del portal y la cuota que aplicaba al aprobar eran dos copias del mismo cálculo, y daban números distintos. La duplicación no se paga cuando se escribe sino cuando una de las dos cambia.
+- **Un heurístico sobre datos del mundo real se prueba con datos del mundo real.** Contar etiquetas del host parecía razonable hasta que apareció `.com.py`, que es el dominio del país donde se vende esto.
+- **Lo que se borra sin dejar constancia es lo que nadie puede reclamar.** Una marcación descartada en silencio es una hora de trabajo perdida, así que se aparta con su motivo en lugar de desaparecer.
+- **Reintentar para siempre es una decisión, aunque nadie la haya tomado.** Sin un techo, una marca que nunca va a entrar consume el ciclo del sincronizador cada quince segundos hasta que alguien mire los logs.
 
 ## Enlaces
 

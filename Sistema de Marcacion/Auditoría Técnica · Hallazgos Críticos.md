@@ -36,7 +36,7 @@
 
 ## P0 · Bloqueantes
 
-### P0-1 · Migraciones DDL en cada petición HTTP
+### P0-1 · Migraciones DDL en cada petición HTTP ✅ corregido
 
 `src/web_server.py:862` → `_cliente()` llama a `db.initialize()` en **cada request**, y cada endpoint abre dos clientes (uno en `_usuario_autenticado`, otro en el handler).
 
@@ -55,7 +55,7 @@ La bitácora **ya registró esta lección** para el worker de sincronización ("
 
 **Corrección**: mover las migraciones a un paso de arranque explícito (`alembic upgrade head` o un `migrate.py` invocado por el entrypoint) y que la petición solo abra conexión desde un pool.
 
-### P0-2 · El esquema no se puede crear desde cero
+### P0-2 · El esquema no se puede crear desde cero ✅ corregido
 
 `src/database.py:219-238` ejecuta sentencias contra `marcajes` **antes** de crear la tabla, que recién aparece en la línea 241:
 
@@ -70,7 +70,7 @@ Sobre una base virgen, la línea 220 levanta `UndefinedTable (42P01)`. Como la c
 
 **Corrección**: ordenar el DDL por dependencias, o directamente migraciones versionadas.
 
-### P0-3 · XSS almacenado en el panel de alertas → toma de cuenta de Administrador
+### P0-3 · XSS almacenado en el panel de alertas → toma de cuenta de Administrador ✅ corregido
 
 Dos defectos que se encadenan:
 
@@ -88,7 +88,7 @@ El resto del panel sí usa `esc()` (`cargarAlertasPanel`, `cargarAuditoria`), lo
 
 **Corrección**: `_exigir_rrhh` en el POST, `textContent` en lugar de `innerHTML` en el toast, y CSP `default-src 'self'` en las cabeceras de respuesta.
 
-### P0-4 · Clave de firma JWT con valor por defecto público
+### P0-4 · Clave de firma JWT con valor por defecto público ✅ corregido
 
 `src/auth.py:44`
 
@@ -188,7 +188,7 @@ La propia nota [[Motor de Reglas de Horas Extra]] documenta el error como ejempl
 
 **Corrección**: el tope de jornada se decide **una vez** según la naturaleza del turno (diurno 8 h / nocturno 7 h / mixto 7 h 30), y todo excedente es extraordinario.
 
-### P1-4 · El recargo nocturno del 30 % no existe
+### P1-4 · El recargo nocturno del 30 % no existe ✅ corregido
 
 El motor **clasifica** horas nocturnas pero nunca las recarga. El Art. 232 del Código del Trabajo ordena un **+30 % sobre el valor ordinario** para el trabajo nocturno. El sistema paga la hora nocturna ordinaria igual que la diurna.
 
