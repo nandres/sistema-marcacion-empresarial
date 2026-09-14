@@ -503,6 +503,27 @@ def _usados(
     )
 
 
+def _reservado(
+    articulo: Dict[str, Any], solicitudes: List[Dict[str, Any]]
+) -> float:
+    """Cuota que ya comprometen las solicitudes pendientes del empleado.
+
+    Sin esto un empleado podría presentar diez pedidos del mismo artículo:
+    cada uno pasaría la validación por separado porque ninguno llegó a
+    consumir la cuota todavía.
+    """
+    filas = [s for s in solicitudes if s["tipo_permiso"] == articulo["tipo"]]
+    if not filas:
+        return 0.0
+    if articulo["unidad"] == UNIDAD_HORAS:
+        return float(sum(s.get("horas_solicitadas") or 0 for s in filas))
+    if articulo["unidad"] == UNIDAD_VECES:
+        return float(len(filas))
+    return float(
+        sum((s["fecha_fin"] - s["fecha_inicio"]).days + 1 for s in filas)
+    )
+
+
 def disponibilidad_permisos(
     db, user: Dict[str, Any], fecha: Optional[date] = None
 ) -> List[Dict[str, Any]]:
@@ -515,7 +536,8 @@ def disponibilidad_permisos(
 
     Returns:
         Lista de artículos con ``cuota``, ``usados``, ``restantes`` (``None``
-        si no tiene límite) y el booleano ``disponible``.
+        si no tiene límite), lo que reservan las solicitudes pendientes
+        (``pendientes`` y ``restantes_efectivos``) y ``disponible``.
     """
     hoy = fecha or date.today()
     vinculo = user.get("tipo_vinculo") or "Funcionario"
@@ -523,23 +545,44 @@ def disponibilidad_permisos(
     todas = [
         j for j in db.list_justificaciones() if j["usuario_id"] == user["id"]
     ]
+    try:
+        pendientes_usuario = db.listar_solicitudes_permiso(
+            user["id"], solo_pendientes=True
+        )
+    except AttributeError:
+        pendientes_usuario = []
     resultado: List[Dict[str, Any]] = []
     for articulo in articulos_aplicables(vinculo):
         en_periodo = [
             j for j in todas if _en_periodo(j, articulo["periodo"], hoy)
+        ]
+        reservadas = [
+            s
+            for s in pendientes_usuario
+            if _en_periodo(s, articulo["periodo"], hoy)
         ]
         if articulo.get("cuota_dinamica"):
             cuota = _vacaciones_funcionario(antiguedad)
         else:
             cuota = articulo["cuota"]
         usados = _usados(articulo, en_periodo)
+        pendiente = _reservado(articulo, reservadas)
         usos = float(
             sum(1 for j in en_periodo if j["tipo_permiso"] == articulo["tipo"])
         )
+        usos_pendientes = float(
+            sum(1 for s in reservadas if s["tipo_permiso"] == articulo["tipo"])
+        )
         usos_max = articulo.get("usos_max")
         restantes = None if cuota is None else max(0.0, float(cuota) - usados)
+        restantes_efectivos = (
+            None if cuota is None else max(0.0, float(cuota) - usados - pendiente)
+        )
         disponible = (cuota is None or usados < cuota) and (
             usos_max is None or usos < usos_max
+        )
+        solicitable = (cuota is None or usados + pendiente < cuota) and (
+            usos_max is None or usos + usos_pendientes < usos_max
         )
         resultado.append(
             {
@@ -552,9 +595,13 @@ def disponibilidad_permisos(
                 "cuota": cuota,
                 "usados": usados,
                 "restantes": restantes,
+                "pendientes": pendiente,
+                "restantes_efectivos": restantes_efectivos,
                 "usos": usos,
+                "usos_pendientes": usos_pendientes,
                 "usos_max": usos_max,
                 "disponible": disponible,
+                "solicitable": solicitable,
                 "condiciones": articulo["condiciones"],
             }
         )

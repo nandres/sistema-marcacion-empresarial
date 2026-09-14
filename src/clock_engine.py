@@ -1,16 +1,25 @@
 """Motor de reglas laborales del Código del Trabajo de Paraguay (Ley N.º 213).
 
-Aplica a cada marcaje el desglose legal de jornada diurna (06:00 a 20:00,
-máximo 8 horas ordinarias) y nocturna (20:00 a 06:00, máximo 7 horas
-ordinarias), liquidando el exceso con recargo del 50% o 100%. Los domingos
-y feriados oficiales se liquidan íntegros con recargo del 100%. Incluye la
-gracia de tolerancia de 10 minutos en la entrada antes de considerarla
-llegada tardía y soporta turnos nocturnos que cruzan la medianoche.
+Liquida cada turno partiéndolo en tramos homogéneos y aplicando el recargo
+que corresponde a cada uno:
 
-Desde la Resolución de Directorio N.º 3028/2024, el
-``evaluar_asistencia`` distingue el vínculo del empleado: los
-pasantes gozan de tolerancia ordinaria limitada a tres veces al mes y de
-la tolerancia climática legal de 30 minutos en días de lluvia intensa
+- **Naturaleza del tramo**: diurno (06:00 a 20:00) o nocturno (20:00 a 06:00).
+- **Día calendario del tramo**: un turno que cruza la medianoche hacia un
+  domingo o feriado liquida esa porción al 100 %, y solo esa porción.
+- **Tope de jornada ordinaria**: se decide **una vez** para todo el turno
+  según su naturaleza (Art. 194) — 8 h diurna, 7 h nocturna, 7 h 30 mixta —
+  y no sumando los topes de cada tramo. Una jornada cuyo tramo nocturno
+  alcanza las 5 horas se reputa nocturna completa.
+- **Recargos**: trabajo nocturno ordinario +30 % (Art. 232); hora
+  extraordinaria diurna +50 % y nocturna +100 % (Art. 234); domingo o
+  feriado +100 % (Art. 233).
+
+Las horas ordinarias se asignan en orden cronológico: son las primeras
+efectivamente trabajadas, y todo lo que excede el tope es extraordinario.
+
+``evaluar_asistencia`` aplica además la Resolución de Directorio N.º
+3028/2024: los pasantes gozan de tolerancia ordinaria limitada a tres veces
+al mes y de la tolerancia climática de 30 minutos en días de lluvia intensa
 (con corte a ``Ausencia Injustificada`` a los 30 minutos de retraso),
 mientras los funcionarios conservan la gracia general de 15 minutos.
 """
@@ -18,40 +27,114 @@ mientras los funcionarios conservan la gracia general de 15 minutos.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from database import Database
 import notifications
 
 JORNADA_DIURNA: timedelta = timedelta(hours=8)
 JORNADA_NOCTURNA: timedelta = timedelta(hours=7)
+JORNADA_MIXTA: timedelta = timedelta(hours=7, minutes=30)
 JORNADA_JUSTIFICADA: timedelta = JORNADA_DIURNA
 INICIO_DIURNO: time = time(6, 0)
 FIN_DIURNO: time = time(20, 0)
 TOLERANCIA_ENTRADA: timedelta = timedelta(minutes=10)
+
+# Art. 194: la jornada mixta cuyo tramo nocturno alcanza las 5 horas se
+# reputa nocturna a todos los efectos, incluido su tope de 7 horas.
+NOCTURNO_QUE_VUELVE_NOCTURNA: timedelta = timedelta(hours=5)
+
+RECARGO_NOCTURNO: float = 0.30
+"""Art. 232: recargo sobre la hora ordinaria trabajada en horario nocturno."""
+
+JORNADA_DIURNA_TIPO: str = "Diurna"
+JORNADA_NOCTURNA_TIPO: str = "Nocturna"
+JORNADA_MIXTA_TIPO: str = "Mixta"
+JORNADA_DESCANSO_TIPO: str = "Descanso"
+
+TOPES_POR_TIPO: Dict[str, timedelta] = {
+    JORNADA_DIURNA_TIPO: JORNADA_DIURNA,
+    JORNADA_NOCTURNA_TIPO: JORNADA_NOCTURNA,
+    JORNADA_MIXTA_TIPO: JORNADA_MIXTA,
+    JORNADA_DESCANSO_TIPO: timedelta(0),
+}
 
 TOLERANCIA_PASANTE: timedelta = timedelta(minutes=10)
 TOLERANCIA_FUNCIONARIO: timedelta = timedelta(minutes=15)
 TOLERANCIA_CLIMATICA: timedelta = timedelta(minutes=30)
 MAX_TARDANZAS_PASANTE: int = 3
 
-FERIADOS_PARAGUAY_2026: frozenset = frozenset(
-    {
-        date(2026, 1, 1),
-        date(2026, 2, 9),
-        date(2026, 4, 2),
-        date(2026, 4, 3),
-        date(2026, 5, 1),
-        date(2026, 5, 14),
-        date(2026, 5, 15),
-        date(2026, 6, 8),
-        date(2026, 8, 10),
-        date(2026, 9, 28),
-        date(2026, 12, 8),
-        date(2026, 12, 25),
-    }
+FERIADOS_FIJOS: Tuple[Tuple[int, int, str], ...] = (
+    (1, 1, "Año Nuevo"),
+    (3, 1, "Día de los Héroes"),
+    (5, 1, "Día del Trabajador"),
+    (5, 14, "Independencia Nacional"),
+    (5, 15, "Independencia Nacional"),
+    (6, 12, "Paz del Chaco"),
+    (8, 15, "Fundación de Asunción"),
+    (9, 29, "Victoria de Boquerón"),
+    (12, 8, "Virgen de Caacupé"),
+    (12, 25, "Navidad"),
 )
+"""Feriados de fecha fija del calendario paraguayo (sin traslados)."""
+
+# Traslados decretados año a año. Sin el decreto cargado, el calendario base
+# ubica estos feriados en su fecha estatutaria, que es lo legalmente correcto
+# a falta de norma en contrario.
+FERIADOS_TRASLADADOS: Dict[int, Dict[date, date]] = {
+    2026: {
+        date(2026, 3, 1): date(2026, 2, 9),
+        date(2026, 6, 12): date(2026, 6, 8),
+        date(2026, 8, 15): date(2026, 8, 10),
+        date(2026, 9, 29): date(2026, 9, 28),
+    },
+}
+
+
+def _domingo_de_pascua(anio: int) -> date:
+    """Domingo de Pascua por el algoritmo gregoriano anónimo."""
+    a = anio % 19
+    b, c = divmod(anio, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    mes, dia = divmod(h + l - 7 * m + 114, 31)
+    return date(anio, mes, dia + 1)
+
+
+def feriados_de(anio: int) -> Dict[date, str]:
+    """Calendario oficial de feriados de un año, con sus traslados vigentes.
+
+    Combina los feriados de fecha fija, los derivados de la Pascua (Jueves y
+    Viernes Santo) y los traslados decretados que estén registrados. A
+    diferencia de una lista fija, sigue siendo correcto en cualquier año.
+    """
+    pascua = _domingo_de_pascua(anio)
+    calendario: Dict[date, str] = {
+        pascua - timedelta(days=3): "Jueves Santo",
+        pascua - timedelta(days=2): "Viernes Santo",
+    }
+    traslados = FERIADOS_TRASLADADOS.get(anio, {})
+    for mes, dia, nombre in FERIADOS_FIJOS:
+        original = date(anio, mes, dia)
+        calendario[traslados.get(original, original)] = nombre
+    return calendario
+
+
+def es_feriado_o_domingo(momento: datetime) -> bool:
+    """Indica si la fecha del momento es domingo o feriado oficial de Paraguay."""
+    return es_dia_de_descanso(momento.date())
+
+
+def es_dia_de_descanso(dia: date) -> bool:
+    """Indica si una fecha es domingo o feriado (liquidación al 100 %)."""
+    return dia.weekday() == 6 or dia in feriados_de(dia.year)
 
 
 def _cargar_inicio_jornada() -> time:
@@ -72,31 +155,48 @@ def ahora_local() -> datetime:
     return datetime.now().astimezone()
 
 
-def es_feriado_o_domingo(momento: datetime) -> bool:
-    """Indica si la fecha del momento es domingo o feriado oficial de Paraguay."""
-    return momento.weekday() == 6 or momento.date() in FERIADOS_PARAGUAY_2026
-
-
 def es_tardanza(hora_entrada: datetime) -> bool:
     """Aplica la gracia de 10 minutos: tardanza solo si supera el límite."""
     return hora_entrada.time() > LIMITE_TARDANZA
+
+
+def condicion_declarada(db: Database, dia: date) -> Dict[str, Any]:
+    """Condición excepcional vigente para un día, según la declaró RRHH.
+
+    La tolerancia climática la activa una declaración administrativa que
+    alcanza a toda la plantilla, no el empleado que llega tarde: si el
+    sujeto de la regla controla el dato que la dispara, la regla no existe.
+
+    Returns:
+        ``{"condicion": str, "tolerancia": timedelta, "declarante": str}``;
+        condición vacía y tolerancia cero si el día es normal.
+    """
+    fila = db.get_condicion_dia(dia)
+    if not fila:
+        return {"condicion": "", "tolerancia": timedelta(0), "declarante": ""}
+    minutos = int(fila["tolerancia_min"] or 0)
+    return {
+        "condicion": fila["condicion"],
+        "tolerancia": timedelta(minutes=minutos),
+        "declarante": fila.get("declarante") or "",
+    }
 
 
 def evaluar_asistencia(
     db: Database,
     usuario_id: int,
     hora_marca: datetime,
-    es_dia_lluvioso: bool = False,
 ) -> Dict[str, Any]:
     """Evalúa una entrada según la Res. 3028/2024.
 
     Para pasantes:
     - Tolerancia ordinaria de 10 minutos, consumible como máximo 3 veces
       al mes; a partir de la 4.ª llegada el retraso cuenta de inmediato.
-    - En días de lluvia intensa se activa automáticamente la tolerancia
-      climática legal de 30 minutos, acumulable a la ordinaria vigente.
-    - Si el retraso excede los 30 minutos, el estado pasa directamente a
-      ``Ausencia Injustificada``.
+    - Si Recursos Humanos declaró una condición excepcional para el día
+      (lluvia intensa, corte de rutas), su tolerancia se acumula a la
+      ordinaria vigente.
+    - Si el retraso excede la tolerancia máxima del día, el estado pasa
+      directamente a ``Ausencia Injustificada``.
 
     Para funcionarios:
     - Gracia general de 15 minutos sin límite mensual de uso.
@@ -116,14 +216,18 @@ def evaluar_asistencia(
         hora_marca = hora_marca.replace(tzinfo=None)
     inicio = datetime.combine(hora_marca.date(), INICIO_JORNADA)
     retraso = max(timedelta(0), hora_marca - inicio)
-    climatica = TOLERANCIA_CLIMATICA if es_dia_lluvioso else timedelta(0)
+    excepcion = condicion_declarada(db, hora_marca.date())
+    climatica = excepcion["tolerancia"]
     if vinculo == "Pasante":
         tardanzas_mes = db.contar_tardanzas_mes(usuario_id, hora_marca.date())
         ordinaria = (
             TOLERANCIA_PASANTE if tardanzas_mes < MAX_TARDANZAS_PASANTE else timedelta(0)
         )
         tolerancia = ordinaria + climatica
-        if retraso > TOLERANCIA_CLIMATICA:
+        # El corte de ausencia se corre junto con la tolerancia declarada: si
+        # la empresa reconoce 30 minutos por lluvia, llegar a los 25 no puede
+        # computarse como ausencia.
+        if retraso > max(TOLERANCIA_CLIMATICA, tolerancia):
             estado = "Ausencia Injustificada"
         elif retraso > tolerancia:
             estado = "Llegada Tardía"
@@ -137,83 +241,194 @@ def evaluar_asistencia(
         "estado": estado,
         "retraso_min": int(retraso.total_seconds() // 60),
         "tolerancia_efectiva_min": int(tolerancia.total_seconds() // 60),
-        "tolerancia_climatica": es_dia_lluvioso,
+        "condicion_dia": excepcion["condicion"],
+        "tolerancia_climatica": bool(climatica),
         "tardanzas_mes_previas": tardanzas_mes if vinculo == "Pasante" else None,
         "detalle": (
             f"{vinculo} · retraso {int(retraso.total_seconds() // 60)} min vs "
             f"tolerancia {int(tolerancia.total_seconds() // 60)} min "
-            f"({climatica and 'climática activa' or 'sin clima'}) → {estado}"
+            f"({excepcion['condicion'] or 'día normal'}) → {estado}"
         ),
     }
 
 
+@dataclass(frozen=True)
+class DesgloseJornada:
+    """Liquidación legal de un turno, lista para persistir y para nómina."""
+
+    horas_ordinarias: timedelta
+    horas_nocturnas: timedelta
+    horas_extra_50: timedelta
+    horas_extra_100: timedelta
+    tipo_jornada: str
+    toca_descanso: bool
+
+    @property
+    def total_trabajado(self) -> timedelta:
+        return self.horas_ordinarias + self.horas_extra_50 + self.horas_extra_100
+
+
+@dataclass(frozen=True)
+class _Tramo:
+    """Porción de turno homogénea en naturaleza y en día calendario."""
+
+    duracion: timedelta
+    nocturno: bool
+    descanso: bool
+
+
 def _es_nocturno(momento: datetime) -> bool:
     """Clasifica un instante como nocturno (20:00 a 06:00)."""
-    return momento.hour >= 20 or momento.hour < 6
+    return momento.hour >= 20 or momento.hour < INICIO_DIURNO.hour
 
 
 def _proxima_frontera(momento: datetime) -> datetime:
-    """Retorna la siguiente frontera de cambio de jornada (06:00 o 20:00)."""
-    if _es_nocturno(momento):
-        frontera = momento.replace(hour=6, minute=0, second=0, microsecond=0)
-    else:
-        frontera = momento.replace(hour=20, minute=0, second=0, microsecond=0)
-    if frontera <= momento:
-        frontera += timedelta(days=1)
-    return frontera
+    """Siguiente instante donde cambia la clasificación del tramo.
+
+    Son fronteras tanto los cortes de jornada (06:00 y 20:00) como la
+    medianoche: cruzar al día siguiente puede cambiar si el tramo cae en
+    domingo o feriado, aunque su naturaleza diurna o nocturna no varíe.
+    """
+    base = momento.replace(minute=0, second=0, microsecond=0)
+    candidatas = [
+        base.replace(hour=h) + timedelta(days=dias)
+        for dias in (0, 1)
+        for h in (0, INICIO_DIURNO.hour, FIN_DIURNO.hour)
+    ]
+    return min(c for c in candidatas if c > momento)
 
 
-def _desglose_por_rangos(
-    hora_entrada: datetime, hora_salida: datetime
-) -> Tuple[timedelta, timedelta]:
-    """Segmenta el turno en tramos diurnos y nocturnos (cruza medianoche)."""
-    diurno = timedelta(0)
-    nocturno = timedelta(0)
+def _segmentar(
+    hora_entrada: datetime,
+    hora_salida: datetime,
+    es_descanso: Callable[[date], bool],
+) -> List[_Tramo]:
+    """Parte el turno en tramos homogéneos, en orden cronológico."""
+    tramos: List[_Tramo] = []
     actual = hora_entrada
     while actual < hora_salida:
         fin = min(_proxima_frontera(actual), hora_salida)
-        segmento = fin - actual
-        if _es_nocturno(actual):
-            nocturno += segmento
-        else:
-            diurno += segmento
+        tramos.append(
+            _Tramo(
+                duracion=fin - actual,
+                nocturno=_es_nocturno(actual),
+                descanso=es_descanso(actual.date()),
+            )
+        )
         actual = fin
-    return diurno, nocturno
+    return tramos
+
+
+def _tope_ordinario(tramos: List[_Tramo]) -> Tuple[timedelta, str]:
+    """Determina el tope de jornada ordinaria y el tipo de turno (Art. 194).
+
+    El tope se decide una sola vez para todo el turno. Sumar el tope diurno
+    al nocturno permitiría declarar 15 horas ordinarias en un mismo día.
+    """
+    laborables = [t for t in tramos if not t.descanso]
+    if not laborables:
+        return timedelta(0), JORNADA_DESCANSO_TIPO
+    nocturno = sum((t.duracion for t in laborables if t.nocturno), timedelta(0))
+    diurno = sum((t.duracion for t in laborables if not t.nocturno), timedelta(0))
+    if not nocturno:
+        return JORNADA_DIURNA, JORNADA_DIURNA_TIPO
+    if not diurno or nocturno >= NOCTURNO_QUE_VUELVE_NOCTURNA:
+        return JORNADA_NOCTURNA, JORNADA_NOCTURNA_TIPO
+    return JORNADA_MIXTA, JORNADA_MIXTA_TIPO
 
 
 def calcular_horas_paraguay(
-    hora_entrada: datetime, hora_salida: datetime, es_feriado: bool
-) -> Dict[str, timedelta]:
-    """Calcula el desglose legal de un turno según la Ley N.º 213.
+    hora_entrada: datetime,
+    hora_salida: datetime,
+    es_descanso: Optional[Callable[[date], bool]] = None,
+) -> DesgloseJornada:
+    """Liquida un turno según la Ley N.º 213.
 
     Args:
-        hora_entrada: Instante de ingreso (aware o naive, consistente).
+        hora_entrada: Instante de ingreso.
         hora_salida: Instante de egreso; si es anterior a la entrada se
             interpreta como turno nocturno que cruza la medianoche.
-        es_feriado: Indica si el día es domingo o feriado oficial.
+        es_descanso: Predicado que indica si una fecha es domingo o feriado.
+            Se consulta **por cada día que toca el turno**, de modo que un
+            turno de sábado a domingo liquida al 100 % solo la porción del
+            domingo. Por defecto usa el calendario oficial paraguayo.
 
     Returns:
-        Diccionario con ``horas_ordinarias``, ``horas_extra_50`` y
-        ``horas_extra_100`` como ``timedelta``.
+        ``DesgloseJornada`` con las horas ordinarias, el subconjunto de
+        ellas trabajado en horario nocturno (recargo del 30 %) y las
+        extraordinarias al 50 % y al 100 %.
+
+    Raises:
+        ValueError: si los instantes mezclan zona horaria, o si el turno
+            supera las 24 horas.
     """
+    if (hora_entrada.tzinfo is None) != (hora_salida.tzinfo is None):
+        raise ValueError(
+            "Entrada y salida deben compartir zona horaria: una es naive y la otra aware."
+        )
+    if es_descanso is None:
+        es_descanso = es_dia_de_descanso
     if hora_salida < hora_entrada:
         hora_salida += timedelta(days=1)
     if hora_salida - hora_entrada > timedelta(hours=24):
         raise ValueError("El turno no puede superar las 24 horas.")
-    diurno, nocturno = _desglose_por_rangos(hora_entrada, hora_salida)
-    if es_feriado:
-        return {
-            "horas_ordinarias": timedelta(0),
-            "horas_extra_50": timedelta(0),
-            "horas_extra_100": diurno + nocturno,
-        }
-    ordinarias_diurnas = min(diurno, JORNADA_DIURNA)
-    ordinarias_nocturnas = min(nocturno, JORNADA_NOCTURNA)
-    return {
-        "horas_ordinarias": ordinarias_diurnas + ordinarias_nocturnas,
-        "horas_extra_50": diurno - ordinarias_diurnas,
-        "horas_extra_100": nocturno - ordinarias_nocturnas,
-    }
+
+    tramos = _segmentar(hora_entrada, hora_salida, es_descanso)
+    restante, tipo = _tope_ordinario(tramos)
+
+    ordinarias = nocturnas = extra_50 = extra_100 = timedelta(0)
+    for tramo in tramos:
+        if tramo.descanso:
+            extra_100 += tramo.duracion
+            continue
+        # Las ordinarias son las primeras horas efectivamente trabajadas.
+        comun = min(tramo.duracion, restante)
+        if comun:
+            ordinarias += comun
+            if tramo.nocturno:
+                nocturnas += comun
+            restante -= comun
+        exceso = tramo.duracion - comun
+        if exceso:
+            if tramo.nocturno:
+                extra_100 += exceso
+            else:
+                extra_50 += exceso
+
+    return DesgloseJornada(
+        horas_ordinarias=ordinarias,
+        horas_nocturnas=nocturnas,
+        horas_extra_50=extra_50,
+        horas_extra_100=extra_100,
+        tipo_jornada=tipo,
+        toca_descanso=any(t.descanso for t in tramos),
+    )
+
+
+def persistir_desglose(
+    db: Database,
+    marcaje_id: int,
+    hora_salida: datetime,
+    desglose: DesgloseJornada,
+    incidencia: str = "",
+) -> None:
+    """Único punto de escritura de una liquidación en ``marcajes``.
+
+    El cierre en línea, la sincronización offline y la corrección aprobada
+    por RRHH convergen acá para que las tres rutas no puedan divergir en
+    cómo guardan el mismo cálculo.
+    """
+    db.close_clock_out(
+        marcaje_id,
+        hora_salida,
+        desglose.toca_descanso,
+        desglose.horas_ordinarias,
+        desglose.horas_extra_50,
+        desglose.horas_extra_100,
+        incidencia,
+        desglose.horas_nocturnas,
+        desglose.tipo_jornada,
+    )
 
 
 class ClockEngine:
@@ -223,13 +438,18 @@ class ClockEngine:
         self.db = db
         self.user = user
 
-    def clock_in(self, es_dia_lluvioso: bool = False) -> Tuple[int, datetime]:
+    def clock_in(self, verificacion_facial: str = "No verificada") -> Tuple[int, datetime]:
         """Registra la entrada aplicando la Res. 3028/2024.
 
-        La evaluación distingue pasantes de funcionarios: consume la
-        tolerancia ordinaria (10 o 15 minutos), activa la climática de
-        30 minutos en días de lluvia intensa y clasifica la incidencia
-        como ``Llegada Tardía`` o ``Ausencia Injustificada``.
+        La evaluación distingue pasantes de funcionarios, consume la
+        tolerancia ordinaria (10 o 15 minutos), suma la que Recursos Humanos
+        haya declarado para el día y clasifica la incidencia como ``Llegada
+        Tardía`` o ``Ausencia Injustificada``.
+
+        Args:
+            verificacion_facial: Resultado del control biométrico del kiosco,
+                que se guarda con la marca para que una marca verificada no
+                se confunda con una que el motor no pudo comprobar.
 
         Returns:
             Tupla con el identificador del marcaje y el instante exacto
@@ -239,16 +459,14 @@ class ClockEngine:
         if open_entry:
             raise ValueError("Ya hay una entrada abierta sin salida registrada.")
         ahora = ahora_local()
-        evaluacion = evaluar_asistencia(
-            self.db, self.user["id"], ahora, es_dia_lluvioso
-        )
+        evaluacion = evaluar_asistencia(self.db, self.user["id"], ahora)
         estado = evaluacion["estado"]
         incidencia = (
             "Ausencia Injustificada"
             if estado == "Ausencia Injustificada"
             else ("Llegada Tardía" if estado == "Llegada Tardía" else "")
         )
-        condicion = "Lluvia intensa" if es_dia_lluvioso else ""
+        condicion = evaluacion["condicion_dia"]
         tolerancia_aplicada = (
             evaluacion["tolerancia_climatica"] or evaluacion["retraso_min"] > 0
         )
@@ -259,6 +477,7 @@ class ClockEngine:
             incidencia,
             tolerancia_aplicada,
             condicion,
+            verificacion_facial=verificacion_facial,
         )
         if estado != "Normal":
             notifications.registrar_alerta(
@@ -287,33 +506,25 @@ class ClockEngine:
         if not open_entry:
             raise ValueError("No hay una entrada abierta para cerrar.")
         ahora = ahora_local()
-        feriado = es_feriado_o_domingo(open_entry["hora_entrada"])
-        desglose = calcular_horas_paraguay(open_entry["hora_entrada"], ahora, feriado)
+        desglose = calcular_horas_paraguay(open_entry["hora_entrada"], ahora)
         incidencia = self._clasificar_incidencia_salida(
-            desglose, feriado, open_entry.get("tipo_incidencia") or ""
+            desglose, open_entry.get("tipo_incidencia") or ""
         )
-        self.db.close_clock_out(
-            open_entry["id"],
-            ahora,
-            feriado,
-            desglose["horas_ordinarias"],
-            desglose["horas_extra_50"],
-            desglose["horas_extra_100"],
-            incidencia,
-        )
+        persistir_desglose(self.db, open_entry["id"], ahora, desglose, incidencia)
         return open_entry["id"], ahora
 
     @staticmethod
     def _clasificar_incidencia_salida(
-        desglose: Dict[str, timedelta], feriado: bool, incidencia_entrada: str
+        desglose: DesgloseJornada, incidencia_entrada: str
     ) -> str:
-        """Combina la incidencia de entrada con la de salida anticipada."""
-        trabajado = (
-            desglose["horas_ordinarias"]
-            + desglose["horas_extra_50"]
-            + desglose["horas_extra_100"]
-        )
-        if not feriado and trabajado < JORNADA_DIURNA:
+        """Combina la incidencia de entrada con la de salida anticipada.
+
+        La jornada de referencia es la del turno efectivamente trabajado: un
+        turno nocturno que cierra a las 7 horas cumplió su jornada completa y
+        no puede reprocharse como salida anticipada.
+        """
+        tope = TOPES_POR_TIPO[desglose.tipo_jornada]
+        if tope and desglose.total_trabajado < tope:
             return " y ".join(p for p in (incidencia_entrada, "Salida Anticipada") if p)
         return incidencia_entrada
 
@@ -338,7 +549,9 @@ class ClockEngine:
             return "SALIDA"
         raise ValueError("Ya registró su entrada y su salida de hoy.")
 
-    def registrar_asistencia(self, es_dia_lluvioso: bool = False) -> Tuple[int, datetime, str]:
+    def registrar_asistencia(
+        self, verificacion_facial: str = "No verificada"
+    ) -> Tuple[int, datetime, str]:
         """Botón maestro: registra entrada o salida según el estado del día.
 
         Una sola acción para el kiosco de recepción: consulta internamente
@@ -354,7 +567,7 @@ class ClockEngine:
         if accion == "SALIDA":
             entry_id, momento = self.clock_out()
             return entry_id, momento, "SALIDA"
-        entry_id, momento = self.clock_in(es_dia_lluvioso)
+        entry_id, momento = self.clock_in(verificacion_facial)
         return entry_id, momento, "ENTRADA"
 
     def justificacion_para(self, fecha: date) -> Optional[Dict]:

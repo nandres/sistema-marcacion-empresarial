@@ -13,9 +13,9 @@ Sistema integral y resiliente para el control de asistencia laboral adaptado al 
 
 El núcleo de cálculo del sistema (`clock_engine.py`) procesa las marcas abstrayendo la complejidad de la legislación laboral de Paraguay:
 
-*   **Código del Trabajo (Ley 213/1993):** Cómputo automatizado de horas extraordinarias (recargos 50%/100%), turnos nocturnos que cruzan la medianoche y validación de jornadas máximas (8 h diurnas / 7 h nocturnas).
+*   **Código del Trabajo (Ley 213/1993):** El turno se parte en tramos homogéneos por naturaleza (diurno/nocturno) y por día calendario, de modo que un turno que cruza hacia un domingo liquida al 100 % **solo esa porción**. El tope de jornada ordinaria se decide una vez para todo el turno (8 h diurna, 7 h nocturna, 7 h 30 mixta; nocturno ≥ 5 h reputa la jornada nocturna) y el excedente es extraordinario: +50 % diurno, +100 % nocturno. Las horas ordinarias nocturnas llevan el recargo del 30 % del Art. 232 y se liquidan en columna propia.
 *   **Reforma Tributaria (Ley 6380/2019):** Cálculo automatizado del aguinaldo proporcional y acumulado.
-*   **Res. Directorio 3028/2024:** Motor de tolerancia climática (+30 min en días de lluvia intensa) y diferenciación estricta de reglas de negocio entre pasantes y funcionarios.
+*   **Res. Directorio 3028/2024:** Tolerancia climática y diferenciación estricta de reglas entre pasantes y funcionarios. La condición excepcional del día (lluvia intensa, corte de rutas, paro de transporte) la **declara Recursos Humanos** para toda la plantilla, con firma y auditoría: no es una casilla que marque quien llega tarde.
 *   **Reglamento Interno (Res. 1307/2010):** Catálogo automatizado de permisos, licencias y control estricto de cuotas mensuales por horas o usos (bloqueo automático al 4.° uso del Art. 14).
 
 ---
@@ -23,8 +23,11 @@ El núcleo de cálculo del sistema (`clock_engine.py`) procesa las marcas abstra
 ## 🛠️ Stack Tecnológico y Módulos Core
 
 ### Frontend & Interfaces
-*   **Kiosco de Escritorio:** Desarrollado con `CustomTkinter` y gráficos en tiempo real mediante `matplotlib`. Diseñado para despliegues locales con soporte nativo de temas claro/oscuro.
-*   **Web (Kiosco + Portal + Gestión):** Construido sobre `FastAPI` + `WebSockets` para alertas en vivo, autenticación mediante `JWT` (sesiones de 8 horas), marcación desde el navegador con ticket oficial y **Panel de Gestión RRHH completo** (personal, justificaciones con PDF oficial, correcciones, alertas y auditoría).
+Ambas interfaces comparten un lenguaje visual llamado **Planilla**, tomado del objeto que este software reemplaza: la hoja rayada de asistencia. La jerarquía la dan filetes tipográficos y espacio en blanco —ni una esquina redondeada ni una sombra proyectada en toda la hoja de estilos—, toda cifra va monoespaciada y tabular, y el color aparece sólo cuando significa algo. Se define una sola vez por tema y `tests/test_paleta.py` lo verifica en tres frentes: contraste WCAG AA, paridad entre web y escritorio, y deriva del lenguaje.
+
+*   **Kiosco de Escritorio:** `CustomTkinter` con gráficos en vivo por `matplotlib`, temas claro/oscuro y paleta tokenizada.
+*   **Web (Kiosco + Portal + Gestión):** `FastAPI` + `WebSockets` sirviendo una interfaz en archivos propios (`src/static`). El portal del empleado se ordena por lo que la persona realmente pregunta: **si marcó hoy**, cómo viene el mes en un registro día por día, cuántos días le quedan, y un pedido de corrección que nace desde el día que se toca. El panel de RRHH abre por **excepción** —lo que está sin resolver— y no por contadores de plantilla.
+*   **Autoservicio real:** el empleado pide cualquiera de los **32 artículos** del reglamento desde el portal, con su saldo y sus condiciones a la vista; el pedido se valida contra el artículo invocado antes de guardarse y una solicitud pendiente ya compromete la cuota. Aprobar emite la justificación y su PDF sin ningún paso extra. La **planilla de horas extraordinarias** (Art. 232/233/234) y la **constancia de asistencia** se componen solas desde los marcajes liquidados: ningún formulario se llena a mano.
 
 ### Backend, Datos y Resiliencia
 *   **Base de Datos Principal:** `PostgreSQL 14+` con esquemas de auto-migración y pistas de auditoría mediante tipos de datos nativos `JSONB`.
@@ -32,7 +35,7 @@ El núcleo de cálculo del sistema (`clock_engine.py`) procesa las marcas abstra
 
 ### Hardware & Visión Artificial
 *   **Validación Biométrica:** Integración directa por protocolo `TCP/IP` (Puerto 4370) con relojes biométricos `ZKTeco` para sincronización de personal.
-*   **Seguridad y Auditoría:** Validación facial integrada con `OpenCV` (algoritmo LBPH). Los descalces biométricos bloquean la operación y disparan alertas inmediatas de **FRAUDE** en el panel de RRHH.
+*   **Seguridad y Auditoría:** Validación facial integrada con `OpenCV` (algoritmo LBPH) con **tres veredictos**, no dos. Un rostro que no coincide bloquea siempre y dispara una alerta de **FRAUDE**. Lo que el motor no puede verificar —sin foto de referencia, sin cámara— nunca se da por verificado: según `BIOMETRIA_OBLIGATORIA`, se bloquea o se registra en `marcajes.verificacion_facial` como *No verificada* con aviso a RRHH.
 
 ---
 
@@ -42,8 +45,10 @@ El núcleo de cálculo del sistema (`clock_engine.py`) procesa las marcas abstra
 src/
 ├── app.py            # Interfaz de Línea de Comandos (CLI) administrativa
 ├── gui.py            # Kiosco y Panel de Gestión de Escritorio (CustomTkinter)
-├── web_server.py     # Kiosco de navegador, Portal Web y API (FastAPI + WebSockets)
-├── database.py       # Capa de datos PostgreSQL, migraciones y auditorías JSONB
+├── web_server.py     # API del kiosco, el portal y el panel (FastAPI + WebSockets)
+├── static/           # Interfaz web: index.html, estilos.css y portal.js
+├── migrate.py        # Paso de despliegue: aplica el esquema antes de servir tráfico
+├── database.py       # Capa de datos PostgreSQL, esquema y auditorías JSONB
 ├── auth.py           # Autenticación unificada, Control de Acceso Basado en Roles (RBAC) y JWT
 ├── clock_engine.py   # Motor de evaluación horaria y desglose legal paraguayo
 ├── reglamento.py     # Lógica e interpretación de cuotas del catálogo de permisos
@@ -94,6 +99,10 @@ JWT_SECRET_KEY=usa_un_token_seguro_hex
 JORNADA_INICIO=08:00
 COMPROBANTE_CLAVE=clave_firma_comprobantes
 
+# Bloquea toda marca que el motor biométrico no pueda verificar. Viene
+# apagada: una plantilla recién migrada no tiene fotos cargadas.
+BIOMETRIA_OBLIGATORIA=0
+
 # Opcionales
 SMTP_HOST=smtp.tuproveedor.com   # Notificaciones por correo
 SMTP_PORT=587
@@ -104,10 +113,18 @@ HOST=127.0.0.1                   # Servidor web
 PORT=8000
 ```
 
+> **`JWT_SECRET_KEY` y `COMPROBANTE_CLAVE` son obligatorias y no tienen valor por defecto.** Si falta alguna, o mide menos de 32 caracteres, el proceso aborta al arrancar en lugar de firmar con una clave conocida. Generá cada una con:
+> ```bash
+> python -c "import secrets; print(secrets.token_urlsafe(48))"
+> ```
+
 ### Inicialización de Componentes
-La base de datos se migrará automáticamente en el primer arranque:
+El esquema se aplica en un paso explícito, previo a levantar cualquier proceso que atienda tráfico. Las migraciones toman locks exclusivos de tabla, así que no pueden correr dentro del ciclo de una petición:
 ```bash
-# Ejecutar la CLI Administrativa
+# 1. Aplicar el esquema (crea la base si no existe)
+python src/migrate.py
+
+# 2. Ejecutar la CLI Administrativa
 python src/app.py
 
 # Lanzar la Interfaz Gráfica de Escritorio (Kiosco + Panel)
@@ -128,6 +145,12 @@ La suite de pruebas incluye tests de humo de regresión funcional y simulación 
 
 ```bash
 python tests/setup_ci.py             # Siembra de datos iniciales en DB limpia
+python tests/smoke_portal_js.py      # Interfaz estática: sintaxis, CSP y sin scripts embebidos
+python tests/test_motor_horario.py   # Turnos frontera: jornadas, recargos y feriados
+python tests/test_paleta.py          # Contraste WCAG, paridad web/escritorio y deriva visual
+python tests/test_condicion_dia.py   # Antifraude: la tolerancia la declara RRHH, no el empleado
+python tests/smoke_permisos_autoservicio.py  # Pedido, cuota reservada, aprobación y PDF
+python tests/test_planilla_extras.py # Planilla de horas extra y constancia de asistencia
 python tests/validar_art14.py        # Límites de cuota y usos del Art. 14
 python tests/validar_reglamento.py   # Catálogo y cuotas de permisos por reglamento
 python tests/smoke_sync.py           # Motor offline/online transaccional

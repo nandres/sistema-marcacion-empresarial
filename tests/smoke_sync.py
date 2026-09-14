@@ -26,15 +26,15 @@ db.limpiar_marcajes_prueba(2, hace - timedelta(days=1), hace)
 
 # 1) Entrada puntual (07:30) -> estado Normal, sin alerta
 momento_entrada = datetime(hace.year, hace.month, hace.day, 7, 30, tzinfo=timezone.utc)
-cola.encolar("juan", momento_entrada, False)
+cola.encolar("juan", momento_entrada)
 
 # 2) Entrada tardía (09:30) -> Llegada Tardía -> alerta para RRHH
 momento_tarde = datetime(hace.year, hace.month, hace.day - 1, 9, 30, tzinfo=timezone.utc)
-cola.encolar("juan", momento_tarde, False)
+cola.encolar("juan", momento_tarde)
 
 # 3) Salida del día puntual (17:00) -> cierra la entrada del punto 1
 momento_salida = datetime(hace.year, hace.month, hace.day, 17, 0, tzinfo=timezone.utc)
-cola.encolar("juan", momento_salida, False)
+cola.encolar("juan", momento_salida)
 
 pendientes = cola.pendientes()
 print("encoladas:", len(pendientes))
@@ -59,7 +59,7 @@ resumen2 = sync_worker.sincronizar(cola, db=db)
 print("lote 2 (duplicados):", resumen2, "cola restante:", len(cola))
 
 # 5) Reintento de los mismos momentos: sync_id único impide duplicados
-cola.encolar("juan", momento_entrada, False)
+cola.encolar("juan", momento_entrada)
 resumen3 = sync_worker.sincronizar(cola, db=db)
 print("lote 3 (reinserción):", resumen3)
 print("sin duplicados:", len(db.get_entries_by_date(2, hace)) == 1)

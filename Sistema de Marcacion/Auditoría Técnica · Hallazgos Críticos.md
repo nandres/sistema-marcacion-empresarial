@@ -1,0 +1,380 @@
+# Auditoría Técnica · Hallazgos Críticos
+
+> Revisión completa del repositorio (~9.500 líneas) desde tres frentes: arquitectura/backend, producto/UX y seguridad/QA. Fecha de corte: **2026-09-13**, commit `d0559f3`.
+> Cada hallazgo lleva archivo, línea, impacto real y corrección propuesta. Los marcados con ✅ fueron **reproducidos ejecutando el código**, no inferidos por lectura.
+
+> [!success] Estado de remediación · 2026-09-14
+> Corregidos los **cinco P0** (el quinto apareció al abrir el portal en un navegador durante la verificación) y los **cuatro errores de liquidación del motor horario**, más dos defectos que cayeron de arrastre.
+>
+> | # | Estado | Verificación |
+> | --- | --- | --- |
+> | P0-1 | Corregido | El servidor responde con otra sesión reteniendo un lock de `users`; antes toda petición se encolaba detrás |
+> | P0-2 | Corregido | `initialize()` sobre base virgen crea las 8 tablas, columnas e índices |
+> | P0-3 | Corregido | Un Empleado recibe 403 al publicar; el payload se renderiza como texto y no se ejecuta |
+> | P0-4 | Corregido | Secreto ausente o corto aborta el proceso; firma migrada a HMAC-SHA256 |
+> | P0-5 | Corregido | `node --check` sobre el script renderizado; portal operativo en navegador |
+> | P1-3 | Corregido | Tope único por turno: 06:00–21:00 liquida 7 h 30 ordinarias, no 9 |
+> | P1-4 | Corregido | `horas_nocturnas` en columna propia, con el +30 % propagado al aguinaldo |
+> | P1-5 | Corregido | Sábado 22:00 → domingo 06:00 manda las 6 h de domingo al 100 % |
+> | P2-3 | Corregido | `feriados_de(anio)` compone cualquier año: fijos + Pascua + traslados |
+> | P2-1 | Corregido de arrastre | Aprobar una corrección de salida ya no lanza `TypeError` |
+> | P2-4 | Parcial | El reproche de salida anticipada usa el tope real del turno; siguen dos definiciones de tardanza en la entrada |
+>
+> Cobertura nueva: `tests/test_motor_horario.py` (14 turnos frontera) y `tests/smoke_portal_js.py`.
+
+## Cómo leer este registro
+
+| Severidad | Criterio |
+| --- | --- |
+| **P0** | Impide operar en producción o permite tomar el control del sistema |
+| **P1** | Produce pérdida económica, fraude o liquidación legal incorrecta |
+| **P2** | Rompe un flujo funcional para el usuario final |
+| **P3** | Deuda de cumplimiento, datos o escalabilidad a plazo corto |
+
+---
+
+## P0 · Bloqueantes
+
+### P0-1 · Migraciones DDL en cada petición HTTP
+
+`src/web_server.py:862` → `_cliente()` llama a `db.initialize()` en **cada request**, y cada endpoint abre dos clientes (uno en `_usuario_autenticado`, otro en el handler).
+
+`initialize()` ejecuta ~40 sentencias DDL, entre ellas:
+
+```sql
+ALTER TABLE justificaciones DROP CONSTRAINT IF EXISTS justificaciones_tipo_permiso_check;
+ALTER TABLE justificaciones ADD CONSTRAINT justificaciones_tipo_permiso_check CHECK (...);
+```
+
+`DROP/ADD CONSTRAINT` toma **ACCESS EXCLUSIVE LOCK** sobre `justificaciones`. Con `gunicorn -w 4` (Dockerfile) y 200 empleados marcando a las 08:00, cada petición compite por un lock exclusivo contra las otras tres: las peticiones se serializan, la latencia se dispara y aparecen *lock timeouts*.
+
+Hay además una ventana real de corrupción: entre el `DROP` y el `ADD` de un worker, otro worker puede insertar un `tipo_permiso` fuera del catálogo.
+
+La bitácora **ya registró esta lección** para el worker de sincronización ("no debe correr `initialize()` (DDL) en cada ciclo"), pero la corrección nunca se trasladó al servidor web.
+
+**Corrección**: mover las migraciones a un paso de arranque explícito (`alembic upgrade head` o un `migrate.py` invocado por el entrypoint) y que la petición solo abra conexión desde un pool.
+
+### P0-2 · El esquema no se puede crear desde cero
+
+`src/database.py:219-238` ejecuta sentencias contra `marcajes` **antes** de crear la tabla, que recién aparece en la línea 241:
+
+```python
+cursor.execute("CREATE INDEX IF NOT EXISTS idx_marcajes_analitica ON marcajes (es_tardanza, hora_entrada)")  # línea 220
+cursor.execute("ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS tolerancia_aplicada ...")                       # línea 228
+...
+cursor.execute("CREATE TABLE IF NOT EXISTS marcajes (...)")                                                    # línea 241
+```
+
+Sobre una base virgen, la línea 220 levanta `UndefinedTable (42P01)`. Como la conexión es `autocommit = False` y no hay `rollback`, la transacción queda abortada y el resto del `initialize()` falla en cascada. **El sistema solo arranca sobre bases que ya tenían el esquema**; un despliegue limpio no levanta.
+
+**Corrección**: ordenar el DDL por dependencias, o directamente migraciones versionadas.
+
+### P0-3 · XSS almacenado en el panel de alertas → toma de cuenta de Administrador
+
+Dos defectos que se encadenan:
+
+1. `src/web_server.py:977` — `POST /api/alertas` exige token pero **no valida rol**. Cualquier empleado autenticado publica una alerta con `tipo`, `mensaje`, `detalle` y `usuario_id` arbitrarios.
+2. `src/web_server.py:309-311` — el toast en vivo renderiza con `innerHTML` **sin escapar**:
+
+```js
+aviso.innerHTML = '<b>' + icono + alerta.mensaje + '</b>' +
+  (alerta.detalle ? '<span>' + alerta.detalle + '</span>' : '');
+```
+
+Un empleado publica una alerta con `usuario_id: null` (llega a todos los conectados) cuyo mensaje sea `<img src=x onerror="...">`. El siguiente usuario de RRHH que abra el portal ejecuta ese código con su sesión. Como el JWT vive en `localStorage` (`marcacion_jwt`), el payload lo exfiltra y el atacante queda con una sesión de Administrador durante 8 horas.
+
+El resto del panel sí usa `esc()` (`cargarAlertasPanel`, `cargarAuditoria`), lo que confirma que el escape del toast es un olvido, no una decisión.
+
+**Corrección**: `_exigir_rrhh` en el POST, `textContent` en lugar de `innerHTML` en el toast, y CSP `default-src 'self'` en las cabeceras de respuesta.
+
+### P0-4 · Clave de firma JWT con valor por defecto público
+
+`src/auth.py:44`
+
+```python
+return os.getenv("JWT_SECRET_KEY", "clave-de-desarrollo-no-usar-en-produccion")
+```
+
+Si la variable no está definida —un `.env` mal montado, una variable olvidada en Render— el sistema **no falla: firma con una clave que está en el código fuente público**. Cualquiera fabrica un token con `rol: Administrador` y entra.
+
+Lo mismo ocurre en `src/reports.py:155` con `COMPROBANTE_CLAVE`: los comprobantes "de fidelidad legal" se firman con una clave conocida y quedan falsificables.
+
+**Corrección**: fallar al arrancar si falta el secreto. Sin valor por defecto, nunca.
+
+### P0-5 · El portal web estaba caído por completo ✅
+
+Hallazgo descubierto **al abrir la página en un navegador** para verificar la corrección de P0-3, no durante la lectura del código.
+
+`src/web_server.py:643-645` escribía comillas escapadas para JavaScript dentro de un f-string de Python:
+
+```python
+'<button ... onclick="mostrarSeccionGestion(\'personal\')">Gestionar personal</button> ' +
+```
+
+Python consume el `\'` y entrega al navegador una comilla suelta que cierra la cadena de JavaScript antes de tiempo:
+
+```javascript
+'<button ... onclick="mostrarSeccionGestion('personal')">…'
+//                                            ^ la cadena termina acá
+```
+
+El resultado es `SyntaxError: Unexpected identifier 'personal'` **en tiempo de parseo**, lo que anula el bloque `<script>` entero. No fallaba una función: no se definía ninguna de las 42. Sin login, sin kiosco, sin tablero, sin panel. El sitio servía el HTML y nada más.
+
+Confirmado renderizando la plantilla de `HEAD` y pasándola por `node --check`:
+
+```
+VERSION HEAD renderizada de verdad -> node --check exit: 1
+    '<button class="btn-secundario" onclick="mostrarSeccionGestion('personal')">…' +
+    SyntaxError: Unexpected identifier 'personal'
+```
+
+**Por qué nadie lo notó**: toda la suite ejerce la API por HTTP y ninguna prueba renderiza el script. Un fallo total del cliente convive con una suite en verde.
+
+**Corrección**: duplicar la barra (`\\'`) para que Python emita un escape válido de JavaScript, y `tests/smoke_portal_js.py` como guarda de regresión.
+
+---
+
+## P1 · Fraude y liquidación
+
+### P1-1 · El empleado se auto-otorga la tolerancia climática ✅ corregido
+
+> Cerrado el 2026-09-14. La condición vive en la tabla `condiciones_dia`, la firma Recursos Humanos y alcanza a toda la plantilla. `tests/test_condicion_dia.py` verifica además que no haya reaparecido ninguna vía para que el dato lo aporte quien marca: ni en `evaluar_asistencia`, ni en `registrar_asistencia`, ni en `MarcarRequest`, ni en las dos interfaces.
+
+`src/web_server.py:1150` → `MarcarRequest.es_dia_lluvioso` viaja **desde el cliente**, marcado por un checkbox del propio kiosco (`lluvia_kiosco`).
+
+El sujeto de la regla controla el input de la regla: llego 25 minutos tarde, tildo "día lluvioso" y los 30 minutos del Art. 3028/2024 me cubren. No queda registro de la mentira: `condicion_climatica` guarda "Lluvia intensa" como hecho.
+
+**Corrección aplicada**: la condición climática es un **estado del día declarado por RRHH**, nunca un campo del request de marcación. La declaración lleva fecha, condición, tolerancia en minutos (con techo de 120), nota interna y firmante, y se audita en `logs_auditoria`. El kiosco la muestra pero no la puede declarar. La cola offline ya no la transporta: se resuelve al sincronizar, porque la declaración puede firmarse después de que el kiosco perdiera la conexión.
+
+### P1-2 · La validación facial falla en abierto ✅ corregido
+
+> Cerrado el 2026-09-14. `facial.validar` devuelve tres estados en vez de un booleano y la política vive aparte, en `facial.decidir`.
+
+`src/facial.py:174-176`
+
+```python
+objetivo_tiene_foto = any(int(foto["user_id"]) == user_id for foto in fotos)
+if not objetivo_tiene_foto:
+    return True, "El usuario no tiene foto registrada; validación omitida."
+```
+
+Un control antifraude que devuelve `True` cuando no puede verificar. Como todo empleado nuevo nace sin foto, el bypass es el estado por defecto: basta usar la cédula de alguien sin foto registrada.
+
+Se suma que **LBPH no tiene detección de vida**: una foto en la pantalla de un celular pasa la verificación. Y `UMBRAL_CONFIANZA = 80.0` es permisivo para este algoritmo (por debajo de 50 es donde LBPH discrimina de verdad).
+
+**Corrección aplicada**: `validar` devuelve `Verificada`, `Rechazada` o `No verificable`, y `decidir` aplica la política. Un rostro que no coincide bloquea **siempre**: ahí hay identidad comprobable y no es la que dice ser. La falta de datos para comparar sigue a `BIOMETRIA_OBLIGATORIA`: apagada (por defecto, porque una plantilla recién migrada no tiene fotos) la marca pasa pero queda grabada en `marcajes.verificacion_facial` como *No verificada* y dispara una alerta a RRHH, que además la ve contada en su bandeja; encendida, se bloquea y el kiosco web queda cerrado por no tener cámara.
+
+Sigue pendiente lo de fondo: LBPH no tiene detección de vida y `UMBRAL_CONFIANZA = 80.0` es permisivo. Sustituirlo por *embeddings* faciales con prueba de vida pasiva es trabajo aparte.
+
+### P1-3 · La jornada mixta sobredeclara horas ordinarias ✅
+
+`src/clock_engine.py:210-216` suma los topes de ambas jornadas de forma independiente:
+
+```python
+ordinarias_diurnas = min(diurno, JORNADA_DIURNA)      # 8 h
+ordinarias_nocturnas = min(nocturno, JORNADA_NOCTURNA) # 7 h
+```
+
+Ejecutado sobre un turno 06:00 → 21:00 (15 horas continuas):
+
+```
+ordinarias: 9.00h | extra50: 6.00h | extra100: 0.00h
+```
+
+Nueve horas ordinarias en un solo día. El Código del Trabajo topea la **jornada mixta en 7 h 30**, y el techo absoluto es la jornada, no la suma de dos jornadas distintas. Cada hora mal clasificada como ordinaria es una hora extra que no se paga.
+
+La propia nota [[Motor de Reglas de Horas Extra]] documenta el error como ejemplo válido (fila "07:00–22:00 mixto → 10 h ordinarias").
+
+**Corrección**: el tope de jornada se decide **una vez** según la naturaleza del turno (diurno 8 h / nocturno 7 h / mixto 7 h 30), y todo excedente es extraordinario.
+
+### P1-4 · El recargo nocturno del 30 % no existe
+
+El motor **clasifica** horas nocturnas pero nunca las recarga. El Art. 232 del Código del Trabajo ordena un **+30 % sobre el valor ordinario** para el trabajo nocturno. El sistema paga la hora nocturna ordinaria igual que la diurna.
+
+Ni `calcular_horas_paraguay` ni `calcular_aguinaldo` (`src/reports.py:226`) contemplan el recargo, así que el error se propaga también al aguinaldo.
+
+### P1-5 · El feriado se decide por la hora de entrada ✅
+
+`src/clock_engine.py:290` → `es_feriado_o_domingo(open_entry["hora_entrada"])` clasifica **todo el turno** por su instante inicial.
+
+Verificado sobre un turno sábado 22:00 → domingo 06:00:
+
+```
+ordinarias: 7.00h | extra100: 1.00h
+es_feriado_o_domingo(entrada sábado) = False
+es_feriado_o_domingo(salida domingo) = True
+```
+
+Las seis horas trabajadas en domingo (00:00–06:00) se liquidan sin el recargo del 100 %. El error es simétrico: un turno que arranca el domingo a las 22:00 paga el lunes entero al 100 %.
+
+**Corrección**: segmentar el turno por día calendario y aplicar el recargo por tramo, igual que ya se hace con la frontera diurno/nocturno.
+
+### P1-6 · La cuota por días no valida el rango solicitado
+
+`src/auth.py:354` solo compara `horas_usadas` contra `restantes`, y ese camino existe únicamente para permisos medidos en horas. Para los permisos en **días** basta con que `disponible` sea `True`.
+
+"Motivos Particulares" tiene cuota de 5 días al año. Con cero usos, `disponible = True`, y nada impide emitir una justificación del 1 de enero al 31 de diciembre: 365 días de una sola vez. La cuota recién bloquea el **siguiente** intento.
+
+**Corrección**: calcular los días que consume el rango y validarlos contra `restantes` antes de insertar, con la misma lógica que ya existe para horas.
+
+---
+
+## P2 · Flujos rotos
+
+### P2-1 · Aprobar una corrección de salida rompe el servidor ✅
+
+`src/auth.py:458` construye un instante **naive**:
+
+```python
+instante = datetime.combine(solicitud["fecha_registro"], solicitud["hora_propuesta"])
+```
+
+y lo compara contra `marcaje["hora_entrada"]`, que viene de un `TIMESTAMPTZ` y es **aware**. Reproducido:
+
+```
+TypeError: can't compare offset-naive and offset-aware datetimes
+```
+
+Todo reclamo de tipo "Salida" que RRHH intente aprobar responde 500. El flujo de corrección —la red de seguridad del sistema cuando el biométrico falla— está caído para la mitad de los casos.
+
+### P2-2 · El turno nocturno no se puede cerrar
+
+`src/clock_engine.py:332-339` → `detectar_accion_hoy()` consulta `get_entries_by_date(user, hoy)`.
+
+Un empleado entra el lunes 22:00 y quiere salir el martes 06:00. El martes no hay marcajes con fecha de martes, así que la función decide `ENTRADA`; `clock_in` encuentra la entrada abierta y aborta con "Ya hay una entrada abierta sin salida registrada".
+
+**El empleado queda atrapado: no puede marcar salida ni entrada.** Es exactamente el caso de uso que el README promociona como soportado.
+
+**Corrección**: la decisión debe basarse en `get_open_entry()` (estado real del empleado), no en el calendario.
+
+### P2-3 · El sistema queda ciego a partir de enero de 2027 ✅
+
+`src/clock_engine.py:39` → `FERIADOS_PARAGUAY_2026` es un `frozenset` de 12 fechas de 2026. Verificado: `es_feriado_o_domingo(2027-01-01) = False`.
+
+En menos de cuatro meses todos los feriados se liquidan como días comunes. El recargo del 100 % desaparece del cálculo.
+
+**Corrección**: tabla `feriados` en base, administrable por RRHH, con año y tipo (fijo / trasladable).
+
+### P2-4 · Dos definiciones distintas de "llegada tardía"
+
+- `es_tardanza()` (`clock_engine.py:80`) → gracia de **10 minutos**.
+- `evaluar_asistencia()` (`clock_engine.py:133`) → gracia de **15 minutos** para funcionarios.
+
+El flujo normal de marcación usa la segunda; la corrección aprobada por RRHH (`auth.py:489`) usa la primera. Un funcionario que marca 08:12 es "Normal" al marcar, pero si RRHH corrige su marca **a esa misma hora** queda como "Llegada Tardía". La corrección castiga por corregir.
+
+### P2-5 · `JORNADA_INICIO` del `.env` se ignora ✅
+
+`src/clock_engine.py:64` congela `INICIO_JORNADA` en tiempo de importación, antes de que `load_dotenv()` llegue a correr (vive dentro de `load_config()`, en `Database.__init__`). Reproducido:
+
+```
+os.getenv JORNADA_INICIO (antes de load_dotenv): None
+os.getenv JORNADA_INICIO (después de load_dotenv): '08:00'
+INICIO_JORNADA sigue siendo: 08:00:00  <-- congelado en import-time
+```
+
+Hoy el defecto está latente porque el `.env` coincide con el valor por defecto. En cuanto alguien configure `JORNADA_INICIO=07:00`, el sistema seguirá evaluando contra las 08:00 **sin avisar**.
+
+Más de fondo: **la hora de entrada es una constante global del proceso**. No existe la entidad "turno", así que el sistema no puede modelar horarios rotativos, turnos por sucursal ni jornadas partidas.
+
+### P2-6 · Un marcaje abierto bloquea al empleado para siempre
+
+`get_open_entry` no filtra por antigüedad. Si alguien olvida marcar la salida, la entrada queda abierta indefinidamente y **todas** sus marcaciones futuras fallan con "Ya hay una entrada abierta". No hay auto-cierre ni escalamiento a RRHH.
+
+---
+
+## P3 · Datos, cumplimiento y escala
+
+### P3-1 · Datos biométricos sin cifrar
+
+La tabla `fotos` (`database.py:328`) guarda el rostro en `BYTEA` plano. Bajo la **Ley 6534/2020** de protección de datos personales, un dato biométrico es de categoría especial y exige medidas reforzadas. Un `SELECT` sobre un backup expone la plantilla facial de toda la plantilla.
+
+Tampoco hay política de retención: la foto sobrevive a la baja del empleado.
+
+**Corrección**: cifrado a nivel de columna con clave gestionada fuera de la base (KMS/Vault), y borrado en cascada con la baja.
+
+### P3-2 · El token viaja en la query string
+
+`src/web_server.py:465` y `:726` — la descarga de PDF pasa el JWT como parámetro de URL:
+
+```js
+window.open('/api/permiso/' + id + '/pdf?token=' + encodeURIComponent(obtenerToken()));
+```
+
+El token queda en los logs de acceso del servidor, en el historial del navegador y en la cabecera `Referer` hacia cualquier recurso externo. Mismo problema en el WebSocket (`/ws/alertas?token=`).
+
+**Corrección**: cookie `HttpOnly` + `Secure` + `SameSite=Strict`, que además cierra el vector de robo por XSS del P0-3.
+
+### P3-3 · Login sin límite de intentos
+
+`POST /api/login` no tiene *rate limiting* ni bloqueo progresivo. Doble consecuencia: fuerza bruta contra contraseñas de empleados (que en la práctica serán débiles), y **vector de DoS** — bcrypt es caro por diseño, así que un atacante satura la CPU con peticiones de login inválidas.
+
+### P3-4 · Las alertas en vivo solo llegan al 25 % de los clientes
+
+`src/notifications.py:54` → `BUS = BusAlertas()` es un pub/sub **en memoria del proceso**. El Dockerfile arranca `gunicorn -w 4`.
+
+Una alerta publicada en el worker 1 no alcanza a los WebSockets conectados a los workers 2, 3 y 4. El panel de RRHH pierde silenciosamente tres de cada cuatro alertas de fraude.
+
+**Corrección**: mover el bus a Redis Pub/Sub (o NOTIFY/LISTEN de PostgreSQL, ya que la dependencia existe).
+
+### P3-5 · Una excepción envenena toda la petición
+
+`database._execute` (línea 396) nunca cierra cursores y **no hace `rollback`** ante un error. Con `autocommit = False`, la primera excepción deja la transacción en estado abortado y toda consulta posterior de esa conexión falla con *"current transaction is aborted"*.
+
+`notifications.registrar_alerta` agrava el patrón: captura `except Exception` y sigue adelante como si nada, dejando la conexión rota para el resto del request y **perdiendo la evidencia de la alerta de fraude** que intentaba guardar.
+
+### P3-6 · La antigüedad se calcula desde el alta en el sistema
+
+`reglamento.py:522` y `reports.py:215-220` usan `user["created_at"]` como fecha de ingreso.
+
+El día que se migre la plantilla real, **todos** los empleados nacen con antigüedad cero: alguien con 15 años de servicio recibe 12 días de vacaciones en lugar de 30, y su aguinaldo se calcula sobre los meses equivocados.
+
+Falta el campo `fecha_ingreso`, que es un dato de negocio independiente de cuándo se creó la fila.
+
+### P3-7 · Días corridos donde el reglamento dice hábiles
+
+`reglamento._usados` (línea 498) computa `(fecha_fin - fecha_inicio).days + 1` para todos los permisos por días. Pero el catálogo define varios artículos en **días hábiles**: Art. 23 de pasantes ("diez (10) días hábiles") y Fuerza Mayor ("5 días hábiles al año"). Una licencia que cruza un fin de semana consume dos días de cuota que el reglamento no consume.
+
+### P3-8 · Imputación de cuota por fecha de inicio
+
+`reglamento._en_periodo` (línea 477) imputa el permiso completo al período de su `fecha_inicio`. Una licencia del 28 de diciembre al 10 de enero descuenta trece días del año que termina y cero del que empieza.
+
+### P3-9 · Escaneo completo de justificaciones por consulta
+
+`reglamento.disponibilidad_permisos` (línea 523) trae **todas las justificaciones de la empresa** y filtra en Python:
+
+```python
+todas = [j for j in db.list_justificaciones() if j["usuario_id"] == user["id"]]
+```
+
+Con 500 empleados y tres años de histórico, cada apertura del portal arrastra la tabla entera. Lo mismo en `api_permiso_pdf` (`web_server.py:1072`), que recorre todas las justificaciones para encontrar una por id.
+
+### P3-10 · La cola offline confía en un nombre de usuario
+
+`offline_queue.py` almacena solo `username` y `momento`. `sync_worker` reinyecta esas marcas **sin verificar credenciales**. Quien tenga acceso al archivo `marcaciones_offline.db` del kiosco puede fabricar marcaciones para cualquier empleado, y entrarán al sistema central como legítimas.
+
+Además, una marca que falla de forma permanente (usuario inexistente) se reintenta cada 15 segundos para siempre: no hay contador de reintentos ni cola de descarte.
+
+### P3-11 · El contenedor corre como root
+
+El `Dockerfile` no crea usuario sin privilegios. Cualquier ejecución de código en el proceso web obtiene root dentro del contenedor.
+
+---
+
+## Prioridad de remediación sugerida
+
+| Orden | Trabajo | Cierra | Estado |
+| --- | --- | --- | --- |
+| 1 | Escapar el toast + RBAC en `POST /api/alertas` + CSP | P0-3 | ✅ hecho |
+| 2 | Secretos sin valor por defecto (arranque fail-closed) | P0-4 | ✅ hecho |
+| 3 | Migraciones fuera del ciclo de request | P0-1, P0-2 | ✅ hecho (falta el pool de conexiones) |
+| 3b | Escapes de JavaScript en la plantilla + guarda de regresión | P0-5 | ✅ hecho |
+| 4 | Reescritura del motor horario (jornada única, tramos por día, +30 % nocturno) | P1-3, P1-4, P1-5, P2-3 | ✅ hecho |
+| 5 | Clima declarado por RRHH + biometría fail-closed | P1-1, P1-2 | ✅ hecho |
+| 6 | `detectar_accion_hoy` por estado, no por calendario | P2-2 | pendiente (P2-1 ya cerrado) |
+| 7 | Entidad `turnos` + `fecha_ingreso` | P2-5, P3-6 | pendiente |
+
+El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].
+
+## Enlaces
+
+[[Ecosistema Sistema de Marcación]] · [[Motor de Reglas de Horas Extra]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Catálogo de Permisos y Licencias]] · [[Bitácora de Implementación]]

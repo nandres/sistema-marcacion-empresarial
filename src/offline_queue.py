@@ -57,10 +57,13 @@ class ColaOffline:
             finally:
                 conexion.close()
 
-    def encolar(
-        self, username: str, momento: datetime, es_dia_lluvioso: bool = False
-    ) -> Dict[str, Any]:
-        """Agrega una marcación pendiente conservando su instante original."""
+    def encolar(self, username: str, momento: datetime) -> Dict[str, Any]:
+        """Agrega una marcación pendiente conservando su instante original.
+
+        La condición del día no viaja en la cola: al sincronizar se resuelve
+        contra lo que Recursos Humanos haya declarado, que puede haberse
+        firmado despues de que el kiosco perdiera la conexión.
+        """
         sync_id = uuid.uuid4().hex
         momento_iso = momento.isoformat()
         creado_en = datetime.now().astimezone().isoformat()
@@ -73,7 +76,7 @@ class ColaOffline:
                         (sync_id, username, momento_iso, es_dia_lluvioso, creado_en_iso)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    (sync_id, username, momento_iso, int(es_dia_lluvioso), creado_en),
+                    (sync_id, username, momento_iso, 0, creado_en),
                 )
                 conexion.commit()
             finally:
@@ -82,7 +85,6 @@ class ColaOffline:
             "sync_id": sync_id,
             "username": username,
             "momento_iso": momento_iso,
-            "es_dia_lluvioso": bool(es_dia_lluvioso),
             "creado_en_iso": creado_en,
         }
 

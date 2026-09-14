@@ -1,0 +1,487 @@
+/* Sistema de Marcación · hoja de estilos del portal
+   Lenguaje visual: planilla. La estructura la dan reglas tipográficas y el
+   espacio en blanco, no cajas flotantes; el color sólo aparece cuando
+   significa algo. Las cifras van en monoespaciada porque este sistema es,
+   en el fondo, un libro de cuentas de horas. */
+
+:root {
+  --papel: #f4f1e9;
+  --superficie: #fbf9f4;
+  --regla: #dad4c6;
+  --regla-fuerte: #8f8874;
+  --tinta: #17150f;
+  --tinta-media: #4a4437;
+  --tinta-suave: #6f6857;
+
+  /* El acento del sistema es la tinta: el botón principal es un bloque
+     macizo, como el de un formulario impreso. El único color de reserva es
+     el del sello. */
+  --acento: #17150f;
+  --acento-vivo: #37322a;
+  --sobre-acento: #f4f1e9;
+  --sello: #8c3a2b;
+
+  --tardanza: #8a5a16;
+  --ausente: #8c3a2b;
+  --justificado: #3c5a72;
+  --curso: #2f5d45;
+
+  --ancho: 960px;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --grotesca: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+
+[data-tema="oscuro"] {
+  --papel: #15140f;
+  --superficie: #1d1b15;
+  --regla: #333026;
+  --regla-fuerte: #6f6a5a;
+  --tinta: #ede9dc;
+  --tinta-media: #beb7a5;
+  --tinta-suave: #8e8875;
+
+  --acento: #ede9dc;
+  --acento-vivo: #ffffff;
+  --sobre-acento: #15140f;
+  --sello: #d4735c;
+
+  --tardanza: #d9a441;
+  --ausente: #d4735c;
+  --justificado: #8faec9;
+  --curso: #6fae8b;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--papel);
+  color: var(--tinta);
+  font-family: var(--grotesca);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Toda cifra del sistema es monoespaciada y tabular: en una columna de
+   horas las unidades tienen que caer una debajo de la otra. */
+.cifra, .reloj, td.num, th.num, time, .ticket, .marca-dia {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+h1, h2 { font-family: var(--serif); font-weight: 600; letter-spacing: 0; }
+h1 { font-size: 1.5rem; }
+h2 { font-size: 1.125rem; }
+h3 {
+  font-size: .6875rem; text-transform: uppercase; letter-spacing: .11em;
+  color: var(--tinta-suave); font-weight: 700;
+}
+a { color: var(--tinta); text-underline-offset: 3px; }
+
+/* ---------- Membrete ---------- */
+
+/* Doble regla bajo el título: la gruesa cierra el membrete, la fina abre el
+   índice. Es la convención de una cabecera impresa y sustituye a la barra
+   pegajosa con desenfoque. */
+.membrete { border-bottom: 1px solid var(--regla); margin-bottom: 30px; }
+.membrete-interno { max-width: var(--ancho); margin: 0 auto; padding: 0 22px; }
+.membrete-titulo {
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  padding: 16px 0 11px; border-bottom: 2px solid var(--tinta);
+}
+.membrete-nombre {
+  font-family: var(--serif); font-size: 1.0625rem; font-weight: 600;
+  letter-spacing: .01em;
+}
+.membrete-pie {
+  font-size: .625rem; text-transform: uppercase; letter-spacing: .14em;
+  color: var(--tinta-suave); font-weight: 600;
+}
+.membrete-derecha { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+.quien { font-size: .8125rem; color: var(--tinta-suave); }
+.quien b { color: var(--tinta); font-weight: 600; }
+
+.indice { display: flex; gap: 26px; padding: 9px 0 0; }
+.indice-item {
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  cursor: pointer; font: inherit; font-size: .8125rem; color: var(--tinta-suave);
+  padding: 0 0 8px; margin-bottom: -1px; border-radius: 0;
+  letter-spacing: .01em;
+}
+.indice-item:hover { color: var(--tinta); background: none; }
+.indice-item[aria-current="page"] {
+  color: var(--tinta); border-bottom-color: var(--tinta); font-weight: 600;
+}
+
+.contador {
+  display: inline-block; margin-left: 6px; padding: 0 5px;
+  background: var(--sello); color: var(--papel);
+  font-family: var(--mono); font-size: .625rem; font-weight: 700;
+  line-height: 1.6; vertical-align: 1px;
+}
+
+/* Los íconos traen su propio tamaño en el SVG; el tipo de letra es para la
+   aspa de cerrar, que si no queda diminuta. */
+.boton-signo {
+  width: 26px; height: 26px; flex: none; border-radius: 0;
+  background: none; border: 0; color: var(--tinta-suave);
+  cursor: pointer; display: grid; place-items: center; padding: 0;
+  font-size: 1.375rem; line-height: 1;
+}
+.boton-signo:hover { color: var(--tinta); background: none; }
+
+/* ---------- Estructura ---------- */
+
+.hoja { max-width: var(--ancho); margin: 0 auto; padding: 0 22px 80px; }
+section { margin-bottom: 40px; }
+.rubro {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap;
+  padding-bottom: 7px; margin-bottom: 14px; border-bottom: 1px solid var(--tinta);
+}
+.apunte { font-size: .75rem; color: var(--tinta-suave); }
+.oculto { display: none !important; }
+
+/* ---------- Parte del día ---------- */
+
+/* Sin caja: dos reglas horizontales y una lectura a dos columnas. La regla
+   superior es lo único que toma el color del estado. */
+.parte {
+  border-top: 3px solid var(--tinta-suave);
+  border-bottom: 1px solid var(--regla);
+  padding: 16px 0 18px;
+  display: flex; align-items: flex-end; gap: 28px; flex-wrap: wrap;
+}
+.parte.es-en_curso { border-top-color: var(--curso); }
+.parte.es-cerrada { border-top-color: var(--tinta); }
+.parte.es-sin_marcar { border-top-color: var(--tardanza); }
+.parte.es-descanso { border-top-color: var(--regla-fuerte); }
+
+.parte-estado {
+  font-family: var(--serif); font-size: 1.375rem; font-weight: 600; line-height: 1.2;
+}
+.parte.es-en_curso .parte-estado { color: var(--curso); }
+.parte.es-sin_marcar .parte-estado { color: var(--tardanza); }
+.parte-detalle { color: var(--tinta-media); font-size: .875rem; margin-top: 4px; }
+.parte-conteo { margin-left: auto; text-align: right; }
+.reloj { font-size: 2.125rem; font-weight: 500; letter-spacing: -.02em; line-height: 1; }
+.reloj-leyenda {
+  font-size: .625rem; text-transform: uppercase; letter-spacing: .13em;
+  color: var(--tinta-suave); margin-top: 5px; font-weight: 600;
+}
+
+.pulso {
+  width: 7px; height: 7px; background: var(--curso); display: inline-block;
+  margin-right: 9px; vertical-align: .12em;
+}
+.pulso.late { animation: latido 2.4s ease-in-out infinite; }
+@keyframes latido { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+/* ---------- Registro del mes ---------- */
+
+/* Las cabeceras no parten palabras, así que en pantallas angostas el ancho
+   mínimo de la tabla supera al de la hoja. El desborde se resuelve dentro
+   del marco y no en el cuerpo, que conserva su margen lateral. */
+.marco { overflow-x: auto; }
+.registro { width: 100%; border-collapse: collapse; }
+.registro th {
+  text-align: left; font-size: .625rem; text-transform: uppercase;
+  letter-spacing: .11em; color: var(--tinta-suave); font-weight: 700;
+  padding: 0 10px 7px 0; border-bottom: 1px solid var(--regla-fuerte);
+  white-space: nowrap;
+}
+/* Un mes entero son treinta filas: la planilla se lee de corrido, así que
+   el interlineado es el de un formulario y no el de un tablero. */
+.registro td {
+  padding: 6px 10px; border-bottom: 1px solid var(--regla);
+  font-size: .875rem; line-height: 1.4; vertical-align: baseline;
+}
+/* La canaleta de una columna alineada a la derecha va del lado izquierdo:
+   con `padding-right` las cabeceras se tocan apenas la pantalla se angosta. */
+.registro .num, .registro th.num { text-align: right; padding: 6px 0 6px 16px; }
+.registro th.num { padding-bottom: 7px; }
+.registro tr.dia { cursor: pointer; }
+.registro tr.dia:hover td { background: var(--superficie); }
+.registro tr.futuro { cursor: default; color: var(--tinta-suave); }
+.registro tr.futuro:hover td { background: none; }
+.registro tr.es-hoy td:first-child { box-shadow: inset 3px 0 0 var(--tinta); }
+.registro tr.es-hoy td { font-weight: 600; }
+
+/* La columna del día es el asidero de lectura: número en cifra, día de la
+   semana en minúscula al costado. */
+.marca-dia { font-size: .9375rem; font-weight: 600; padding-left: 9px; }
+.registro tr.futuro .marca-dia { font-weight: 400; }
+.dia-semana { color: var(--tinta-suave); font-size: .75rem; margin-left: 7px; font-family: var(--grotesca); }
+.dia-boton {
+  background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit;
+  cursor: pointer; border-radius: 0;
+}
+.dia-boton:hover { background: none; color: inherit; }
+.dia-boton:focus-visible { outline: 2px solid var(--tinta); outline-offset: 3px; }
+
+/* Marca al margen: la abreviatura que un encargado escribiría a mano en la
+   columna de novedades. Subrayada, nunca dentro de una píldora de color. */
+.sello {
+  font-size: .625rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .1em; color: var(--tinta-suave);
+  border-bottom: 1px solid currentColor; padding-bottom: 1px; white-space: nowrap;
+}
+.sello.t-tardanza { color: var(--tardanza); }
+.sello.t-ausente { color: var(--ausente); }
+.sello.t-justificado { color: var(--justificado); }
+.sello.t-en_curso { color: var(--curso); }
+.sello.t-normal, .sello.t-descanso, .sello.t-futuro { border-bottom-color: transparent; }
+
+.raya { color: var(--regla-fuerte); }
+
+/* ---------- Cuentas (líneas de puntos) ---------- */
+
+/* El relleno punteado es el recurso del índice impreso y de la factura:
+   ata el concepto a su cifra sin necesitar una tabla ni una tarjeta. */
+.cuenta { display: flex; align-items: baseline; gap: 10px; padding: 9px 0; }
+.cuenta + .cuenta { border-top: 1px solid var(--regla); }
+.cuenta-concepto { flex: none; font-size: .9375rem; }
+.cuenta-fuente { font-size: .6875rem; color: var(--tinta-suave); margin-left: 8px; }
+.cuenta-relleno {
+  flex: 1 1 auto; min-width: 20px;
+  border-bottom: 1px dotted var(--regla-fuerte); transform: translateY(-.28em);
+}
+.cuenta-cifra { flex: none; font-size: .9375rem; white-space: nowrap; }
+.cuenta-cifra small { color: var(--tinta-suave); font-size: .75rem; margin-left: 3px; }
+
+.cuenta.suma {
+  border-top: 3px double var(--tinta); margin-top: 2px; font-weight: 600;
+}
+.cuenta.suma .cuenta-relleno { border-bottom-color: transparent; }
+
+.saldo + .saldo { border-top: 1px solid var(--regla); }
+.consumo { height: 3px; background: var(--regla-fuerte); margin: 0 0 8px; }
+.consumo i { display: block; height: 100%; background: var(--tinta); }
+.consumo.agotado i { background: var(--sello); }
+.saldo-nota { font-size: .75rem; color: var(--tinta-suave); padding-bottom: 8px; }
+
+/* ---------- Bloques y tablas ---------- */
+
+.bloque { border-top: 1px solid var(--regla); padding-top: 14px; }
+.bloque + .bloque { margin-top: 26px; }
+
+table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+th {
+  text-align: left; font-size: .625rem; text-transform: uppercase; letter-spacing: .11em;
+  color: var(--tinta-suave); font-weight: 700; padding: 0 12px 7px 0;
+  border-bottom: 1px solid var(--regla-fuerte);
+}
+td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--regla); vertical-align: baseline; }
+th:last-child, td:last-child { padding-right: 0; text-align: right; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+th.num { font-family: var(--grotesca); }
+
+.vacio {
+  color: var(--tinta-suave); font-size: .875rem; padding: 26px 0; text-align: center;
+  font-style: italic;
+}
+
+/* ---------- Formularios ---------- */
+
+label {
+  display: block; font-size: .625rem; text-transform: uppercase; letter-spacing: .11em;
+  color: var(--tinta-suave); margin-bottom: 5px; font-weight: 700;
+}
+input, select, textarea {
+  width: 100%; padding: 9px 10px; font: inherit; font-size: .9375rem;
+  color: var(--tinta); background: var(--superficie);
+  border: 1px solid var(--regla-fuerte); border-radius: 0;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--tinta); box-shadow: inset 0 -2px 0 var(--tinta);
+}
+input[type="date"], input[type="time"], input[inputmode="numeric"] { font-family: var(--mono); }
+textarea { min-height: 80px; resize: vertical; font-size: .9375rem; }
+input[type="checkbox"] { width: auto; accent-color: var(--tinta); }
+.campo { margin-bottom: 15px; }
+.rejilla-campos { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 15px; }
+
+/* El color del texto sobre el acento viaja en una variable: un selector de
+   tema sobre `button` pisaría a las variantes por especificidad. */
+button {
+  font: inherit; font-size: .8125rem; font-weight: 600; cursor: pointer;
+  letter-spacing: .02em; padding: 9px 17px; border-radius: 0;
+  background: var(--acento); color: var(--sobre-acento); border: 1px solid var(--acento);
+  transition: background .12s, border-color .12s, color .12s;
+}
+button:hover { background: var(--acento-vivo); border-color: var(--acento-vivo); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid var(--tinta); outline-offset: 2px; }
+.btn-suave { background: none; color: var(--tinta-media); border-color: var(--regla-fuerte); }
+.btn-suave:hover { background: none; color: var(--tinta); border-color: var(--tinta); }
+.btn-riesgo { background: none; color: var(--sello); border-color: var(--sello); }
+.btn-riesgo:hover { background: var(--sello); color: var(--papel); border-color: var(--sello); }
+.btn-chico { padding: 5px 11px; font-size: .75rem; }
+.btn-ancho { width: 100%; padding: 12px 17px; font-size: .875rem; }
+.acciones { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; }
+.acciones.fin { justify-content: flex-end; }
+
+.aviso {
+  font-size: .8125rem; padding: 9px 0 9px 12px; margin-top: 12px;
+  border-left: 3px solid var(--sello); color: var(--sello);
+}
+.aviso.bien { border-left-color: var(--curso); color: var(--curso); }
+
+/* ---------- Portada: acceso y kiosco ---------- */
+
+.centrado { min-height: 100vh; display: grid; place-items: center; padding: 28px 20px; }
+.portada { width: 100%; max-width: 380px; }
+.portada.kiosco { max-width: 430px; }
+.portada-cabeza { border-bottom: 2px solid var(--tinta); padding-bottom: 11px; margin-bottom: 26px; }
+.portada-cabeza h1 { font-size: 1.25rem; }
+.portada-cabeza p {
+  font-size: .625rem; text-transform: uppercase; letter-spacing: .14em;
+  color: var(--tinta-suave); font-weight: 600; margin-top: 5px;
+}
+
+/* El reloj del kiosco es la pieza que se lee a tres metros: cifras anchas,
+   segundos en un peso menor para que no compitan. */
+.reloj-kiosco {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 3.75rem; font-weight: 400; letter-spacing: .02em; line-height: 1;
+  text-align: center; padding: 4px 0 10px;
+}
+.reloj-kiosco .segundos { font-size: 1.625rem; color: var(--tinta-suave); }
+.fecha-kiosco {
+  text-align: center; color: var(--tinta-suave); font-size: .6875rem;
+  text-transform: uppercase; letter-spacing: .13em; font-weight: 600;
+  padding-bottom: 24px; border-bottom: 1px solid var(--regla); margin-bottom: 24px;
+}
+
+.desplegable { margin-top: 16px; border-top: 1px solid var(--regla); padding-top: 12px; }
+.desplegable summary {
+  cursor: pointer; font-size: .75rem; color: var(--tinta-suave); list-style: none;
+  display: flex; align-items: center; gap: 7px;
+}
+.desplegable summary::-webkit-details-marker { display: none; }
+.desplegable summary::before { content: "+"; font-family: var(--mono); font-weight: 700; }
+.desplegable[open] summary::before { content: "−"; }
+.desplegable .contenido { margin-top: 13px; }
+.casilla { display: flex; align-items: flex-start; gap: 9px; font-size: .875rem; }
+.casilla label {
+  margin: 0; font-size: .875rem; text-transform: none; letter-spacing: 0;
+  color: var(--tinta); font-weight: 500;
+}
+.casilla small { display: block; color: var(--tinta-suave); font-size: .75rem; margin-top: 3px; font-weight: 400; }
+
+/* Comprobante: el papel que la persona se lleva. Reglas cortadas arriba y
+   abajo, todo monoespaciado y centrado, como el que escupe un reloj. */
+.comprobante { text-align: center; padding: 8px 0 0; }
+.comprobante-hora {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 3rem; font-weight: 500; line-height: 1; letter-spacing: .01em;
+}
+.comprobante-que {
+  font-size: .6875rem; text-transform: uppercase; letter-spacing: .18em;
+  font-weight: 700; margin-top: 10px; color: var(--curso);
+}
+.comprobante-quien { font-family: var(--serif); font-size: 1.0625rem; margin-top: 12px; }
+.ticket {
+  margin-top: 18px; padding: 13px 0;
+  border-top: 1px dashed var(--regla-fuerte); border-bottom: 1px dashed var(--regla-fuerte);
+  font-size: .6875rem; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+  color: var(--tinta-suave); text-align: left;
+}
+
+/* ---------- Pestañas de gestión ---------- */
+
+.pestanas {
+  display: flex; gap: 24px; border-bottom: 1px solid var(--regla-fuerte);
+  margin-bottom: 22px; overflow-x: auto;
+}
+.pestana {
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  padding: 0 0 9px; margin-bottom: -1px; border-radius: 0;
+  font-size: .6875rem; text-transform: uppercase; letter-spacing: .11em;
+  font-weight: 700; color: var(--tinta-suave); cursor: pointer; white-space: nowrap;
+}
+.pestana:hover { color: var(--tinta); background: none; }
+.pestana[aria-selected="true"] { color: var(--tinta); border-bottom-color: var(--tinta); }
+
+/* ---------- Bandeja de pendientes ---------- */
+
+.pendiente {
+  display: flex; align-items: baseline; gap: 14px; padding: 13px 0 13px 12px;
+  border-bottom: 1px solid var(--regla); border-left: 3px solid var(--regla-fuerte);
+}
+.pendiente:last-child { border-bottom: 0; }
+.pendiente.urgente { border-left-color: var(--sello); }
+.pendiente.media { border-left-color: var(--tardanza); }
+.pendiente-cuerpo { flex: 1; min-width: 0; }
+.pendiente-titulo { font-size: .9375rem; font-weight: 600; }
+.pendiente-detalle { font-size: .8125rem; color: var(--tinta-suave); margin-top: 2px; }
+
+/* ---------- Modal ---------- */
+
+.telon {
+  position: fixed; inset: 0; z-index: 60; background: rgba(23, 21, 15, .6);
+  display: grid; place-items: center; padding: 20px;
+}
+[data-tema="oscuro"] .telon { background: rgba(0, 0, 0, .72); }
+.modal {
+  background: var(--papel); border: 1px solid var(--tinta); border-radius: 0;
+  width: 100%; max-width: 430px; padding: 22px 24px 24px;
+  max-height: 88vh; overflow-y: auto;
+}
+.modal-cabeza {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;
+  padding-bottom: 10px; margin-bottom: 16px; border-bottom: 2px solid var(--tinta);
+}
+.modal-cabeza p { margin-top: 5px; }
+
+/* ---------- Notas al pie de pantalla ---------- */
+
+#avisos {
+  position: fixed; right: 0; bottom: 22px; z-index: 80;
+  display: flex; flex-direction: column; gap: 1px; max-width: 330px;
+}
+.nota {
+  background: var(--papel); border: 1px solid var(--regla-fuerte); border-right: 0;
+  border-left: 3px solid var(--tardanza); padding: 11px 15px; font-size: .8125rem;
+  animation: entrar .18s ease;
+}
+.nota.alta { border-left-color: var(--sello); }
+.nota.baja { border-left-color: var(--curso); }
+.nota b { display: block; margin-bottom: 2px; }
+.nota span { color: var(--tinta-suave); font-size: .75rem; }
+
+@keyframes entrar { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+
+/* ---------- Teléfono ---------- */
+
+@media (max-width: 680px) {
+  .hoja { padding: 0 16px 60px; }
+  .membrete-interno { padding: 0 16px; }
+  .membrete-derecha { gap: 10px; }
+  .quien { display: none; }
+  .indice { gap: 18px; overflow-x: auto; }
+  .parte { gap: 16px; }
+  .parte-conteo { margin-left: 0; text-align: left; }
+  .reloj { font-size: 1.75rem; }
+  /* El registro pierde las columnas que se reconstruyen tocando el día. */
+  .registro .prescindible { display: none; }
+  .registro td, .registro th { font-size: .8125rem; }
+  .registro .num, .registro th.num { padding-left: 10px; }
+  /* El artículo que respalda cada cifra baja de renglón en vez de
+     desaparecer: es justo el dato que hace falta para reclamar. */
+  .cuenta { align-items: flex-start; }
+  .cuenta-concepto { flex: 1 1 auto; font-size: .875rem; }
+  .cuenta-fuente { display: block; margin-left: 0; }
+  .cuenta-relleno { display: none; }
+  .reloj-kiosco { font-size: 2.75rem; }
+  .comprobante-hora { font-size: 2.25rem; }
+  table { font-size: .8125rem; }
+  #avisos { left: 0; max-width: none; }
+  .nota { border-right: 1px solid var(--regla-fuerte); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

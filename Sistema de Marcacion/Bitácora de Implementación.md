@@ -100,6 +100,56 @@ Sistema completo de control de asistencia para la empresa: **PostgreSQL** como b
 - **Seguridad**: `_personal_publico` filtra credenciales (nunca se expone `password_hash`); un empleado recibe 403 en todo `/api/panel/*`; los PDFs del panel exigen rol RRHH.
 - **Infra**: endpoints con modelos Pydantic, `List[Dict]` donde se devuelven listas (FastAPI valida la respuesta), nuevos métodos `db.list_solicitudes_correccion()` y `db.count_marcajes_hoy()`, `smoke_web_panel.py` en CI (`WEB_BASE` configurable) y README actualizado.
 
+### 13. Auditoría técnica integral
+*Corte: 2026-09-13 · commit `d0559f3` · sin cambios de código*
+
+Revisión completa de las ~9.500 líneas del repositorio desde tres frentes —arquitectura/backend, producto/UX y seguridad/QA— con los hallazgos reproducidos ejecutando el código, no solo por lectura.
+
+- **27 hallazgos** clasificados por severidad en [[Auditoría Técnica · Hallazgos Críticos]]: 4 bloqueantes (P0), 6 de fraude o liquidación (P1), 6 de flujos rotos (P2) y 11 de datos, cumplimiento y escala (P3).
+- **Lo más grave**: XSS almacenado en el toast de alertas encadenado con `POST /api/alertas` sin control de rol, que permite a un empleado tomar la sesión de un Administrador; y `initialize()` ejecutándose en cada petición HTTP, que autobloquea el servidor en el pico de marcación.
+- **Verificado ejecutando**: sobredeclaración de horas ordinarias en jornada mixta, feriado mal atribuido en turnos que cruzan la medianoche, feriados ciegos desde 2027, `TypeError` al aprobar correcciones de salida y `JORNADA_INICIO` ignorado.
+- **Rediseño propuesto** en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]] y [[Antifraude y Resiliencia en Picos de Marcación]].
+- Notas corregidas por contradecir al código: [[Motor de Reglas de Horas Extra]] (tabla de ejemplos y tolerancias) y [[Ecosistema Sistema de Marcación]].
+
+### 14. Remediación P0, motor horario y rediseño
+*2026-09-14 · sobre el commit `d0559f3`*
+
+**Bloqueantes cerrados.** Migraciones fuera del ciclo de petición (`migrate.py`, con `lock_timeout` de 10 s), orden del DDL corregido, cadena de XSS cortada (rol en `POST /api/alertas` + `textContent` + CSP) y secretos sin valor por defecto. Apareció un quinto bloqueante al abrir el portal en un navegador: un escape mal resuelto en el `f-string` anulaba el script entero y **el sitio estaba caído**.
+
+**Motor horario reescrito.** El turno se parte en tramos por naturaleza y por día calendario; el tope de jornada se decide una vez (8 h / 7 h / 7 h 30, con el corte de 5 h nocturnas); se agregó el recargo nocturno del 30 % en columna propia, propagado al aguinaldo; y el calendario de feriados se compone para cualquier año. Detalle en [[Motor de Reglas de Horas Extra]].
+
+**Rediseño de ambas interfaces.** La web salió del `f-string` a `src/static` (el servidor bajó de 1.565 a 774 líneas) y el portal se reordenó por lo que el empleado pregunta. La GUI adoptó la misma paleta a través de su sistema de tokens. Ver [[Sistema de Diseño · Planilla]].
+
+**Cobertura nueva**: `test_motor_horario.py` (14 turnos frontera), `test_paleta.py` (contraste WCAG y paridad web/escritorio) y `smoke_portal_js.py` (sintaxis del portal y CSP).
+
+### 15. Lenguaje visual «Planilla»
+*2026-09-14 · mismo día, después de revisar la fase anterior con ojo de diseño*
+
+El rediseño de la fase 14 arregló la **jerarquía** pero conservó la **forma**: tarjeta redondeada con sombra, barra con desenfoque, píldoras de estado, cuatro métricas de igual peso, grilla de cuadraditos para el mes y `Inter` como primera tipografía. Ninguno de esos patrones sale del problema que el software resuelve; juntos son la huella de una interfaz generada.
+
+**Se reemplazó el objeto de referencia.** El antecesor físico de este sistema es la planilla de asistencia: hoja rayada, columnas, marca al margen, sello al pie. De ahí salen las cinco reglas del lenguaje —filetes en vez de cajas, cifras monoespaciadas tabulares, tres tipografías con oficio distinto, la tinta como acento y color sólo cuando significa. Detalle en [[Sistema de Diseño · Planilla]].
+
+**Cambios de fondo, no cosméticos.** La tira de cuadraditos del mes pasó a ser un registro de seis columnas que también responde "a qué hora salí el martes"; las cuatro tarjetas de horas, a cuentas con línea de puntos y regla doble para el total; los saldos, a una línea por permiso con la regla de consumo sólo si algo se consumió. En el escritorio, `RADIO = 2` reemplazó a 27 `corner_radius`, las secciones del panel se numeran en vez de llevar glifos, y se agregaron los helpers `titulo()` y `cifra()`.
+
+**Lo que atajó la verificación**: seis defectos que ninguna prueba veía —el borde de campo por debajo del mínimo de WCAG 1.4.11, las cabeceras numéricas tocándose en teléfono, la tabla comiéndose el margen lateral, las citas de artículo desapareciendo en pantalla angosta, el domingo futuro con rayas de fila cargada, y el reloj en vivo compitiendo con la hora del comprobante.
+
+**Cobertura nueva**: `test_paleta.py` creció de 10 a 13 pares de contraste, de 4 a 8 tokens de paridad, y suma una guarda de **deriva del lenguaje** que falla si reaparecen los radios, las sombras, el desenfoque o la tipografía de plantilla.
+
+### 16. Autoservicio de permisos y cierre de P1-1 / P1-2
+*2026-09-14 · fraude y formularios*
+
+**P1-1 cerrado.** La tolerancia climática la declaraba el propio empleado con una casilla del kiosco: el sujeto de la regla controlaba el dato que la disparaba. Ahora vive en `condiciones_dia`, la firma Recursos Humanos con techo de 120 minutos y alcanza a toda la plantilla. La cola offline dejó de transportarla: se resuelve al sincronizar, porque la declaración puede firmarse después de que el kiosco perdiera la conexión.
+
+**P1-2 cerrado.** `facial.validar` devolvía `True` cuando el empleado no tenía foto de referencia —el estado por defecto de todo empleado nuevo—, así que bastaba con no registrarla para quedar exento. Ahora devuelve tres estados y la política vive aparte en `facial.decidir`: un rostro que no coincide bloquea siempre; la falta de datos para comparar sigue a `BIOMETRIA_OBLIGATORIA` y, con la política permisiva, la marca pasa pero queda grabada como *No verificada* y avisa a RRHH.
+
+**Autoservicio completo.** El empleado pide cualquiera de los 32 artículos del reglamento desde el portal, con su saldo real y las condiciones a la vista; el pedido se valida antes de guardarse y una solicitud pendiente ya compromete la cuota. Detalle en [[Autoservicio de Permisos y Formularios]].
+
+**Formularios automáticos.** Planilla de horas extraordinarias (Art. 232/233/234) y constancia de asistencia, compuestas desde los marcajes liquidados, sin ningún campo que completar.
+
+**Lo que atajó la verificación**: el importe del recargo nocturno salía **negativo** —`RECARGO_NOCTURNO` es la tasa `0.30` y le restaba uno como si fuera el multiplicador `1.30`—, y el cartel de condición del kiosco no se releía al entrar a la vista.
+
+**Cobertura nueva**: `test_condicion_dia.py` (P1-1 en motor, API e interfaces), `smoke_permisos_autoservicio.py` (ciclo completo y cuota reservada) y `test_planilla_extras.py` (detalle, totales y liquidación). `smoke_facial.py` reescrito para los tres estados. La suite pasó de 11 a 14 conjuntos.
+
 ## Cómo ejecutar
 
 | Componente | Comando |
@@ -125,6 +175,21 @@ Los scripts de humo viven en `tests/` del repositorio (antes en la carpeta tempo
 - `smoke_web_panel.py` — kiosco web (ticket con serie EMPRESA, contraseña incorrecta/usuario inexistente → 401), panel RRHH (resumen, CRUD personal, justificación + PDF, correcciones, auditoría, alertas) y 403 para roles sin permiso. **OK**
 - `smoke_panel.py`, `prueba_dashboard.py`, `prueba_conatel_gui.py`, `diag_tema*.py`, `pdf_e2e.py`, `web_reglamento.py` — regresiones de UX, analítica, PDF y web. **OK**
 
+### Lo que la suite no cubre
+
+La auditoría del 2026-09-13 encontró defectos reproducibles **con la suite completa en verde**. El patrón es consistente: las pruebas son de humo sobre el camino feliz y no ejercitan fronteras ni rutas de error.
+
+| Defecto no detectado | Qué prueba falta |
+| --- | --- |
+| Jornada mixta con 9 h ordinarias | Tabla de turnos frontera contra `calcular_horas_paraguay` (hoy no hay ninguna prueba unitaria del motor) |
+| Feriado mal atribuido al cruzar medianoche | Turno sábado → domingo y domingo → lunes |
+| Feriados ciegos desde 2027 | Aserción sobre una fecha del año siguiente |
+| `TypeError` al aprobar corrección de salida | Caso de aprobación de reclamo tipo "Salida" de punta a punta |
+| Turno nocturno que no se puede cerrar | `detectar_accion_hoy` con entrada abierta del día anterior |
+| Esquema que no se crea desde cero | CI sobre base virgen, sin `setup_ci.py` previo |
+
+Las dos primeras filas son la brecha de mayor valor: el motor horario es lógica pura, sin dependencias, y admite pruebas de tabla exhaustivas a costo casi nulo. Es el módulo más crítico del sistema y el único sin pruebas propias.
+
 ## Lecciones registradas
 
 - **Locks de DDL**: `Database.initialize()` puede quedarse esperando por conexiones "idle in transaction" de scripts colgados; matar los procesos python y reintentar.
@@ -138,8 +203,18 @@ Los scripts de humo viven en `tests/` del repositorio (antes en la carpeta tempo
 - **FastAPI valida la respuesta**: si el endpoint anota `-> Dict` pero devuelve una lista (o filas de psycopg2 con `date/time`), responde 500 con `ResponseValidationError`; anotar `List[Dict]` o devolver JSON-serializable.
 - **`smoke_web_panel.py`**: los prints de respuestas binarias (PDF) rompen en consolas cp1252; imprimir el tamaño en bytes en lugar del texto.
 
+### Agregadas por la auditoría (2026-09-13)
+
+- **La lección del DDL se aprendió a medias**: ya estaba registrado que el worker de sincronización no debe correr `initialize()` en cada ciclo, pero `web_server._cliente()` lo sigue haciendo **en cada petición HTTP**. Cuando una lección se registra, hay que buscar todos los llamadores, no solo el que falló.
+- **Un valor por defecto en un secreto es una vulnerabilidad, no una comodidad**: `JWT_SECRET_KEY` y `COMPROBANTE_CLAVE` tienen respaldo hardcodeado, así que una variable de entorno ausente no rompe nada — solo deja el sistema firmando con una clave pública. Los secretos se validan al arrancar y el proceso no levanta sin ellos.
+- **Escapar en un lugar y no en otro es peor que no escapar**: el panel de alertas usa `esc()` y el toast en vivo no. La inconsistencia crea la falsa sensación de que el tema está resuelto.
+- **Un control de seguridad que no puede verificar debe negar o marcar, nunca aprobar**: `facial.validar` devuelve `True` cuando el usuario no tiene foto, que es el estado por defecto de todo empleado nuevo.
+- **Naive y aware no se mezclan**: `datetime.combine()` produce un instante sin zona que revienta al compararse con un `TIMESTAMPTZ` de PostgreSQL. La frontera de la aplicación debe normalizar a *aware* una sola vez.
+- **Si el sujeto de una regla controla el dato que la activa, la regla no existe**: el checkbox de "día lluvioso" lo declara el propio empleado que se beneficia de la tolerancia.
+
 ## Enlaces
 
+- [[Auditoría Técnica · Hallazgos Críticos]] · [[Arquitectura Objetivo · Plataforma y Portal del Empleado]] · [[Antifraude y Resiliencia en Picos de Marcación]]
 - [[Ecosistema Sistema de Marcación]] · [[Catálogo de Permisos y Licencias]] · [[Reglamento de Asistencia y Disciplina]]
-- [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Motor de Reglas de Horas Extra]]
+- [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Motor de Reglas de Horas Extra]] · [[Autoservicio de Permisos y Formularios]]
 - [[Módulo de Gestión de Usuarios]] · [[Control de Roles y Permisos RBAC]] · [[Panel de Reportes y Auditoría]] · [[Seguridad y Cifrado de Comunicaciones]]

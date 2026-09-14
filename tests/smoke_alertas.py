@@ -36,6 +36,17 @@ import json
 rlogin = c.post("/api/login", json={"cedula": "juan", "password": "clave123"})
 print("login juan", rlogin.status_code)
 token_juan = rlogin.json()["token"]
+
+# Un Empleado no puede publicar alertas: se difunden a todos los conectados,
+# asi que sin control de rol cualquiera inyecta contenido en la pantalla ajena.
+r7 = c.post(
+    "/api/alertas",
+    json={"tipo": "fraude_facial", "severidad": "alta",
+          "mensaje": "<img src=x onerror=alert(1)>", "detalle": "inyeccion"},
+    headers={"Authorization": f"Bearer {token_juan}"},
+)
+print("publicar como Empleado (espera 403):", r7.status_code)
+assert r7.status_code == 403, f"un Empleado pudo publicar una alerta: {r7.status_code}"
 with c.websocket_connect("/ws/alertas?token=" + token_juan) as ws:
     m = ws.receive_json()
     print("ws juan recibió:", m["mensaje"], "usuario_id", m.get("usuario_id"))

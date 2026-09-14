@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Sistema de Marcación</title>
+<link rel="stylesheet" href="/static/estilos.css">
+</head>
+<body>
+
+<div id="avisos"></div>
+
+<!-- ============ Kiosco ============ -->
+<div class="centrado oculto" id="vista-kiosco">
+  <div class="portada kiosco">
+    <div class="portada-cabeza">
+      <h1>Kiosco de marcación</h1>
+      <p>Entrada y salida · Ley 213/93</p>
+    </div>
+
+    <div id="kiosco-reloj">
+      <div class="reloj-kiosco" id="reloj-kiosco">--:--<span class="segundos">:--</span></div>
+      <div class="fecha-kiosco" id="fecha-kiosco"></div>
+    </div>
+
+    <div id="kiosco-formulario">
+      <!-- La condición del día la declara Recursos Humanos; acá solo se informa. -->
+      <div id="k-condicion"></div>
+
+      <div class="campo">
+        <label for="k-cedula">Cédula o usuario</label>
+        <input id="k-cedula" autocomplete="username" inputmode="numeric" placeholder="1234567">
+      </div>
+      <div class="campo">
+        <label for="k-clave">Contraseña</label>
+        <input id="k-clave" type="password" autocomplete="current-password">
+      </div>
+
+      <button class="btn-ancho" id="k-marcar">Registrar asistencia</button>
+
+      <div id="k-aviso"></div>
+    </div>
+
+    <div id="kiosco-resultado" class="oculto"></div>
+
+    <div class="acciones fin" style="margin-top:22px">
+      <button class="btn-suave btn-chico" id="ir-acceso">Portal del empleado</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Acceso ============ -->
+<div class="centrado oculto" id="vista-acceso">
+  <div class="portada">
+    <div class="portada-cabeza">
+      <h1>Sistema de Marcación</h1>
+      <p>Portal del empleado</p>
+    </div>
+    <form id="form-acceso">
+      <div class="campo">
+        <label for="a-cedula">Cédula o usuario</label>
+        <input id="a-cedula" autocomplete="username" placeholder="1234567">
+      </div>
+      <div class="campo">
+        <label for="a-clave">Contraseña</label>
+        <input id="a-clave" type="password" autocomplete="current-password">
+      </div>
+      <button class="btn-ancho" type="submit">Ingresar</button>
+      <div id="a-aviso"></div>
+    </form>
+    <div class="acciones fin" style="margin-top:22px">
+      <button class="btn-suave btn-chico" id="ir-kiosco">Ir al kiosco</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Aplicación ============ -->
+<div class="oculto" id="app">
+  <header class="membrete">
+    <div class="membrete-interno">
+      <div class="membrete-titulo">
+        <span class="membrete-nombre">Sistema de Marcación</span>
+        <span class="membrete-pie">Control de asistencia · Ley 213/93</span>
+        <div class="membrete-derecha">
+          <span class="quien"><b id="barra-nombre"></b> · <span id="barra-rol"></span></span>
+          <button class="boton-signo" id="btn-tema" title="Cambiar tema" aria-label="Cambiar tema">
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+              <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+              <path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor"/>
+            </svg>
+          </button>
+          <button class="boton-signo" id="btn-salir" title="Cerrar sesión" aria-label="Cerrar sesión">
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none"
+                 stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 14H3.5A1.5 1.5 0 0 1 2 12.5v-9A1.5 1.5 0 0 1 3.5 2H6"/>
+              <path d="M10.5 11 14 8l-3.5-3M14 8H6"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <nav class="indice">
+        <button class="indice-item" data-vista="portal">Mi asistencia</button>
+        <button class="indice-item" data-vista="historial">Historial</button>
+        <button class="indice-item oculto" data-vista="gestion" id="nav-gestion">Gestión</button>
+        <button class="indice-item" data-vista="kiosco">Kiosco</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="hoja">
+
+    <!-- ---- Portal del empleado ---- -->
+    <div class="oculto" id="vista-portal">
+      <section>
+        <div id="parte-hoy"></div>
+      </section>
+
+      <section>
+        <div class="rubro">
+          <h2 id="titulo-mes">Este mes</h2>
+          <span class="apunte">Tocá un día para ver el detalle o pedir una corrección</span>
+        </div>
+        <div class="marco">
+          <table class="registro">
+            <thead>
+              <tr>
+                <th>Día</th>
+                <th>Novedad</th>
+                <th class="num">Entrada</th>
+                <th class="num">Salida</th>
+                <th class="num">Trabajado</th>
+                <th class="num prescindible">Jornada</th>
+              </tr>
+            </thead>
+            <tbody id="registro-mes"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="rubro">
+          <h3>Horas liquidadas del mes</h3>
+          <div class="acciones">
+            <span class="apunte" id="mes-cerrado"></span>
+            <button class="btn-suave btn-chico" id="btn-planilla-extra">Planilla de horas extra</button>
+          </div>
+        </div>
+        <div id="cuentas-mes"></div>
+      </section>
+
+      <section>
+        <div class="rubro">
+          <h3>Días y permisos disponibles</h3>
+          <button class="btn-chico" id="btn-pedir-permiso">Pedir un permiso</button>
+        </div>
+        <div id="saldos"></div>
+      </section>
+
+      <section>
+        <div class="rubro"><h3>Mis pedidos</h3></div>
+        <div id="mis-solicitudes"></div>
+      </section>
+
+      <section>
+        <div class="rubro">
+          <h3>Permisos aprobados</h3>
+          <button class="btn-suave btn-chico" id="btn-reclamo-libre">Pedir una corrección</button>
+        </div>
+        <div id="permisos"></div>
+      </section>
+    </div>
+
+    <!-- ---- Historial ---- -->
+    <div class="oculto" id="vista-historial">
+      <section>
+        <div class="rubro"><h2>Historial</h2></div>
+        <div class="rejilla-campos">
+          <div><label for="h-desde">Desde</label><input id="h-desde" type="date"></div>
+          <div><label for="h-hasta">Hasta</label><input id="h-hasta" type="date"></div>
+          <div style="display:flex;align-items:flex-end;gap:9px">
+            <button id="h-consultar">Consultar</button>
+            <button class="btn-suave" id="h-hoy">Hoy</button>
+            <button class="btn-suave" id="h-constancia">Constancia</button>
+          </div>
+        </div>
+      </section>
+      <div id="h-resultado"></div>
+    </div>
+
+    <!-- ---- Gestión ---- -->
+    <div class="oculto" id="vista-gestion">
+      <section>
+        <div class="rubro"><h2>Gestión</h2></div>
+        <div class="pestanas" role="tablist" id="pestanas-gestion">
+          <button class="pestana" role="tab" data-panel="pendientes">Pendientes</button>
+          <button class="pestana" role="tab" data-panel="personal">Personal</button>
+          <button class="pestana" role="tab" data-panel="justificaciones">Justificaciones</button>
+          <button class="pestana" role="tab" data-panel="condiciones">Condiciones del día</button>
+          <button class="pestana" role="tab" data-panel="alertas">Alertas</button>
+          <button class="pestana" role="tab" data-panel="auditoria">Auditoría</button>
+        </div>
+        <div id="g-pendientes"></div>
+        <div class="oculto" id="g-personal"></div>
+        <div class="oculto" id="g-justificaciones"></div>
+        <div class="oculto" id="g-condiciones"></div>
+        <div class="oculto" id="g-alertas"></div>
+        <div class="oculto" id="g-auditoria"></div>
+      </section>
+    </div>
+
+  </main>
+</div>
+
+<div id="capa-modal"></div>
+
+<script src="/static/portal.js"></script>
+</body>
+</html>

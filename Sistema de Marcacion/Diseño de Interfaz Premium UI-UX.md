@@ -1,9 +1,15 @@
 # Diseño de Interfaz Premium UI-UX
 
-> La cara visible del sistema: un terminal de marcación de estética oscura
-> de nivel comercial internacional con dos capas de uso — recepción pública
-> tipo kiosco y gestión administrativa. Implementado en `src/gui.py` con
-> CustomTkinter.
+> La cara visible del sistema: un terminal de marcación con dos capas de uso
+> — recepción pública tipo kiosco y gestión administrativa. Implementado en
+> `src/gui.py` con CustomTkinter.
+
+> [!info] Lenguaje visual reemplazado el 2026-09-14
+> Esta nota describe la **v2**, que ya no está vigente. No cambió sólo la paleta (`#0B0B0C`, `#1A56DB`, `#16A34A`… eran el set por defecto de Tailwind) sino la forma: las esquinas de 16 px, el *glassmorphism* y los íconos `▦ ✦ ▤ ✎ ◉` del menú lateral se fueron con ella. El lenguaje actual, compartido con el portal web, está en [[Sistema de Diseño · Planilla]].
+>
+> Lo que sigue siendo válido de esta nota es la **mecánica**: el sistema de tokens, las etiquetas `_rol` sobre cada widget y el repintado en caliente al cambiar de tema. Esa arquitectura es la que permitió reemplazar toda la paleta tocando dos diccionarios.
+>
+> Los flujos de pantalla descritos más abajo tampoco cambiaron, salvo el panel de éxito del kiosco: en vez del tilde verde de 54 px, hoy muestra la hora grabada en cifras grandes.
 
 ## Sistema de diseño v2 (elevación visual)
 
