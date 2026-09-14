@@ -137,11 +137,21 @@ Es la única forma de saber si la política protege de verdad o si el código se
 
 Además el servidor web completo se corrió bajo el rol restringido con la suite entera en verde: el aislamiento no es una configuración teórica que rompe la aplicación al activarse.
 
+## El subdominio
+
+`acme.miapp.com.py` identifica al cliente antes de que nadie escriba nada. Requiere declarar `DOMINIO_BASE` en el `.env`; sin esa variable no se resuelve nada, que es lo que corresponde en una instalación de un solo cliente.
+
+Contar etiquetas del host **no sirve**: en Paraguay los dominios son `.com.py`, así que `miapp.com.py` tiene tres partes sin tener ningún subdominio, y adivinar ahí manda a la gente al cliente equivocado.
+
+Es una comodidad y no un control. Quien entra por la dirección genérica sigue pudiendo acceder con sus credenciales; el aislamiento lo siguen sosteniendo la empresa del token y las políticas de la base.
+
+## El cupo del plan
+
+`empresas.max_empleados` limita la plantilla activa del cliente. Se comprueba **al dar de alta**, no al facturar: enterarse un mes después de que el cliente se pasó no sirve para nada. En nulo, no hay tope.
+
 ## Lo que falta
 
-- **Subdominio por cliente** (`acme.miapp.com`). Hoy la empresa la resuelve la contraseña; un subdominio la resolvería antes y dejaría el campo plegado sin razón de existir.
-- **Cuotas por cliente** (cantidad de empleados, retención de datos). La tabla `empresas` tiene dónde ponerlas, pero nada las mira.
-- **Facturación**. Fuera del alcance del producto.
+- **Facturación**. Fuera del alcance del producto: el cupo existe para hacerla cumplible, no para cobrarla.
 
 ## Enlaces
 

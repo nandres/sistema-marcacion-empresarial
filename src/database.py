@@ -353,9 +353,14 @@ class Database:
                 razon_social VARCHAR(200) NOT NULL,
                 ruc VARCHAR(20) NOT NULL DEFAULT '',
                 activa BOOLEAN NOT NULL DEFAULT TRUE,
+                max_empleados INTEGER,
                 creada_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """
+        )
+        # Una instalación anterior no tiene la columna del plan contratado.
+        cursor.execute(
+            "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS max_empleados INTEGER"
         )
         cursor.execute(
             """
@@ -1146,6 +1151,26 @@ class Database:
         )
         self.connection.commit()
         return empresa
+
+    def contar_empleados(self) -> int:
+        """Empleados activos de la empresa, para medir contra su plan."""
+        fila = self._execute(
+            "SELECT COUNT(*) AS total FROM users WHERE empresa_id = %s AND activo",
+            (self.empresa,),
+            fetch="one",
+        )
+        return int(fila["total"])
+
+    def fijar_cupo_empresa(
+        self, empresa_id: int, max_empleados: Optional[int]
+    ) -> bool:
+        """Fija (o levanta) el tope de empleados de un cliente."""
+        cursor = self._execute(
+            "UPDATE empresas SET max_empleados = %s WHERE id = %s",
+            (max_empleados, empresa_id),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
 
     def cambiar_estado_empresa(self, empresa_id: int, activa: bool) -> bool:
         """Suspende o reactiva una empresa sin borrar un solo dato suyo."""

@@ -270,6 +270,15 @@ def create_user(
         raise ValueError("El usuario ya existe.")
     if turno_id is not None and not db.get_turno(turno_id):
         raise ValueError("El turno indicado no existe.")
+    # El cupo del plan se comprueba al dar de alta y no al facturar: enterarse
+    # un mes después de que el cliente se pasó no sirve para nada.
+    empresa = db.get_empresa(db.empresa)
+    cupo = (empresa or {}).get("max_empleados")
+    if cupo is not None and db.contar_empleados() >= int(cupo):
+        raise ValueError(
+            f"La empresa llegó a su tope de {cupo} empleados activos. "
+            f"Dá de baja a alguien o ampliá el plan contratado."
+        )
     user_id = db.create_user(
         username,
         hash_password(password),

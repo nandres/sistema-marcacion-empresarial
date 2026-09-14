@@ -27,6 +27,8 @@ sys.path.insert(0, str(RAIZ / "src"))
 sys.path.insert(0, str(RAIZ / "tests"))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+import os
+
 import auth
 import clock_engine
 import database
@@ -402,6 +404,57 @@ verificar("y al declarar la suya ve la suya, no la anterior",
           propios and not (propios & ids_a), f"{len(propios)} legajos")
 segunda.cerrar()
 database.cerrar_pools()
+
+# --------------------------------------- 12. Cupo del plan y subdominio
+print("\n12) El plan contratado y el subdominio del cliente")
+
+db.empresa_id = empresa_a["id"]
+antes_del_cupo = db.contar_empleados()
+db.fijar_cupo_empresa(empresa_a["id"], antes_del_cupo)
+try:
+    auth.create_user(db, datos_a["admin"], "cupo_excedido", "clave123",
+                     "Uno de más", "Empleado", 1000000)
+    verificar("llegado al tope del plan no se puede dar de alta", False)
+except ValueError as error:
+    verificar("llegado al tope del plan no se puede dar de alta", True, str(error))
+
+db.fijar_cupo_empresa(empresa_a["id"], antes_del_cupo + 1)
+auth.create_user(db, datos_a["admin"], "cupo_ok", "clave123", "Cabe", "Empleado")
+verificar("con lugar en el plan el alta sigue funcionando",
+          db.get_user_by_username("cupo_ok") is not None)
+db.fijar_cupo_empresa(empresa_a["id"], None)
+verificar("y sin tope declarado no hay límite",
+          db.get_empresa(empresa_a["id"])["max_empleados"] is None)
+
+# El subdominio identifica al cliente antes de que nadie escriba nada. Es una
+# comodidad: el aislamiento lo siguen sosteniendo el token y las políticas.
+from starlette.datastructures import Headers
+from starlette.requests import Request as PeticionStarlette
+import web_server
+
+
+def con_host(host: str) -> str:
+    peticion = PeticionStarlette(
+        {"type": "http", "headers": Headers({"host": host}).raw, "method": "GET",
+         "path": "/", "query_string": b""}
+    )
+    return web_server._empresa_del_host(peticion)
+
+
+verificar("sin DOMINIO_BASE declarado no se resuelve nada",
+          con_host(f"{SLUG_A}.marcacion.com.py") == "")
+
+os.environ["DOMINIO_BASE"] = "marcacion.com.py"
+verificar("declarado el dominio, el subdominio nombra al cliente",
+          con_host(f"{SLUG_A}.marcacion.com.py") == SLUG_A,
+          con_host(f"{SLUG_A}.marcacion.com.py"))
+verificar("el dominio pelado no nombra a ninguno",
+          con_host("marcacion.com.py") == "", repr(con_host("marcacion.com.py")))
+verificar("una IP tampoco", con_host("127.0.0.1:8000") == "")
+verificar("ni www", con_host("www.marcacion.com.py") == "")
+verificar("ni un host de otro dominio",
+          con_host(f"{SLUG_A}.otracosa.com") == "")
+os.environ.pop("DOMINIO_BASE", None)
 
 # ------------------------------------------------------------- Limpieza
 for empresa in (empresa_a, empresa_b):

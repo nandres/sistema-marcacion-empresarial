@@ -118,6 +118,11 @@ EMPRESA_ACTIVA=
 # Razón social con la que se crea la empresa inicial en la primera migración.
 EMPRESA_NOMBRE=Empresa
 
+# Dominio propio para resolver el cliente por subdominio (acme.miapp.com.py).
+# Vacío con un solo cliente: contar etiquetas del host no sirve, porque
+# miapp.com.py ya tiene tres sin tener ningún subdominio.
+DOMINIO_BASE=
+
 # Bloquea toda marca que el motor biométrico no pueda verificar. Viene
 # apagada: una plantilla recién migrada no tiene fotos cargadas.
 BIOMETRIA_OBLIGATORIA=0

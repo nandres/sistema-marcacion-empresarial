@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -162,6 +163,31 @@ def _cliente(empresa_id: Optional[int] = None) -> database.Database:
 def _cliente_de(usuario: Dict[str, Any]) -> database.Database:
     """Conexión atada a la empresa del usuario autenticado."""
     return _cliente(usuario["empresa_id"])
+
+
+def _empresa_del_host(request: Request) -> str:
+    """Nombre corto del cliente según el subdominio por el que entró.
+
+    ``acme.miapp.com.py`` identifica al cliente antes de que nadie escriba
+    nada, que es como se espera que funcione un SaaS. Es una comodidad y no
+    un control: quien entra por la dirección genérica sigue pudiendo acceder
+    con sus credenciales, y el aislamiento lo siguen sosteniendo la empresa
+    del token y las políticas de la base.
+
+    Hace falta declarar ``DOMINIO_BASE``. Contar etiquetas no sirve: en
+    Paraguay los dominios son ``.com.py``, así que ``miapp.com.py`` tiene tres
+    partes sin tener ningún subdominio, y adivinar ahí manda a la gente al
+    cliente equivocado. Sin la variable no se resuelve nada, que es lo que
+    corresponde en una instalación de un solo cliente.
+    """
+    base = (os.getenv("DOMINIO_BASE") or "").strip().lower().lstrip(".")
+    if not base:
+        return ""
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    if not host.endswith("." + base):
+        return ""
+    etiqueta = host[: -(len(base) + 1)].split(".")[-1]
+    return "" if etiqueta in ("www", "") else etiqueta
 
 
 COOKIE_SESION: str = "marcacion_sesion"
@@ -443,7 +469,10 @@ def api_login(
     _frenar(request, cedula)
     db = _cliente()
     try:
-        user = auth.authenticate(db, cedula, payload.password, payload.empresa)
+        user = auth.authenticate(
+            db, cedula, payload.password,
+            payload.empresa or _empresa_del_host(request),
+        )
         if not user:
             _registrar_fallo(request, cedula)
             raise HTTPException(status_code=401, detail="Cédula o contraseña incorrectas.")
@@ -799,7 +828,7 @@ def _personal_publico(fila: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @app.get("/api/condicion-hoy")
-def api_condicion_hoy(empresa: str = "") -> Dict[str, Any]:
+def api_condicion_hoy(request: Request, empresa: str = "") -> Dict[str, Any]:
     """Condición excepcional vigente hoy, para informarla en el kiosco.
 
     No expone datos personales: es el mismo cartel que la empresa colgaría
@@ -813,8 +842,9 @@ def api_condicion_hoy(empresa: str = "") -> Dict[str, Any]:
     db = _cliente()
     try:
         alojadas = db.listar_empresas()
-        if empresa:
-            elegida = db.get_empresa_por_slug(empresa)
+        elegida_por_host = empresa or _empresa_del_host(request)
+        if elegida_por_host:
+            elegida = db.get_empresa_por_slug(elegida_por_host)
         elif len(alojadas) == 1:
             elegida = alojadas[0]
         else:
@@ -843,7 +873,10 @@ def api_marcar(payload: MarcarRequest, request: Request) -> Dict[str, Any]:
     _frenar(request, cedula)
     db = _cliente()
     try:
-        usuario = auth.authenticate(db, cedula, payload.password, payload.empresa)
+        usuario = auth.authenticate(
+            db, cedula, payload.password,
+            payload.empresa or _empresa_del_host(request),
+        )
         if not usuario:
             _registrar_fallo(request, cedula)
             raise HTTPException(
@@ -1613,6 +1646,29 @@ def api_panel_ciclos_eliminar(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error))
         return {"mensaje": "Ciclo eliminado."}
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/panel/empresa")
+def api_panel_empresa(
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Datos del cliente alojado y cuánto de su plan lleva usado."""
+    _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
+    try:
+        empresa = db.get_empresa(usuario["empresa_id"]) or {}
+        empleados = db.contar_empleados()
+        cupo = empresa.get("max_empleados")
+        return {
+            "razon_social": empresa.get("razon_social", ""),
+            "slug": empresa.get("slug", ""),
+            "ruc": empresa.get("ruc", ""),
+            "empleados": empleados,
+            "max_empleados": cupo,
+            "disponibles": None if cupo is None else max(0, int(cupo) - empleados),
+        }
     finally:
         db.cerrar()
 
