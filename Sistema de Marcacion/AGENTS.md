@@ -18,6 +18,7 @@ La configuración local (`.obsidian/`) está excluida del control de versiones; 
 | Hacia dónde debería ir el sistema | [[Arquitectura Objetivo · Plataforma y Portal del Empleado]] |
 | Fraude en las marcas y carga en el pico | [[Antifraude y Resiliencia en Picos de Marcación]] |
 | Cómo pide permisos un empleado y qué papeles salen solos | [[Autoservicio de Permisos y Formularios]] |
+| **Instalarlo en una empresa** | [[Puesta en Marcha en un Cliente]] |
 
 ## Notas por dominio
 
@@ -31,7 +32,7 @@ La configuración local (`.obsidian/`) está excluida del control de versiones; 
 [[Sistema de Diseño · Planilla]] · [[Diseño de Interfaz Premium UI-UX]] · [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] · [[Panel de Analítica Visual y UX Premium]] · [[Panel de Reportes y Auditoría]]
 
 **Infraestructura**
-[[Estructura Web y Conexión Biométrica]] · [[Despliegue en la Nube e Infraestructura SaaS]]
+[[Estructura Web y Conexión Biométrica]] · [[Despliegue en la Nube e Infraestructura SaaS]] · [[Puesta en Marcha en un Cliente]]
 
 ## Convenciones
 

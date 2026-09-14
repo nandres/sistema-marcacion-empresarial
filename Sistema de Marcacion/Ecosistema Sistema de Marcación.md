@@ -43,6 +43,8 @@ flowchart LR
 | `solicitudes_correccion` | Tabla de reclamos de marcación fallida (Pendiente/Aprobado/Rechazado) |
 | `solicitudes_permiso` | Pedidos de permiso presentados desde el portal: [[Autoservicio de Permisos y Formularios]] |
 | `condiciones_dia` | Condición excepcional del día declarada por RRHH (reemplaza a la casilla del kiosco) |
+| `src/biometria.py` | Cifrado AES-256-GCM de las plantillas faciales: [[Seguridad y Cifrado de Comunicaciones]] |
+| `src/rate_limit.py` | Freno de intentos fallidos en login y kiosco |
 
 ## Flujo de datos
 
@@ -60,6 +62,7 @@ flowchart LR
 - [[Antifraude y Resiliencia en Picos de Marcación]] — vectores de fraude y comportamiento bajo el pico de las 08:00
 - [[Sistema de Diseño · Planilla]] — lenguaje visual compartido por la web y el escritorio
 - [[Autoservicio de Permisos y Formularios]] — permisos desde el portal y documentos que se emiten solos
+- [[Puesta en Marcha en un Cliente]] — instalación, secretos, carga inicial y qué no está incluido
 
 ### Módulos
 

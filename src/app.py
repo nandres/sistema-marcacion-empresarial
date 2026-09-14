@@ -168,7 +168,7 @@ def main() -> None:
     db.initialize()
 
     print("=== Sistema de Marcación ===")
-    if not db.list_users():
+    if not db.list_users(incluir_bajas=True):
         prompt_first_admin(db)
 
     user: Optional[dict] = None
