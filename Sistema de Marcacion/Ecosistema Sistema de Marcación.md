@@ -46,13 +46,14 @@ flowchart LR
 | `src/biometria.py` | Cifrado AES-256-GCM de las plantillas faciales: [[Seguridad y Cifrado de Comunicaciones]] |
 | `src/rate_limit.py` | Freno de intentos fallidos en login y kiosco |
 | `src/turnos.py` | Definición, validación y resolución de turnos: [[Turnos y Rotación de Horarios]] |
+| `empresas` | Clientes alojados en esta instalación; cada tabla de datos lleva su `empresa_id`: [[Multiempresa · Aislamiento entre Clientes]] |
 | `turnos`, `turno_tramos` | Horarios de la empresa y las franjas de cada uno (la jornada partida tiene dos) |
 | `asignaciones_turno` | Rotaciones con vigencia; al vencer el empleado vuelve a su turno de contrato |
 
 ## Flujo de datos
 
 1. `app.py` inicia `Database` y crea la base y el esquema (tablas `roles`, `users`, `marcajes`, `logs_auditoria`).
-2. `auth.py` valida credenciales (bcrypt) contra la tabla `users` y verifica el rol.
+2. `auth.py` valida credenciales (bcrypt), deja la conexión atada a la empresa del usuario y verifica el rol.
 3. `turnos.py` resuelve qué horario rige para ese empleado ese día (rotación vigente → legajo → predeterminado).
 4. `clock_engine.py` registra entradas/salidas en `marcajes` con el desglose de la Ley 213, midiendo la tardanza contra el turno resuelto y aplicando las reglas de la Res. 3028/2024.
 5. `database.py` persiste todo en PostgreSQL y audita las operaciones de RRHH/Admin.
@@ -67,6 +68,7 @@ flowchart LR
 - [[Sistema de Diseño · Planilla]] — lenguaje visual compartido por la web y el escritorio
 - [[Autoservicio de Permisos y Formularios]] — permisos desde el portal y documentos que se emiten solos
 - [[Turnos y Rotación de Horarios]] — horarios por empleado, rotación con vigencia y jornada partida
+- [[Multiempresa · Aislamiento entre Clientes]] — varios clientes en una instalación, sin datos cruzados
 - [[Puesta en Marcha en un Cliente]] — instalación, secretos, carga inicial y qué no está incluido
 
 ### Módulos

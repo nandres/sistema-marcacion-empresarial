@@ -18,6 +18,8 @@ El núcleo de cálculo del sistema (`clock_engine.py`) procesa las marcas abstra
 *   **Res. Directorio 3028/2024:** Tolerancia climática y diferenciación estricta de reglas entre pasantes y funcionarios. La condición excepcional del día (lluvia intensa, corte de rutas, paro de transporte) la **declara Recursos Humanos** para toda la plantilla, con firma y auditoría: no es una casilla que marque quien llega tarde.
 *   **Reglamento Interno (Res. 1307/2010):** Catálogo automatizado de permisos, licencias y control estricto de cuotas mensuales por horas o usos (bloqueo automático al 4.° uso del Art. 14).
 
+Una misma instalación puede alojar a **varias empresas** sin que ninguna vea los datos de otra: doce tablas llevan `empresa_id`, la conexión falla si no tiene empresa activa, un verificador estático impide que una consulta nueva quede sin acotar y una prueba aloja dos clientes con los datos superpuestos a propósito para intentar cruzarlos. Ninguna sesión puede ver dos clientes a la vez.
+
 La hora contra la que se mide cada llegada sale del **turno** del empleado: cada turno tiene su horario (una franja, o dos si la jornada es partida), los días de la semana que cubre y, si hace falta, su propia tolerancia. La rotación se programa con vigencia, así que al vencer la persona vuelve sola a su horario de contrato, y los días que su turno no cubre figuran como **franco** en lugar de contarse como ausencia.
 
 ---
@@ -108,6 +110,14 @@ COMPROBANTE_CLAVE=clave_firma_comprobantes
 # horario real de la empresa.
 JORNADA_INICIO=08:00
 
+# Empresa que atiende esta instalación cuando la base aloja a varias. Vacío
+# con un solo cliente. Se usa en el escritorio y en la consola; la web la
+# resuelve por sesión.
+EMPRESA_ACTIVA=
+
+# Razón social con la que se crea la empresa inicial en la primera migración.
+EMPRESA_NOMBRE=Empresa
+
 # Bloquea toda marca que el motor biométrico no pueda verificar. Viene
 # apagada: una plantilla recién migrada no tiene fotos cargadas.
 BIOMETRIA_OBLIGATORIA=0
@@ -168,6 +178,8 @@ python tests/smoke_permisos_autoservicio.py  # Pedido, cuota reservada, aprobaci
 python tests/test_planilla_extras.py # Planilla de horas extra y constancia de asistencia
 python tests/test_turno_nocturno.py  # Turnos que cruzan la medianoche y jornadas sin cierre
 python tests/test_turnos.py          # Horarios por empleado, rotación, jornada partida y francos
+python tests/guardia_arrendamiento.py  # Ninguna consulta de datos de cliente sin acotar
+python tests/test_multiempresa.py    # Dos clientes alojados: ningún dato cruzado
 python tests/test_antiguedad_y_bajas.py  # Antigüedad desde el contrato y baja lógica
 python tests/test_seguridad_datos.py # Biometría cifrada y freno de intentos fallidos
 python tests/validar_art14.py        # Límites de cuota y usos del Art. 14

@@ -212,7 +212,11 @@
     boton.disabled = true;
     boton.textContent = "Registrando…";
     pedir("/api/marcar", {
-      cuerpo: { cedula: cedula, password: clave }
+      cuerpo: {
+        cedula: cedula,
+        password: clave,
+        empresa: $("k-empresa").value.trim()
+      }
     }).then(function (datos) {
       /* El reloj en vivo se va mientras está el comprobante: si no, quedan
          dos horas grandes en pantalla y la persona no sabe cuál es la suya. */
@@ -258,7 +262,11 @@
   function iniciarSesion(evento) {
     evento.preventDefault();
     avisar("a-aviso", "");
-    var cuerpo = { cedula: $("a-cedula").value.trim(), password: $("a-clave").value };
+    var cuerpo = {
+      cedula: $("a-cedula").value.trim(),
+      password: $("a-clave").value,
+      empresa: $("a-empresa").value.trim()
+    };
     if (!cuerpo.cedula || !cuerpo.password) {
       avisar("a-aviso", "Completá tu cédula y contraseña.");
       return;
@@ -267,9 +275,11 @@
       sesion.token = datos.token;
       sesion.rol = datos.rol;
       sesion.nombre = datos.nombre;
+      sesion.empresa = datos.empresa;
       almacenar("marcacion_jwt", datos.token);
       almacenar("marcacion_rol", datos.rol);
       almacenar("marcacion_nombre", datos.nombre);
+      almacenar("marcacion_empresa", datos.empresa);
       $("a-clave").value = "";
       entrarALaApp();
     }).catch(function (error) {
@@ -280,6 +290,9 @@
   function entrarALaApp() {
     $("barra-nombre").textContent = sesion.nombre || "";
     $("barra-rol").textContent = sesion.rol || "";
+    /* Con varias empresas alojadas, saber en cuál se está administrando no
+       es un adorno: es lo que evita dar de baja al empleado de otro cliente. */
+    $("barra-empresa").textContent = sesion.empresa || "";
     var gestiona = sesion.rol === "Administrador" || sesion.rol === "Recursos Humanos";
     $("nav-gestion").classList.toggle("oculto", !gestiona);
     conectarAlertas();
@@ -288,9 +301,11 @@
 
   function cerrarSesion(mensaje) {
     sesion.token = sesion.rol = sesion.nombre = sesion.resumen = null;
+    sesion.empresa = null;
     almacenar("marcacion_jwt", null);
     almacenar("marcacion_rol", null);
     almacenar("marcacion_nombre", null);
+    almacenar("marcacion_empresa", null);
     if (sesion.socket) { sesion.socket.onclose = null; sesion.socket.close(); sesion.socket = null; }
     mostrar("acceso");
     if (mensaje) avisar("a-aviso", mensaje);
@@ -1816,6 +1831,7 @@
     sesion.token = recuperar("marcacion_jwt");
     sesion.rol = recuperar("marcacion_rol");
     sesion.nombre = recuperar("marcacion_nombre");
+    sesion.empresa = recuperar("marcacion_empresa");
     if (sesion.token) entrarALaApp();
     else mostrar("kiosco");
   }

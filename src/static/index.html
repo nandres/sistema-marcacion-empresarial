@@ -37,6 +37,14 @@
         <input id="k-clave" type="password" autocomplete="current-password">
       </div>
 
+      <details class="desplegable">
+        <summary>Trabajo en más de una empresa</summary>
+        <div class="contenido campo">
+          <label for="k-empresa">Nombre corto de la empresa</label>
+          <input id="k-empresa" placeholder="acme" autocomplete="organization">
+        </div>
+      </details>
+
       <button class="btn-ancho" id="k-marcar">Registrar asistencia</button>
 
       <div id="k-aviso"></div>
@@ -66,6 +74,13 @@
         <label for="a-clave">Contraseña</label>
         <input id="a-clave" type="password" autocomplete="current-password">
       </div>
+      <details class="desplegable">
+        <summary>Trabajo en más de una empresa</summary>
+        <div class="contenido campo">
+          <label for="a-empresa">Nombre corto de la empresa</label>
+          <input id="a-empresa" placeholder="acme" autocomplete="organization">
+        </div>
+      </details>
       <button class="btn-ancho" type="submit">Ingresar</button>
       <div id="a-aviso"></div>
     </form>
@@ -83,7 +98,8 @@
         <span class="membrete-nombre">Sistema de Marcación</span>
         <span class="membrete-pie">Control de asistencia · Ley 213/93</span>
         <div class="membrete-derecha">
-          <span class="quien"><b id="barra-nombre"></b> · <span id="barra-rol"></span></span>
+          <span class="quien"><b id="barra-nombre"></b> · <span id="barra-rol"></span>
+            <span id="barra-empresa" class="empresa"></span></span>
           <button class="boton-signo" id="btn-tema" title="Cambiar tema" aria-label="Cambiar tema">
             <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
               <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/>

@@ -94,10 +94,15 @@ async def aplicar_cabeceras_seguridad(request: Request, siguiente):
 app.mount("/static", StaticFiles(directory=ESTATICOS), name="static")
 
 class LoginRequest(BaseModel):
-    """Credenciales del empleado para emitir el token de acceso."""
+    """Credenciales del empleado para emitir el token de acceso.
+
+    ``empresa`` es el nombre corto del cliente y solo hace falta cuando la
+    misma cédula trabaja en dos de los alojados acá.
+    """
 
     cedula: str
     password: str
+    empresa: str = ""
 
 
 class ConsultaRequest(BaseModel):
@@ -117,16 +122,25 @@ class ReclamoRequest(BaseModel):
     motivo: str
 
 
-def _cliente() -> database.Database:
+def _cliente(empresa_id: Optional[int] = None) -> database.Database:
     """Abre una conexión fresca por petición para evitar sesiones cruzadas.
 
     No aplica migraciones: el DDL vive en ``migrate.py`` y corre una sola vez
     antes de levantar el servidor. Ejecutarlo por petición tomaba locks
     exclusivos sobre ``justificaciones`` y serializaba el pico de marcación.
+
+    La conexión nace **sin empresa**. Se la ata la sesión del usuario, así
+    que un endpoint que se olvide de pasarla no devuelve los datos de todos
+    los clientes: falla.
     """
-    db = database.Database()
+    db = database.Database(empresa_id=empresa_id)
     db.connect()
     return db
+
+
+def _cliente_de(usuario: Dict[str, Any]) -> database.Database:
+    """Conexión atada a la empresa del usuario autenticado."""
+    return _cliente(usuario["empresa_id"])
 
 
 def _usuario_autenticado(
@@ -140,9 +154,20 @@ def _usuario_autenticado(
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = authorization.split(" ", 1)[1].strip()
-    db = _cliente()
+    claims = {}
     try:
         claims = auth.verificar_token_acceso(token)
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=401,
+            detail="Sesión inválida o expirada.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    # La empresa sale del token firmado y acota la búsqueda del propio
+    # usuario: si el identificador y la empresa no se corresponden, el token
+    # no resuelve a nadie en lugar de resolver a alguien de otro cliente.
+    db = _cliente(claims.get("emp"))
+    try:
         usuario = db.get_user_by_id(int(claims["sub"]))
         if not usuario:
             raise ValueError("Usuario del token inexistente.")
@@ -159,9 +184,12 @@ def _usuario_autenticado(
 
 def _usuario_por_token_query(token: str) -> Dict[str, Any]:
     """Resuelve el usuario desde un token recibido por query string (PDFs)."""
-    db = _cliente()
     try:
         claims = auth.verificar_token_acceso(token)
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Sesión inválida o expirada.")
+    db = _cliente(claims.get("emp"))
+    try:
         usuario = db.get_user_by_id(int(claims["sub"]))
         if not usuario:
             raise ValueError("Usuario del token inexistente.")
@@ -194,7 +222,7 @@ async def ws_alertas(websocket: WebSocket, token: str = "") -> None:
         await websocket.close(code=4401)
         return
     await websocket.accept()
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         pendientes = db.listar_alertas(no_leidas=True, limite=20)
         for alerta in pendientes:
@@ -207,6 +235,10 @@ async def ws_alertas(websocket: WebSocket, token: str = "") -> None:
         db.cerrar()
 
     def remitente(alerta: Dict[str, Any]) -> None:
+        # El bus vive en el proceso y lo comparten todos los clientes
+        # alojados: la empresa se comprueba antes que el destinatario.
+        if not notifications.es_de_la_empresa(alerta, usuario["empresa_id"]):
+            return
         if (
             alerta.get("usuario_id") is None
             or int(alerta.get("usuario_id") or 0) == int(usuario["id"])
@@ -250,7 +282,7 @@ def api_publicar_alerta(
     de fraude contra un tercero.
     """
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return notifications.registrar_alerta(
             db,
@@ -271,7 +303,7 @@ def api_listar_alertas(
     """Lista de alertas para el Panel de Gestión (RRHH/Administrador)."""
     if usuario["role_name"] not in ("Administrador", "Recursos Humanos"):
         raise HTTPException(status_code=403, detail="Requiere rol de Recursos Humanos.")
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return {
             "alertas": db.listar_alertas(limite=60),
@@ -288,7 +320,7 @@ def api_marcar_alertas_leidas(
     """Marca todas las alertas como leídas (Panel de Gestión)."""
     if usuario["role_name"] not in ("Administrador", "Recursos Humanos"):
         raise HTTPException(status_code=403, detail="Requiere rol de Recursos Humanos.")
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return {"marcadas": db.marcar_alertas_leidas()}
     finally:
@@ -338,17 +370,18 @@ def api_login(payload: LoginRequest, request: Request) -> Dict[str, Any]:
     _frenar(request, cedula)
     db = _cliente()
     try:
-        user = auth.authenticate(db, cedula, payload.password)
+        user = auth.authenticate(db, cedula, payload.password, payload.empresa)
         if not user:
             _registrar_fallo(request, cedula)
             raise HTTPException(status_code=401, detail="Cédula o contraseña incorrectas.")
         _limpiar_freno(request, cedula)
         rol = auth.get_role_name(db, user)
-        token = auth.crear_token_acceso(user["id"], rol)
+        token = auth.crear_token_acceso(user["id"], rol, user["empresa_id"])
         return {
             "token": token,
             "rol": rol,
             "nombre": user["full_name"],
+            "empresa": user.get("empresa_nombre", ""),
             "vigencia_horas": auth.JWT_EXPIRACION_HORAS,
         }
     finally:
@@ -360,7 +393,7 @@ def api_resumen(
     usuario: Dict[str, Any] = Depends(_usuario_autenticado),
 ) -> Dict[str, Any]:
     """Tablero personal: vacaciones, permisos del mes, marcas y horas extra."""
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return reports.resumen_empleado(db, usuario)
     finally:
@@ -379,17 +412,16 @@ def api_permiso_pdf(
     navegador. El cliente descarga el archivo por ``fetch`` y lo guarda como
     blob.
     """
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         justificacion = db.get_justificacion(solicitud_id)
         if not justificacion or justificacion["usuario_id"] != usuario["id"]:
             raise HTTPException(status_code=404, detail="Permiso no encontrado.")
-    finally:
-        db.cerrar()
-    try:
-        ruta = Path(reports.generar_pdf_permiso(solicitud_id))
+        ruta = Path(reports.generar_pdf_permiso(db, solicitud_id))
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error))
+    finally:
+        db.cerrar()
     return FileResponse(
         ruta,
         media_type="application/pdf",
@@ -402,7 +434,7 @@ def api_consulta(
     payload: ConsultaRequest, usuario: Dict[str, Any] = Depends(_usuario_autenticado)
 ) -> Dict[str, Any]:
     """Historial del empleado autenticado: rango completo o un día puntual."""
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         if payload.fecha:
             try:
@@ -454,7 +486,7 @@ def api_permisos_catalogo(
     condiciones exige, en vez de pedir "permiso" a secas y esperar a que
     RRHH le explique por qué no correspondía.
     """
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         disponibilidad = reglamento.disponibilidad_permisos(db, usuario)
         return {
@@ -486,7 +518,7 @@ def api_permisos_solicitar(
     usuario: Dict[str, Any] = Depends(_usuario_autenticado),
 ) -> Dict[str, Any]:
     """Presenta una solicitud de permiso validada contra el reglamento."""
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         inicio = _fecha(payload.fecha_inicio, "Fecha de inicio")
         fin = _fecha(payload.fecha_fin, "Fecha de fin")
@@ -515,7 +547,7 @@ def api_permisos_solicitudes(
     usuario: Dict[str, Any] = Depends(_usuario_autenticado),
 ) -> List[Dict[str, Any]]:
     """Solicitudes presentadas por el empleado, con su estado actual."""
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return db.listar_solicitudes_permiso(usuario["id"])
     finally:
@@ -531,7 +563,7 @@ def api_horas_extra_pdf(
     """Planilla de horas extraordinarias del propio empleado."""
     if not 1 <= mes <= 12:
         raise HTTPException(status_code=422, detail="Mes fuera de rango.")
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         ruta = Path(reports.generar_pdf_horas_extra(db, usuario, anio, mes))
     except (ValueError, OSError) as error:
@@ -550,7 +582,7 @@ def api_constancia_pdf(
     """Constancia de asistencia del propio empleado, sin pasar por ventanilla."""
     inicio = _fecha(desde, "Fecha de inicio")
     fin = _fecha(hasta, "Fecha de fin")
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         ruta = Path(reports.generar_pdf_constancia(db, usuario, inicio, fin))
     except (ValueError, OSError) as error:
@@ -565,7 +597,7 @@ def api_reclamo(
     payload: ReclamoRequest, usuario: Dict[str, Any] = Depends(_usuario_autenticado)
 ) -> Dict[str, Any]:
     """Registra una solicitud de corrección en estado Pendiente."""
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         if payload.tipo_marca not in ("Entrada", "Salida"):
             raise HTTPException(status_code=422, detail="Tipo de marca inválido.")
@@ -597,6 +629,7 @@ def api_reclamo(
 class MarcarRequest(BaseModel):
     cedula: str
     password: str
+    empresa: str = ""
 
 
 class PersonalNuevo(BaseModel):
@@ -657,14 +690,29 @@ def _personal_publico(fila: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @app.get("/api/condicion-hoy")
-def api_condicion_hoy() -> Dict[str, Any]:
+def api_condicion_hoy(empresa: str = "") -> Dict[str, Any]:
     """Condición excepcional vigente hoy, para informarla en el kiosco.
 
     No expone datos personales: es el mismo cartel que la empresa colgaría
     en la puerta. La declara Recursos Humanos y no quien marca.
+
+    Es el único cartel que se lee sin sesión, así que la empresa llega por
+    ``?empresa=<slug>``. Con una sola empresa alojada se resuelve sola; con
+    varias y sin indicación no se muestra nada, porque adivinar sería mostrar
+    el cartel de otro cliente.
     """
     db = _cliente()
     try:
+        alojadas = db.listar_empresas()
+        if empresa:
+            elegida = db.get_empresa_por_slug(empresa)
+        elif len(alojadas) == 1:
+            elegida = alojadas[0]
+        else:
+            elegida = None
+        if not elegida:
+            return {"condicion": "", "tolerancia_min": 0}
+        db.empresa_id = elegida["id"]
         excepcion = clock_engine.condicion_declarada(db, datetime.date.today())
         return {
             "condicion": excepcion["condicion"],
@@ -686,7 +734,7 @@ def api_marcar(payload: MarcarRequest, request: Request) -> Dict[str, Any]:
     _frenar(request, cedula)
     db = _cliente()
     try:
-        usuario = auth.authenticate(db, cedula, payload.password)
+        usuario = auth.authenticate(db, cedula, payload.password, payload.empresa)
         if not usuario:
             _registrar_fallo(request, cedula)
             raise HTTPException(
@@ -736,7 +784,7 @@ def api_panel_resumen(
 ) -> Dict[str, Any]:
     """Resumen operativo del Panel de Gestión (RRHH/Administrador)."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return {
             "personal": len(db.list_users()),
@@ -766,7 +814,7 @@ def api_panel_personal(
 ) -> Dict[str, Any]:
     """Lista de empleados (sin credenciales) y roles disponibles."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         vigentes = db.turnos_vigentes_de_la_plantilla(datetime.date.today())
         return {
@@ -792,7 +840,7 @@ def api_panel_personal_crear(
 ) -> Dict[str, Any]:
     """Crea un empleado desde el Panel de Gestión."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             nuevo_id = auth.create_user(
@@ -823,7 +871,7 @@ def api_panel_personal_editar(
 ) -> Dict[str, Any]:
     """Actualiza los datos de un empleado."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             auth.update_user(
@@ -857,7 +905,7 @@ def api_panel_personal_baja(
 ) -> Dict[str, Any]:
     """Da de baja a un empleado conservando su historial de marcajes."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             baja = auth.dar_de_baja(db, usuario, user_id)
@@ -878,7 +926,7 @@ def api_panel_personal_reincorporar(
 ) -> Dict[str, Any]:
     """Reincorpora a un empleado dado de baja."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             alta = auth.reincorporar(db, usuario, user_id)
@@ -896,7 +944,7 @@ def api_panel_personal_eliminar(
 ) -> Dict[str, Any]:
     """Elimina un empleado (queda auditado en logs_auditoria)."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             auth.delete_user(db, usuario, user_id)
@@ -913,7 +961,7 @@ def api_panel_justificaciones(
 ) -> Dict[str, Any]:
     """Justificaciones emitidas, empleados y catálogo de permisos."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return {
             "justificaciones": db.list_justificaciones(),
@@ -931,7 +979,7 @@ def api_panel_justificaciones_crear(
 ) -> Dict[str, Any]:
     """Emitir una justificación oficial (valida reglamento y cuotas)."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             inicio = datetime.date.fromisoformat(payload.fecha_inicio.strip())
@@ -965,10 +1013,13 @@ def api_panel_justificaciones_pdf(
 ) -> FileResponse:
     """Descarga del PDF oficial de una justificación (solo RRHH/Admin)."""
     _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
     try:
-        ruta = reports.generar_pdf_permiso(solicitud_id)
+        ruta = reports.generar_pdf_permiso(db, solicitud_id)
     except Exception as error:
         raise HTTPException(status_code=400, detail=str(error))
+    finally:
+        db.cerrar()
     return FileResponse(
         ruta, media_type="application/pdf", filename=Path(ruta).name
     )
@@ -980,7 +1031,7 @@ def api_panel_correcciones(
 ) -> List[Dict[str, Any]]:
     """Solicitudes de corrección de marcaje con su estado."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return db.list_solicitudes_correccion()
     finally:
@@ -990,7 +1041,7 @@ def api_panel_correcciones(
 def _resolver_correccion(
     solicitud_id: int, aprobar: bool, usuario: Dict[str, Any]
 ) -> Dict[str, Any]:
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             estado = auth.aprobar_solicitud_correccion(db, usuario, solicitud_id, aprobar)
@@ -1039,7 +1090,7 @@ def api_panel_solicitudes_permiso(
 ) -> List[Dict[str, Any]]:
     """Bandeja de pedidos de permiso presentados desde el portal."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return db.listar_solicitudes_permiso()
     finally:
@@ -1054,7 +1105,7 @@ def api_panel_resolver_permiso(
 ) -> Dict[str, Any]:
     """Aprueba o rechaza un pedido; aprobar emite la justificación oficial."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             resultado = auth.resolver_solicitud_permiso(
@@ -1076,7 +1127,7 @@ def api_panel_condiciones(
 ) -> List[Dict[str, Any]]:
     """Condiciones excepcionales declaradas, con quién firmó cada una."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return db.listar_condiciones_dia()
     finally:
@@ -1090,7 +1141,7 @@ def api_panel_condiciones_declarar(
 ) -> Dict[str, Any]:
     """Declara la condición de un día para toda la plantilla."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         fecha = _fecha(payload.fecha, "Fecha")
         try:
@@ -1114,7 +1165,7 @@ def api_panel_condiciones_revocar(
 ) -> Dict[str, Any]:
     """Revoca la condición de un día; vuelve a regir la tolerancia ordinaria."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         dia = _fecha(fecha, "Fecha")
         if not db.borrar_condicion_dia(dia):
@@ -1139,7 +1190,7 @@ def api_panel_horas_extra_pdf(
     _exigir_rrhh(usuario)
     if not 1 <= mes <= 12:
         raise HTTPException(status_code=422, detail="Mes fuera de rango.")
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         empleado = db.get_user_by_id(user_id)
         if not empleado:
@@ -1158,7 +1209,7 @@ def api_panel_auditoria(
 ) -> List[Dict[str, Any]]:
     """Bitácora de auditoría para trazabilidad (RRHH/Administrador)."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return db.listar_auditoria(limite=100)
     finally:
@@ -1203,7 +1254,7 @@ def api_turno_propio(
     usuario: Dict[str, Any] = Depends(_usuario_autenticado),
 ) -> Dict[str, Any]:
     """Horario del empleado autenticado, con sus rotaciones vigentes."""
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return auth.turno_de_empleado(db, usuario, usuario["id"])
     finally:
@@ -1217,7 +1268,7 @@ def api_panel_turnos(
 ) -> List[Dict[str, Any]]:
     """Catálogo de turnos con su horario, sus días y su dotación."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         return auth.listar_turnos(db, usuario, incluir_inactivos)
     finally:
@@ -1231,7 +1282,7 @@ def api_panel_turnos_crear(
 ) -> Dict[str, Any]:
     """Da de alta un turno."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             return auth.crear_turno(
@@ -1257,7 +1308,7 @@ def api_panel_turnos_editar(
 ) -> Dict[str, Any]:
     """Modifica un turno; el cambio rige hacia adelante."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             return auth.actualizar_turno(
@@ -1292,7 +1343,7 @@ def api_panel_turnos_predeterminado(
 ) -> Dict[str, Any]:
     """Designa el turno que rige para quien no tiene ninguno asignado."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             return auth.designar_turno_predeterminado(db, usuario, turno_id)
@@ -1309,7 +1360,7 @@ def api_panel_turnos_retirar(
 ) -> Dict[str, Any]:
     """Retira un turno de circulación, o lo borra si nunca se usó."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             resultado = auth.retirar_turno(db, usuario, turno_id)
@@ -1327,7 +1378,7 @@ def api_panel_turno_empleado(
 ) -> Dict[str, Any]:
     """Horario vigente de un empleado con sus rotaciones programadas."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             return auth.turno_de_empleado(db, usuario, user_id)
@@ -1345,7 +1396,7 @@ def api_panel_turno_base(
 ) -> Dict[str, Any]:
     """Fija el turno de contrato de un legajo."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             return auth.asignar_turno_base(db, usuario, user_id, payload.turno_id)
@@ -1363,7 +1414,7 @@ def api_panel_rotacion(
 ) -> Dict[str, Any]:
     """Programa una rotación con vigencia sobre el turno de contrato."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             return auth.rotar_turno(
@@ -1383,7 +1434,7 @@ def api_panel_rotacion_revocar(
 ) -> Dict[str, Any]:
     """Cancela una rotación; el empleado vuelve a su turno de contrato."""
     _exigir_rrhh(usuario)
-    db = _cliente()
+    db = _cliente_de(usuario)
     try:
         try:
             auth.revocar_rotacion(db, usuario, asignacion_id)

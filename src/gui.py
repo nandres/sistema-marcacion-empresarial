@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime
 import calendar
+import os
 from functools import partial
 from typing import Callable, Dict, List, Optional
 
@@ -548,6 +549,11 @@ class MarcacionApp(ctk.CTk):
         super().__init__()
         self.db = Database()
         self.db.initialize()
+        # El escritorio atiende a una sola empresa: la de la sede donde está
+        # instalado. `EMPRESA_ACTIVA` la elige cuando la base aloja a varias.
+        preferida = os.getenv("EMPRESA_ACTIVA", "").strip()
+        if preferida:
+            self.db.usar_empresa(preferida)
         self.actor: Optional[Dict] = None
         self.panel_gestion: Optional[ctk.CTkFrame] = None
         self.variable_tema = ctk.BooleanVar(value=False)
@@ -1218,7 +1224,7 @@ class EmployeeDashboard(ctk.CTkFrame):
                     hover_color=t("PRIMARY_HOVER"),
                     text_color=t("ON_PRIMARY"),
                     corner_radius=RADIO,
-                    command=partial(self._descargar_pdf, permiso["id"]),
+                    command=partial(descargar_pdf_permiso, self.db, permiso["id"]),
                 )
                 boton_pdf._rol = "primario"
                 boton_pdf.grid(row=0, column=1, padx=(0, 10))
@@ -1358,16 +1364,21 @@ class EmployeeDashboard(ctk.CTkFrame):
         lienzo.draw()
         lienzo.get_tk_widget().grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 12))
 
-    @staticmethod
-    def _descargar_pdf(solicitud_id: int) -> None:
-        """Genera el PDF oficial del permiso y lo abre para su impresión."""
-        import os
-        try:
-            ruta = reports.generar_pdf_permiso(solicitud_id)
-        except ValueError as error:
-            print(f"PDF no disponible: {error}")
-            return
-        os.startfile(ruta)
+
+def descargar_pdf_permiso(db: Database, solicitud_id: int) -> None:
+    """Genera el PDF oficial de un permiso y lo abre para imprimirlo.
+
+    Vive en el módulo y no en una pantalla porque lo usan dos: el tablero del
+    empleado y la bandeja de justificaciones. La conexión llega desde quien
+    llama, que es la que sabe de qué empresa es el permiso.
+    """
+    try:
+        ruta = reports.generar_pdf_permiso(db, solicitud_id)
+    except ValueError as error:
+        print(f"PDF no disponible: {error}")
+        return
+    os.startfile(ruta)
+
 
 class PanelGestion(ctk.CTkFrame):
     """Entorno administrativo de dos columnas con accesos directos grandes.
@@ -1497,8 +1508,14 @@ class PanelGestion(ctk.CTkFrame):
             pass
         self.after(4000, self._revision_alertas)
 
-    def _alerta_entrante(self, _alerta: dict) -> None:
-        """El bus de notificaciones avisa; se revisa en el hilo de la GUI."""
+    def _alerta_entrante(self, alerta: dict) -> None:
+        """El bus de notificaciones avisa; se revisa en el hilo de la GUI.
+
+        El bus es del proceso y no de la empresa, así que la campana solo
+        parpadea por lo que pasa en la que esta instalación atiende.
+        """
+        if not notifications.es_de_la_empresa(alerta, self.db.empresa_id):
+            return
         self.after(0, self._revision_alertas)
 
     def _alternar_campana(self) -> None:
@@ -3053,7 +3070,7 @@ class JustificacionesTab(ctk.CTkFrame):
             boton_primario(
                 fila,
                 "Descargar PDF",
-                partial(EmployeeDashboard._descargar_pdf, justificacion["id"]),
+                partial(descargar_pdf_permiso, self.db, justificacion["id"]),
             ).grid(row=0, column=1, rowspan=2, padx=(0, 12))
 
     def refrescar_empleados(self) -> None:

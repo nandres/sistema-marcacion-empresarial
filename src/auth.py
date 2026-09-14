@@ -92,17 +92,19 @@ def _jwt_secret() -> str:
     return secreto_requerido("JWT_SECRET_KEY")
 
 
-def crear_token_acceso(usuario_id: int, rol: str) -> str:
+def crear_token_acceso(usuario_id: int, rol: str, empresa_id: int) -> str:
     """Genera un token JWT firmado con vigencia de 8 horas.
 
-    El token transporta el identificador del usuario y su rol como claims
-    verificables; expira automáticamente y debe enviarse en cada petición
-    protegida dentro de la cabecera de autorización ``Bearer``.
+    El token transporta el usuario, su rol y **su empresa** como claims
+    verificables. La empresa viaja firmada y no se vuelve a preguntar: es lo
+    que ata cada petición a un solo cliente sin que el navegador pueda
+    elegirlo.
     """
     ahora = datetime.now(timezone.utc)
     payload = {
         "sub": str(usuario_id),
         "rol": rol,
+        "emp": int(empresa_id),
         "iat": ahora,
         "exp": ahora + timedelta(hours=JWT_EXPIRACION_HORAS),
     }
@@ -165,17 +167,36 @@ def require_role(db: Database, user: Dict, allowed_roles: tuple) -> str:
     return role
 
 
-def authenticate(db: Database, username: str, password: str) -> Optional[Dict]:
-    """Autentica credenciales contra el hash bcrypt de la base de datos.
+def authenticate(
+    db: Database, username: str, password: str, empresa: Optional[str] = None
+) -> Optional[Dict]:
+    """Autentica credenciales y deja la conexión atada a la empresa del usuario.
+
+    La pantalla de acceso no sabe de qué cliente es quien escribe, así que la
+    cédula se busca en todas las empresas y **la contraseña decide**: se
+    compara contra cada candidato y entra el que coincide. Hacerlo en ese
+    orden importa, porque preguntar primero "¿en qué empresa estás?" le diría
+    a cualquiera en qué clientes existe una cédula sin saber su clave.
+
+    ``empresa`` acota la búsqueda por slug cuando el mismo documento trabaja
+    en dos clientes alojados acá y las dos contraseñas coinciden, que es el
+    único caso donde la cédula sola no alcanza.
 
     Un empleado dado de baja no entra ni marca aunque su contraseña siga
-    siendo válida: la baja conserva el legajo, no el acceso.
+    siendo válida: la baja conserva el legajo, no el acceso. Una empresa
+    suspendida tampoco deja entrar a los suyos.
     """
-    user = db.get_user_by_username(username)
-    if not user or not verify_password(password, user["password_hash"]):
+    candidatos = db.buscar_credenciales(username)
+    if empresa:
+        objetivo = empresa.strip().lower()
+        candidatos = [c for c in candidatos if c["empresa_slug"] == objetivo]
+    validos = [c for c in candidatos if verify_password(password, c["password_hash"])]
+    if len(validos) != 1:
         return None
-    if user.get("activo") is False:
+    user = validos[0]
+    if user.get("activo") is False or not user.get("empresa_activa", True):
         return None
+    db.empresa_id = user["empresa_id"]
     return user
 
 
@@ -189,7 +210,12 @@ def prompt_login(db: Database) -> Optional[Dict]:
 def crear_primer_admin(
     db: Database, username: str, password: str, full_name: str
 ) -> int:
-    """Crea el primer Administrador (bootstrap, solo con tabla de usuarios vacía)."""
+    """Crea el primer Administrador de la empresa activa.
+
+    El bootstrap es por empresa y no por instalación: alojar un cliente nuevo
+    tiene que poder crearle su administrador aunque los otros clientes ya
+    tengan el suyo.
+    """
     if db.list_users(incluir_bajas=True):
         raise PermissionError("El administrador inicial ya fue creado.")
     role = db.get_role_by_name(ROLE_ADMIN)

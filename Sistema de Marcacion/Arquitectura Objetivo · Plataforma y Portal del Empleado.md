@@ -24,7 +24,7 @@ Las entidades que hoy no existen y bloquean los casos de uso reales:
 | `turnos` | La jornada es una constante de proceso | Horarios rotativos, jornada partida, nocturnidad real |
 | `asignaciones_turno` | — | Qué turno le toca a quién y desde cuándo |
 | `feriados` | `frozenset` hardcodeado de 2026 | Que el sistema siga siendo correcto en 2027 |
-| `organizaciones` / `sucursales` | Instancia única | Multi-empresa, multi-sede, husos por sede |
+| `empresas` / `sucursales` | ✅ `empresas` con aislamiento verificado; la sucursal vive en el turno | Multi-sede con husos propios por sede |
 | `dispositivos` | El kiosco no se identifica | Trazabilidad de dónde se marcó, geocerca |
 | `users.fecha_ingreso` | Se usa `created_at` | Antigüedad y aguinaldo correctos tras migrar la plantilla |
 | `users.activo` / `fecha_baja` | Solo existe `DELETE` | Histórico de bajas sin borrar marcajes |
@@ -123,9 +123,9 @@ La tabla de personal tampoco escala: `renderTablaPersonal` dibuja la plantilla c
 
 ## Del sistema al producto SaaS
 
-Tres condiciones separan el estado actual de una plataforma multi-empresa:
+Tres condiciones separaban el estado actual de una plataforma multi-empresa. La primera está cerrada:
 
-**Aislamiento por organización.** Toda tabla necesita `organizacion_id` y toda consulta necesita filtrarlo. La forma robusta en PostgreSQL es *Row Level Security* con el identificador en el contexto de sesión, para que un `WHERE` olvidado no filtre datos entre clientes.
+**Aislamiento por organización ✅.** Las doce tablas de datos de cliente llevan `empresa_id`, la conexión falla si no tiene empresa activa, un verificador estático impide que una consulta nueva quede sin acotar y una prueba aloja dos clientes con los datos superpuestos para intentar cruzarlos. El detalle está en [[Multiempresa · Aislamiento entre Clientes]]. Falta la capa de *Row Level Security* en PostgreSQL, que resistiría incluso a un `WHERE` olvidado; ahí se explica por qué no se dejó a medias.
 
 **Configuración como dato.** Tolerancias, jornadas, feriados y catálogo de permisos hoy son constantes de módulo. Una empresa con tolerancia de 5 minutos y jornada de 06:00 exige recompilar. Debe ser configuración por organización, versionada —porque una liquidación de hace seis meses tiene que recalcularse con las reglas vigentes entonces, no con las de hoy.
 
@@ -133,4 +133,4 @@ Tres condiciones separan el estado actual de una plataforma multi-empresa:
 
 ## Enlaces
 
-[[Auditoría Técnica · Hallazgos Críticos]] · [[Antifraude y Resiliencia en Picos de Marcación]] · [[Ecosistema Sistema de Marcación]] · [[Diseño de Interfaz Premium UI-UX]] · [[Despliegue en la Nube e Infraestructura SaaS]]
+[[Multiempresa · Aislamiento entre Clientes]] · [[Auditoría Técnica · Hallazgos Críticos]] · [[Antifraude y Resiliencia en Picos de Marcación]] · [[Ecosistema Sistema de Marcación]] · [[Diseño de Interfaz Premium UI-UX]] · [[Despliegue en la Nube e Infraestructura SaaS]]

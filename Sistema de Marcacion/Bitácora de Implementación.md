@@ -184,6 +184,25 @@ El rediseño de la fase 14 arregló la **jerarquía** pero conservó la **forma*
 
 **Cobertura nueva**: `test_turnos.py`, 48 verificaciones sobre definición, resolución, tardanza, francos, jornada partida, turno nocturno, permisos y reposición offline. La suite pasó de 17 a 18 conjuntos.
 
+### 19. Multiempresa: una instalación, varios clientes
+*2026-09-14 · aislamiento verificado*
+
+**Lo que había.** Una instalación por cliente. Funcionaba, pero diez clientes eran diez despliegues, diez bases y diez ventanas de mantenimiento. El costo de operación crecía en línea recta con las ventas.
+
+**El modelo.** Doce tablas de datos llevan `empresa_id` con `ON DELETE CASCADE`; los roles no, porque son el mismo catálogo para todos. Lo que era único en toda la base pasó a serlo dentro de la empresa: el usuario, el nombre del turno, el turno predeterminado y la condición declarada de un día.
+
+**Tres capas, porque una no alcanza.** Son más de setenta consultas y basta una sin acotar para mostrarle a un cliente la planilla de otro:
+
+1. La conexión **falla cerrado**: sin empresa activa, toda consulta de datos de cliente lanza `SinEmpresa` en lugar de recorrer la tabla entera.
+2. Un **verificador estático** lee `database.py` con el AST y falla si un método toca una tabla de empresa sin nombrar `empresa_id`.
+3. Una **prueba de aislamiento** aloja dos empresas con los datos superpuestos a propósito —la misma cédula, el mismo nombre de turno, la misma fecha con condición— e intenta cruzar por listados, ids de URL, ediciones, borrados, login, token forjado, bus de alertas e informes.
+
+**El acceso.** La pantalla de login no sabe de qué cliente es quien escribe, así que la cédula se busca en todas las empresas y **la contraseña decide**. El orden importa: preguntar primero por la empresa diría en qué clientes existe una cédula sin necesidad de saber su clave. Hecho el login, la empresa viaja firmada en el token y no se vuelve a preguntar.
+
+**Lo que atajó cada capa.** La primera versión del verificador aceptaba un atajo —filtrar por `user_id` parecía suficiente, porque un marcaje pertenece a la empresa de su empleado— hasta que quedó claro que ese id llega por URL: RRHH de un cliente podía editar el legajo de otro probando números. Se quitó el atajo y se acotaron las 56 consultas que dependían de él. El fallo cerrado, apenas encendido, destapó que `generar_pdf_permiso` abría su propia conexión sin empresa. Y el DDL de arrendamiento, que corre en cada arranque, tomaba locks exclusivos incluso sin nada que migrar: ahora pregunta primero al catálogo.
+
+**Cobertura nueva**: `test_multiempresa.py` (34 verificaciones) y `guardia_arrendamiento.py`, que además corre solo en CI. La suite pasó de 19 a 20 conjuntos.
+
 ## Cómo ejecutar
 
 | Componente | Comando |
@@ -254,9 +273,18 @@ Las dos primeras filas son la brecha de mayor valor: el motor horario es lógica
 - **Elegir "el más cercano" premia faltar.** Al decidir contra qué tramo medir una llegada, la cercanía decía que presentarse a las 11:00 en un turno 07:00–11:00 / 14:00–18:00 era llegar tres horas temprano al segundo tramo. Es llegar cuatro tarde al primero. El orden de los tramos pendientes es el dato, no la distancia.
 - **Una asignación sin vencimiento es una que alguien va a olvidar deshacer.** La rotación se modeló con `desde`/`hasta` desde el principio para que el caso normal —volver al turno de contrato— no dependa de que nadie se olvide.
 
+### Agregadas por el multiempresa (2026-09-14)
+
+- **Un invariante que depende de la disciplina no es un invariante.** "Acordate de filtrar por empresa" en setenta consultas es una fuga esperando el método setenta y cuatro. Lo que sostiene la regla es que el código la comprueba: el fallo cerrado en tiempo de ejecución y el verificador estático en CI.
+- **La ausencia de datos tiene que ser un error, no una consulta sin filtro.** El diseño fácil era tratar "sin empresa" como "todas". Es el mismo error que un `WHERE` olvidado, solo que escrito a propósito.
+- **Un atajo de seguridad se evalúa contra el atacante, no contra el flujo feliz.** Filtrar por `user_id` acota correctamente cuando el id viene de una consulta propia; no acota nada cuando viene de una URL que el atacante escribe.
+- **El orden de las preguntas en un login es parte del diseño.** Pedir la empresa antes de la contraseña convierte la pantalla de acceso en un directorio de qué cédulas trabajan en qué cliente. Se busca primero y decide la clave.
+- **Un bus en memoria no lo protege ninguna consulta.** El aislamiento de la base no alcanza para lo que nunca pasa por la base: las alertas en vivo se filtran en el proceso, y una alerta sin empresa no se entrega a nadie.
+- **Una política que no se aplica es peor que no tenerla.** Las políticas RLS de PostgreSQL son inertes bajo un superusuario; dejarlas instaladas sin verificar habría dado una sensación de protección que la instalación no tiene. Se documentó el paso en lugar de simularlo.
+
 ## Enlaces
 
 - [[Auditoría Técnica · Hallazgos Críticos]] · [[Arquitectura Objetivo · Plataforma y Portal del Empleado]] · [[Antifraude y Resiliencia en Picos de Marcación]]
 - [[Ecosistema Sistema de Marcación]] · [[Catálogo de Permisos y Licencias]] · [[Reglamento de Asistencia y Disciplina]]
 - [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Motor de Reglas de Horas Extra]] · [[Autoservicio de Permisos y Formularios]] · [[Turnos y Rotación de Horarios]]
-- [[Módulo de Gestión de Usuarios]] · [[Control de Roles y Permisos RBAC]] · [[Panel de Reportes y Auditoría]] · [[Seguridad y Cifrado de Comunicaciones]]
+- [[Módulo de Gestión de Usuarios]] · [[Control de Roles y Permisos RBAC]] · [[Panel de Reportes y Auditoría]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Multiempresa · Aislamiento entre Clientes]]

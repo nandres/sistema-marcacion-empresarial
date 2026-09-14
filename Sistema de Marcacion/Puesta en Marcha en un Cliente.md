@@ -17,6 +17,16 @@ El `.env` conserva `JORNADA_INICIO` para sembrar el turno inicial de la instalac
 
 **La fecha de ingreso es el dato que más se subestima.** De ella dependen los días de vacaciones (12 / 20 / 30 según la escala de la Ley 1626/00) y los meses de aguinaldo. Si se migra la plantilla sin cargarla, el sistema asume que todos ingresaron el día de la migración y liquida 12 días a quien le corresponden 30.
 
+## Una instalación, uno o varios clientes
+
+Una misma instalación puede alojar a varias empresas sin que ninguna vea los datos de otra ([[Multiempresa · Aislamiento entre Clientes]]). La migración crea la empresa inicial, que es la que usa un cliente único; las demás se alojan una por una:
+
+```bash
+python src/app.py alta-empresa
+```
+
+Cada empresa tiene su propio personal, sus turnos, sus permisos y su administrador. **Ninguna sesión puede ver dos a la vez**: cambiar de cliente exige volver a entrar.
+
 ## Orden de instalación
 
 ```bash
@@ -94,14 +104,14 @@ Decirlo por adelantado evita una venta mal hecha.
 
 | Falta | Consecuencia | Detalle |
 | --- | --- | --- |
-| **Multi-empresa** | Una instalación por cliente; no hay aislamiento por organización | [[Arquitectura Objetivo · Plataforma y Portal del Empleado]] |
 | **Prueba de vida en el reconocimiento facial** | Una foto en la pantalla de un celular pasa la verificación | P1-2, parte de fondo |
 | **Bus de alertas fuera del proceso** | Con varios workers, una alerta en vivo llega solo a los clientes conectados a ese worker | P3-4 |
 | **Cookie `HttpOnly` para la sesión** | El token vive en `localStorage` | P3-2 |
+| **Aislamiento impuesto por la base (RLS)** | El aislamiento entre clientes lo garantiza la aplicación, verificada por prueba; PostgreSQL todavía no lo impone | [[Multiempresa · Aislamiento entre Clientes]] |
 | **Pool de conexiones** | Cada petición abre y cierra su conexión; irrelevante para una empresa, relevante para muchas | — |
 | **Calendario de rotación automática** | La rotación semana A / semana B se carga a mano, tramo por tramo | [[Turnos y Rotación de Horarios]] |
 
-Lo primero de esa lista es lo que más se va a pedir: **multi-empresa**. Con una instalación por cliente el sistema funciona, pero mantener diez clientes son diez despliegues.
+Lo primero de esa lista es lo que más se va a pedir: **prueba de vida** en el reconocimiento facial. Sin ella, la biometría disuade pero no prueba.
 
 ## Verificación post-instalación
 
@@ -113,6 +123,7 @@ python tests/test_motor_horario.py
 python tests/test_condicion_dia.py
 python tests/test_turno_nocturno.py
 python tests/test_turnos.py
+python tests/test_multiempresa.py
 python tests/test_antiguedad_y_bajas.py
 python tests/test_seguridad_datos.py
 python tests/test_planilla_extras.py
@@ -123,4 +134,4 @@ Si `test_seguridad_datos` falla en la primera comprobación, falta `BIOMETRIA_CL
 
 ## Enlaces
 
-[[Despliegue en la Nube e Infraestructura SaaS]] · [[Turnos y Rotación de Horarios]] · [[Auditoría Técnica · Hallazgos Críticos]] · [[Autoservicio de Permisos y Formularios]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Reglamento de Asistencia y Disciplina]] · [[Motor de Reglas de Horas Extra]]
+[[Despliegue en la Nube e Infraestructura SaaS]] · [[Multiempresa · Aislamiento entre Clientes]] · [[Turnos y Rotación de Horarios]] · [[Auditoría Técnica · Hallazgos Críticos]] · [[Autoservicio de Permisos y Formularios]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Reglamento de Asistencia y Disciplina]] · [[Motor de Reglas de Horas Extra]]

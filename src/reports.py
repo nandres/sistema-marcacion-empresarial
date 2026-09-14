@@ -1301,7 +1301,7 @@ def _canonico_permiso(justificacion: Dict[str, Any]) -> str:
     )
 
 
-def generar_pdf_permiso(solicitud_id: int) -> str:
+def generar_pdf_permiso(db: Database, solicitud_id: int) -> str:
     """Genera el PDF oficial de un permiso aprobado (Res. 3028/2024).
 
     Documento formal con membrete institucional simulado,
@@ -1309,7 +1309,12 @@ def generar_pdf_permiso(solicitud_id: int) -> str:
     firmas electrónicas del tutor y el hash SHA-256 de validación legal,
     que queda persistido en ``justificaciones.hash_legal``.
 
+    Recibe la conexión del llamador en lugar de abrir la suya: una conexión
+    propia nacería sin empresa y tendría que adivinar de qué cliente es el
+    permiso, que es exactamente lo que no puede hacer.
+
     Args:
+        db: Conexión ya atada a la empresa del permiso.
         solicitud_id: Identificador de la justificación aprobada.
 
     Returns:
@@ -1318,23 +1323,17 @@ def generar_pdf_permiso(solicitud_id: int) -> str:
     Raises:
         ValueError: Si el permiso no existe o no puede componerse.
     """
-    db = Database()
-    db.ensure_database()
-    db.connect()
-    try:
-        justificacion = db.get_justificacion(solicitud_id)
-        if not justificacion:
-            raise ValueError(f"El permiso #{solicitud_id} no existe.")
-        empleado = db.get_user_by_id(justificacion["usuario_id"])
-        tutor = db.get_user_by_id(justificacion["aprobado_por"])
-        if not empleado or not tutor:
-            raise ValueError("Datos del empleado o tutor incompletos.")
-        hash_legal = hashlib.sha256(
-            _canonico_permiso(justificacion).encode("utf-8")
-        ).hexdigest()
-        db.actualizar_hash_justificacion(solicitud_id, hash_legal)
-    finally:
-        db.cerrar()
+    justificacion = db.get_justificacion(solicitud_id)
+    if not justificacion:
+        raise ValueError(f"El permiso #{solicitud_id} no existe.")
+    empleado = db.get_user_by_id(justificacion["usuario_id"])
+    tutor = db.get_user_by_id(justificacion["aprobado_por"])
+    if not empleado or not tutor:
+        raise ValueError("Datos del empleado o tutor incompletos.")
+    hash_legal = hashlib.sha256(
+        _canonico_permiso(justificacion).encode("utf-8")
+    ).hexdigest()
+    db.actualizar_hash_justificacion(solicitud_id, hash_legal)
 
     carpeta = Path("reportes")
     carpeta.mkdir(parents=True, exist_ok=True)

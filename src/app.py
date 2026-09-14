@@ -7,12 +7,14 @@ El menú se adapta al rol del usuario conectado.
 
 from __future__ import annotations
 
+import os
+import sys
 from typing import Optional
 
 import auth
 import reports
 from clock_engine import ClockEngine
-from database import Database
+from database import Database, SinEmpresa
 
 
 def list_users_menu(db: Database) -> None:
@@ -162,12 +164,73 @@ def prompt_first_admin(db: Database) -> None:
     print("Administrador creado.")
 
 
+def elegir_empresa(db: Database) -> None:
+    """Deja la sesión de consola trabajando sobre una empresa concreta.
+
+    Con un solo cliente alojado no hay nada que preguntar. Con varios, elegir
+    mal significa administrar el personal equivocado, así que se pregunta.
+    ``EMPRESA_ACTIVA`` en el ``.env`` responde por adelantado, que es lo que
+    necesita un kiosco instalado en la sede de un cliente.
+    """
+    preferida = os.getenv("EMPRESA_ACTIVA", "").strip()
+    if preferida:
+        empresa = db.usar_empresa(preferida)
+        print(f"Empresa: {empresa['razon_social']}")
+        return
+    alojadas = db.listar_empresas(incluir_inactivas=True)
+    if len(alojadas) <= 1:
+        return
+    print("\n=== Empresas alojadas ===")
+    for indice, empresa in enumerate(alojadas, start=1):
+        estado = "" if empresa["activa"] else "  (suspendida)"
+        print(f"  {indice}. {empresa['razon_social']} [{empresa['slug']}]{estado}")
+    while True:
+        elegida = input("Empresa (número o nombre corto): ").strip()
+        if elegida.isdigit() and 1 <= int(elegida) <= len(alojadas):
+            db.empresa_id = alojadas[int(elegida) - 1]["id"]
+            return
+        try:
+            db.usar_empresa(elegida)
+            return
+        except SinEmpresa:
+            print("No existe esa empresa.")
+
+
+def alta_de_empresa(db: Database) -> None:
+    """Aloja un cliente nuevo y le crea su primer administrador.
+
+    Dar de alta una empresa es un acto de instalación, no una pantalla del
+    producto: no existe ninguna sesión que pueda ver dos clientes a la vez, y
+    ese es justamente el aislamiento que se ofrece.
+    """
+    print("\n=== Alojar una empresa nueva ===")
+    slug = input("Nombre corto (sin espacios, p. ej. 'acme'): ").strip().lower()
+    razon = input("Razón social: ").strip()
+    ruc = input("RUC (opcional): ").strip()
+    if not slug or not razon:
+        print("El nombre corto y la razón social son obligatorios.")
+        return
+    if db.get_empresa_por_slug(slug):
+        print(f"Ya hay una empresa con el nombre corto '{slug}'.")
+        return
+    empresa = db.crear_empresa(slug, razon, ruc)
+    db.empresa_id = empresa["id"]
+    db.initialize()
+    db.empresa_id = empresa["id"]
+    print(f"Empresa '{razon}' alojada. Ahora su primer administrador:")
+    prompt_first_admin(db)
+
+
 def main() -> None:
     """Punto de entrada: inicializa la base de datos y lanza el menú."""
     db = Database()
     db.initialize()
 
     print("=== Sistema de Marcación ===")
+    if len(sys.argv) > 1 and sys.argv[1] == "alta-empresa":
+        alta_de_empresa(db)
+        return
+    elegir_empresa(db)
     if not db.list_users(incluir_bajas=True):
         prompt_first_admin(db)
 

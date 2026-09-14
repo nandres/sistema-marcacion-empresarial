@@ -35,16 +35,22 @@ def _desde_iso(momento_iso: str) -> datetime:
     return datetime.fromisoformat(momento_iso)
 
 
-def _nueva_db() -> Optional[database.Database]:
+def _nueva_db(empresa_id: Optional[int] = None) -> Optional[database.Database]:
     """Abre una conexión al servidor central, o None si no responde.
 
     No aplica migraciones: el DDL bloquea a las conexiones de lectura largas
     y este hilo corre cada 15 segundos. El esquema se aplica una sola vez en
     ``migrate.py``, antes de levantar la aplicación.
+
+    Un kiosco atiende a una empresa. Sin ``empresa_id`` se adopta la de la
+    instalación, que es la única que hay cuando el kiosco no forma parte de
+    un alojamiento compartido.
     """
     try:
-        db = database.Database()
+        db = database.Database(empresa_id=empresa_id)
         db.connect()
+        if db.empresa_id is None:
+            db._adoptar_empresa_base()
         return db
     except Exception:
         return None
@@ -54,6 +60,7 @@ def sincronizar(
     cola: ColaOffline,
     al_aviso: Optional[Callable[[Dict[str, Any]], None]] = None,
     db: Optional[database.Database] = None,
+    empresa_id: Optional[int] = None,
 ) -> Dict[str, int]:
     """Sube la cola pendiente a PostgreSQL; retorna el resumen del lote.
 
@@ -70,7 +77,7 @@ def sincronizar(
         return resumen
     usar_db_externo = db is not None
     if db is None:
-        db = _nueva_db()
+        db = _nueva_db(empresa_id)
         if db is None:
             return resumen
 

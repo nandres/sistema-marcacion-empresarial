@@ -20,6 +20,7 @@ La configuración local (`.obsidian/`) está excluida del control de versiones; 
 | Cómo pide permisos un empleado y qué papeles salen solos | [[Autoservicio de Permisos y Formularios]] |
 | A qué hora entra cada persona, rotación y jornada partida | [[Turnos y Rotación de Horarios]] |
 | **Instalarlo en una empresa** | [[Puesta en Marcha en un Cliente]] |
+| **Alojar varios clientes sin que se vean entre sí** | [[Multiempresa · Aislamiento entre Clientes]] |
 
 ## Notas por dominio
 
@@ -27,7 +28,7 @@ La configuración local (`.obsidian/`) está excluida del control de versiones; 
 [[Motor de Reglas de Horas Extra]] · [[Turnos y Rotación de Horarios]] · [[Reglamento de Asistencia y Disciplina]] · [[Catálogo de Permisos y Licencias]] · [[Módulo de Justificaciones y Aguinaldos]] · [[Autoservicio de Permisos y Formularios]]
 
 **Acceso y seguridad**
-[[Control de Roles y Permisos RBAC]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Módulo de Gestión de Usuarios]]
+[[Control de Roles y Permisos RBAC]] · [[Seguridad y Cifrado de Comunicaciones]] · [[Módulo de Gestión de Usuarios]] · [[Multiempresa · Aislamiento entre Clientes]]
 
 **Interfaces y reportes**
 [[Sistema de Diseño · Planilla]] · [[Diseño de Interfaz Premium UI-UX]] · [[Manual de Diseño UI-UX Simplificado y Reportes PDF]] · [[Panel de Analítica Visual y UX Premium]] · [[Panel de Reportes y Auditoría]]

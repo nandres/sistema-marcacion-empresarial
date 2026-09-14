@@ -41,6 +41,38 @@ ROLES_INICIALES: Tuple[str, ...] = ("Administrador", "Recursos Humanos", "Emplea
 LOCK_TIMEOUT_DDL: str = "10s"
 """Espera máxima de las migraciones por un lock de tabla antes de abortar."""
 
+TABLAS_DE_EMPRESA: Tuple[str, ...] = (
+    "users",
+    "marcajes",
+    "justificaciones",
+    "alertas",
+    "fotos",
+    "solicitudes_correccion",
+    "condiciones_dia",
+    "solicitudes_permiso",
+    "turnos",
+    "turno_tramos",
+    "asignaciones_turno",
+    "logs_auditoria",
+)
+"""Tablas cuyas filas pertenecen a un cliente.
+
+Agregar una tabla al esquema obliga a decidir si entra acá.
+``tests/test_multiempresa.py`` falla si queda una tabla de datos sin
+``empresa_id`` o una consulta que las toque sin acotar."""
+
+SLUG_EMPRESA_BASE: str = "principal"
+RAZON_SOCIAL_BASE: str = "Empresa"
+
+
+class SinEmpresa(RuntimeError):
+    """Se intentó leer o escribir datos de cliente sin una empresa activa.
+
+    Es deliberadamente un error y no un recorrido de toda la tabla: una
+    consulta sin arrendatario es un defecto, y devolver los datos de todos
+    los clientes es exactamente la falla que este error existe para impedir.
+    """
+
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -106,9 +138,29 @@ def load_config() -> Dict[str, str]:
 class Database:
     """Interfaz de acceso a datos sobre PostgreSQL (psycopg2)."""
 
-    def __init__(self, config: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self,
+        config: Optional[Dict[str, str]] = None,
+        empresa_id: Optional[int] = None,
+    ) -> None:
         self.config: Dict[str, str] = config or load_config()
         self.connection: Optional[psycopg2.connection] = None
+        self.empresa_id: Optional[int] = empresa_id
+
+    @property
+    def empresa(self) -> int:
+        """Empresa activa de la conexión; exigirla es lo que evita la fuga.
+
+        Las consultas de datos de cliente la interpolan siempre. Si nadie la
+        fijó, la alternativa sería devolver las filas de todos los clientes,
+        así que el acceso falla en lugar de ampliarse.
+        """
+        if self.empresa_id is None:
+            raise SinEmpresa(
+                "La conexión no tiene empresa activa. Fijala con "
+                "`db.empresa_id` antes de leer o escribir datos de cliente."
+            )
+        return self.empresa_id
 
     def connect(self) -> psycopg2.connection:
         """Abre y retorna la conexión con la base configurada."""
@@ -176,6 +228,21 @@ class Database:
         # lectores que llegan detrás. Si otra sesión mantiene una transacción
         # abierta, conviene abortar la migración antes que encolar la base.
         cursor.execute(f"SET lock_timeout = '{LOCK_TIMEOUT_DDL}'")
+        # La empresa es el arrendatario: cada fila de datos de cliente le
+        # pertenece a una y solo a una. Los roles, en cambio, son el mismo
+        # catálogo para todas y no llevan `empresa_id`.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS empresas (
+                id SERIAL PRIMARY KEY,
+                slug VARCHAR(40) UNIQUE NOT NULL,
+                razon_social VARCHAR(200) NOT NULL,
+                ruc VARCHAR(20) NOT NULL DEFAULT '',
+                activa BOOLEAN NOT NULL DEFAULT TRUE,
+                creada_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS roles (
@@ -561,10 +628,110 @@ class Database:
                 "INSERT INTO roles (nombre) VALUES (%s) ON CONFLICT (nombre) DO NOTHING",
                 (nombre,),
             )
-        self._sembrar_turno_predeterminado(cursor)
+        empresa_base = self._aplicar_arrendamiento(cursor)
+        self._sembrar_turno_predeterminado(cursor, empresa_base)
         self.connection.commit()
+        self._adoptar_empresa_base()
 
-    def _sembrar_turno_predeterminado(self, cursor: Any) -> None:
+    def _aplicar_arrendamiento(self, cursor: Any) -> int:
+        """Ata cada tabla de datos de cliente a una empresa.
+
+        Se aplica al final y no tabla por tabla a propósito: separar el
+        arrendamiento del resto del esquema deja la historia completa en un
+        solo lugar, que es donde hay que mirar cuando se agrega una tabla
+        nueva y hay que decidir si lleva ``empresa_id``.
+
+        Returns:
+            El identificador de la empresa que quedó con los datos previos a
+            la migración, que es también la que usa una instalación de un
+            solo cliente.
+        """
+        cursor.execute("SELECT id FROM empresas ORDER BY id LIMIT 1")
+        fila = cursor.fetchone()
+        if fila:
+            empresa_base = fila[0]
+        else:
+            cursor.execute(
+                """
+                INSERT INTO empresas (slug, razon_social)
+                VALUES (%s, %s) RETURNING id
+                """,
+                (SLUG_EMPRESA_BASE, os.getenv("EMPRESA_NOMBRE", RAZON_SOCIAL_BASE)),
+            )
+            empresa_base = cursor.fetchone()[0]
+
+        # `ADD COLUMN IF NOT EXISTS` toma un lock exclusivo aunque no tenga
+        # nada que agregar, y este DDL corre en cada arranque. Se pregunta
+        # primero al catálogo: sobre una base ya migrada no se toca una tabla.
+        cursor.execute(
+            """
+            SELECT table_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND column_name = 'empresa_id'
+            """
+        )
+        ya_migradas = {fila[0] for fila in cursor.fetchall()}
+        pendientes = [t for t in TABLAS_DE_EMPRESA if t not in ya_migradas]
+        if not pendientes:
+            return empresa_base
+
+        for tabla in pendientes:
+            cursor.execute(
+                f"ALTER TABLE {tabla} ADD COLUMN IF NOT EXISTS empresa_id INTEGER"
+            )
+            # Lo que ya estaba en la base es de la empresa que venía usando la
+            # instalación: una migración no puede dejar datos sin dueño.
+            cursor.execute(
+                f"UPDATE {tabla} SET empresa_id = %s WHERE empresa_id IS NULL",
+                (empresa_base,),
+            )
+            cursor.execute(f"ALTER TABLE {tabla} ALTER COLUMN empresa_id SET NOT NULL")
+            cursor.execute(
+                f"""
+                DO $$ BEGIN
+                    ALTER TABLE {tabla} ADD CONSTRAINT {tabla}_empresa_fk
+                        FOREIGN KEY (empresa_id) REFERENCES empresas (id)
+                        ON DELETE CASCADE;
+                EXCEPTION WHEN duplicate_object THEN NULL;
+                END $$
+                """
+            )
+            cursor.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{tabla}_empresa "
+                f"ON {tabla} (empresa_id)"
+            )
+
+        # Lo que era único en toda la base pasa a serlo dentro de la empresa:
+        # dos clientes distintos pueden tener un turno "Mañana", y la cédula
+        # de alguien que trabaja en los dos no puede bloquear el alta.
+        cursor.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key")
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_empresa_username "
+            "ON users (empresa_id, lower(username))"
+        )
+        cursor.execute("ALTER TABLE turnos DROP CONSTRAINT IF EXISTS turnos_nombre_key")
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_turnos_empresa_nombre "
+            "ON turnos (empresa_id, lower(nombre))"
+        )
+        cursor.execute("DROP INDEX IF EXISTS idx_turno_predeterminado")
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_turno_predeterminado "
+            "ON turnos (empresa_id) WHERE predeterminado"
+        )
+        cursor.execute(
+            "ALTER TABLE condiciones_dia DROP CONSTRAINT IF EXISTS condiciones_dia_pkey"
+        )
+        cursor.execute(
+            """
+            DO $$ BEGIN
+                ALTER TABLE condiciones_dia ADD PRIMARY KEY (empresa_id, fecha);
+            EXCEPTION WHEN invalid_table_definition THEN NULL;
+            END $$
+            """
+        )
+        return empresa_base
+
+    def _sembrar_turno_predeterminado(self, cursor: Any, empresa_id: int) -> None:
         """Deja a la empresa con un turno usable desde la primera marcación.
 
         Una instalación que todavía no definió turnos tiene que seguir
@@ -575,27 +742,159 @@ class Database:
         """
         # El cursor del DDL es de tuplas, no de diccionarios: acá se indexa
         # por posición y no por nombre de columna.
-        cursor.execute("SELECT COUNT(*) FROM turnos")
+        cursor.execute("SELECT COUNT(*) FROM turnos WHERE empresa_id = %s", (empresa_id,))
         if cursor.fetchone()[0]:
             return
         respaldo = turnos_dominio.de_respaldo()
         tramo = respaldo.tramos[0]
         cursor.execute(
             """
-            INSERT INTO turnos (nombre, dias, predeterminado)
-            VALUES (%s, %s, TRUE)
+            INSERT INTO turnos (nombre, dias, predeterminado, empresa_id)
+            VALUES (%s, %s, TRUE, %s)
             RETURNING id
             """,
-            (respaldo.nombre, respaldo.dias),
+            (respaldo.nombre, respaldo.dias, empresa_id),
         )
         turno_id = cursor.fetchone()[0]
         cursor.execute(
             """
-            INSERT INTO turno_tramos (turno_id, orden, hora_entrada, hora_salida)
-            VALUES (%s, 1, %s, %s)
+            INSERT INTO turno_tramos
+                (turno_id, orden, hora_entrada, hora_salida, empresa_id)
+            VALUES (%s, 1, %s, %s, %s)
             """,
-            (turno_id, tramo.entrada, tramo.salida),
+            (turno_id, tramo.entrada, tramo.salida, empresa_id),
         )
+
+    # --- Empresas ----------------------------------------------------------
+
+    def usar_empresa(self, referencia: Any) -> Dict[str, Any]:
+        """Ata la conexión a una empresa, por identificador o por slug.
+
+        Es el único punto donde una sesión elige de qué cliente son los datos
+        que va a ver. Todo lo demás lee ese valor.
+        """
+        if isinstance(referencia, int):
+            empresa = self.get_empresa(referencia)
+        else:
+            empresa = self.get_empresa_por_slug(str(referencia))
+        if not empresa:
+            raise SinEmpresa(f"No existe la empresa '{referencia}'.")
+        self.empresa_id = empresa["id"]
+        return empresa
+
+    def get_empresa(self, empresa_id: int) -> Optional[Dict[str, Any]]:
+        """Devuelve una empresa por identificador."""
+        return self._execute(
+            "SELECT * FROM empresas WHERE id = %s", (empresa_id,), fetch="one"
+        )
+
+    def get_empresa_por_slug(self, slug: str) -> Optional[Dict[str, Any]]:
+        """Devuelve una empresa por su nombre corto."""
+        return self._execute(
+            "SELECT * FROM empresas WHERE slug = %s", (slug.strip().lower(),),
+            fetch="one",
+        )
+
+    def listar_empresas(self, incluir_inactivas: bool = False) -> List[Dict[str, Any]]:
+        """Lista las empresas alojadas en esta instalación, con su dotación."""
+        filtro = "" if incluir_inactivas else "WHERE e.activa"
+        return self._execute(
+            f"""
+            SELECT e.*,
+                   (SELECT COUNT(*) FROM users u
+                     WHERE u.empresa_id = e.id AND u.activo) AS empleados
+            FROM empresas e
+            {filtro}
+            ORDER BY e.razon_social
+            """,
+            fetch="all",
+        )
+
+    def crear_empresa(
+        self, slug: str, razon_social: str, ruc: str = ""
+    ) -> Dict[str, Any]:
+        """Da de alta un cliente nuevo y le siembra su jornada inicial.
+
+        El turno se siembra acá y no en la migración: el esquema se aplica
+        una vez y las empresas se alojan cuando se venden, así que la segunda
+        nacería sin ningún horario contra el cual medir una tardanza.
+        """
+        cursor = self._execute(
+            """
+            INSERT INTO empresas (slug, razon_social, ruc)
+            VALUES (%s, %s, %s)
+            RETURNING *
+            """,
+            (slug.strip().lower(), razon_social.strip(), ruc.strip()),
+        )
+        empresa = cursor.fetchone()
+        respaldo = turnos_dominio.de_respaldo()
+        tramo = respaldo.tramos[0]
+        cursor = self._execute(
+            """
+            INSERT INTO turnos (nombre, dias, predeterminado, empresa_id)
+            VALUES (%s, %s, TRUE, %s)
+            RETURNING id
+            """,
+            (respaldo.nombre, respaldo.dias, empresa["id"]),
+        )
+        self._execute(
+            """
+            INSERT INTO turno_tramos
+                (turno_id, orden, hora_entrada, hora_salida, empresa_id)
+            VALUES (%s, 1, %s, %s, %s)
+            """,
+            (cursor.fetchone()["id"], tramo.entrada, tramo.salida, empresa["id"]),
+        )
+        self.connection.commit()
+        return empresa
+
+    def cambiar_estado_empresa(self, empresa_id: int, activa: bool) -> bool:
+        """Suspende o reactiva una empresa sin borrar un solo dato suyo."""
+        cursor = self._execute(
+            "UPDATE empresas SET activa = %s WHERE id = %s", (activa, empresa_id)
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def buscar_credenciales(self, username: str) -> List[Dict[str, Any]]:
+        """Candidatos de login para una cédula, en todas las empresas.
+
+        Es la única consulta que cruza empresas a propósito, y no puede ser de
+        otra forma: la pantalla de acceso todavía no sabe de qué cliente es
+        quien escribe. Devuelve los candidatos sin decidir nada; quién entra
+        lo resuelve ``auth.authenticate`` comparando la contraseña, de modo
+        que nadie pueda averiguar en qué empresas existe una cédula sin tener
+        además su clave.
+        """
+        return self._execute(
+            """
+            SELECT u.*, r.nombre AS role_name, e.slug AS empresa_slug,
+                   e.razon_social AS empresa_nombre, e.activa AS empresa_activa
+            FROM users u
+            JOIN roles r ON r.id = u.role_id
+            JOIN empresas e ON e.id = u.empresa_id
+            WHERE lower(u.username) = lower(%s)
+            ORDER BY u.id
+            """,
+            (username,),
+            fetch="all",
+        )
+
+    def _adoptar_empresa_base(self) -> None:
+        """Deja la conexión apuntando a la empresa que vino con la instalación.
+
+        Las herramientas que aplican el esquema —migraciones, siembra de
+        pruebas, la consola de administración— trabajan sobre un solo cliente
+        y no tendrían de dónde sacar cuál. El camino de las peticiones web no
+        pasa por acá: ahí la empresa sale de la sesión.
+        """
+        fila = self._execute(
+            "SELECT id FROM empresas WHERE slug = %s", (SLUG_EMPRESA_BASE,),
+            fetch="one",
+        )
+        if fila:
+            self.empresa_id = fila["id"]
 
     def esquema_listo(self) -> bool:
         """Indica si las tablas base ya existen sobre la conexión activa.
@@ -609,14 +908,15 @@ class Database:
             SELECT COUNT(*) AS presentes
             FROM information_schema.tables
             WHERE table_schema = 'public'
-              AND table_name IN ('roles', 'users', 'marcajes', 'logs_auditoria',
+              AND table_name IN ('empresas', 'roles', 'users', 'marcajes',
+                                 'logs_auditoria',
                                  'justificaciones', 'solicitudes_correccion', 'alertas',
                                  'condiciones_dia', 'solicitudes_permiso',
                                  'turnos', 'turno_tramos', 'asignaciones_turno')
             """,
             fetch="one",
         )
-        return int(fila["presentes"]) == 12
+        return int(fila["presentes"]) == 13
 
     def _execute(
         self, query: str, params: Optional[Tuple[Any, ...]] = None, fetch: str = "none"
@@ -661,8 +961,9 @@ class Database:
         cursor = self._execute(
             """
             INSERT INTO logs_auditoria
-                (usuario_id, accion, tabla, registro_id, valores_anteriores, valores_nuevos)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (usuario_id, accion, tabla, registro_id, valores_anteriores,
+                 valores_nuevos, empresa_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -672,6 +973,7 @@ class Database:
                 registro_id,
                 Json(anterior) if anterior is not None else None,
                 Json(nuevos) if nuevos is not None else None,
+                self.empresa,
             ),
         )
         self.connection.commit()
@@ -690,10 +992,11 @@ class Database:
                    u.username, u.full_name
             FROM logs_auditoria a
             JOIN users u ON u.id = a.usuario_id
+            WHERE a.empresa_id = %s
             ORDER BY a.creado_en DESC
             LIMIT %s
             """,
-            (limite,),
+            (self.empresa, limite),
             fetch="all",
         )
 
@@ -702,8 +1005,9 @@ class Database:
     ) -> None:
         """Persiste el hash SHA-256 del permiso para su validación legal."""
         self._execute(
-            "UPDATE justificaciones SET hash_legal = %s WHERE id = %s",
-            (hash_legal, justificacion_id),
+            "UPDATE justificaciones SET hash_legal = %s "
+            "WHERE empresa_id = %s AND id = %s",
+            (hash_legal, self.empresa, justificacion_id),
         )
         self.connection.commit()
 
@@ -728,12 +1032,12 @@ class Database:
             """
             INSERT INTO users (username, password_hash, full_name, role_id,
                                salario_mensual, tipo_vinculo, fecha_ingreso,
-                               turno_id)
-            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_DATE), %s)
+                               turno_id, empresa_id)
+            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_DATE), %s, %s)
             RETURNING id
             """,
             (username, password_hash, full_name, role_id, salario_mensual,
-             tipo_vinculo, fecha_ingreso, turno_id),
+             tipo_vinculo, fecha_ingreso, turno_id, self.empresa),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
@@ -744,9 +1048,9 @@ class Database:
             """
             SELECT u.*, r.nombre AS role_name
             FROM users u JOIN roles r ON r.id = u.role_id
-            WHERE u.username = %s
+            WHERE u.empresa_id = %s AND lower(u.username) = lower(%s)
             """,
-            (username,),
+            (self.empresa, username),
             fetch="one",
         )
 
@@ -756,9 +1060,9 @@ class Database:
             """
             SELECT u.*, r.nombre AS role_name
             FROM users u JOIN roles r ON r.id = u.role_id
-            WHERE u.id = %s
+            WHERE u.empresa_id = %s AND u.id = %s
             """,
-            (user_id,),
+            (self.empresa, user_id),
             fetch="one",
         )
 
@@ -768,7 +1072,7 @@ class Database:
         Por defecto devuelve solo la plantilla activa: una baja conserva sus
         marcajes para el archivo laboral pero no forma parte de la nómina.
         """
-        filtro = "" if incluir_bajas else "WHERE u.activo"
+        filtro = "" if incluir_bajas else "AND u.activo"
         return self._execute(
             f"""
             SELECT u.id, u.username, u.full_name, u.salario_mensual,
@@ -778,9 +1082,10 @@ class Database:
             FROM users u
             JOIN roles r ON r.id = u.role_id
             LEFT JOIN turnos t ON t.id = u.turno_id
-            {filtro}
+            WHERE u.empresa_id = %s {filtro}
             ORDER BY u.id
             """,
+            (self.empresa,),
             fetch="all",
         )
 
@@ -792,9 +1097,9 @@ class Database:
             """
             UPDATE users
             SET activo = %s, fecha_baja = %s
-            WHERE id = %s
+            WHERE empresa_id = %s AND id = %s
             """,
-            (activo, fecha_baja if not activo else None, user_id),
+            (activo, fecha_baja if not activo else None, self.empresa, user_id),
         )
         self.connection.commit()
         return cursor.rowcount > 0
@@ -844,21 +1149,29 @@ class Database:
             params.append(turno_id)
         if not updates:
             return False
-        params.append(user_id)
-        self._execute(f"UPDATE users SET {', '.join(updates)} WHERE id = %s", tuple(params))
+        params.extend([self.empresa, user_id])
+        self._execute(
+            f"UPDATE users SET {', '.join(updates)} "
+            f"WHERE empresa_id = %s AND id = %s",
+            tuple(params),
+        )
         self.connection.commit()
         return True
 
     def delete_user(self, user_id: int) -> None:
         """Elimina un usuario; sus marcajes se borran en cascada."""
-        self._execute("DELETE FROM users WHERE id = %s", (user_id,))
+        self._execute(
+            "DELETE FROM users WHERE empresa_id = %s AND id = %s",
+            (self.empresa, user_id),
+        )
         self.connection.commit()
 
     def asignar_biometrico_id(self, user_id: int, biometrico_id: int) -> None:
         """Asocia el identificador biométrico del reloj al usuario."""
         self._execute(
-            "UPDATE users SET biometrico_id = %s WHERE id = %s",
-            (biometrico_id, user_id),
+            "UPDATE users SET biometrico_id = %s "
+            "WHERE empresa_id = %s AND id = %s",
+            (biometrico_id, self.empresa, user_id),
         )
         self.connection.commit()
 
@@ -879,7 +1192,7 @@ class Database:
         ``SELECT`` por turno para pintar una tabla de seis filas es la forma
         más fácil de convertir una pantalla en una tormenta de consultas.
         """
-        filtro = "" if incluir_inactivos else "WHERE t.activo"
+        filtro = "" if incluir_inactivos else "AND t.activo"
         turnos = self._execute(
             f"""
             SELECT t.*,
@@ -890,9 +1203,10 @@ class Database:
                        AND (a.hasta IS NULL OR a.hasta >= CURRENT_DATE)
                        AND a.desde <= CURRENT_DATE) AS asignados
             FROM turnos t
-            {filtro}
+            WHERE t.empresa_id = %s {filtro}
             ORDER BY t.predeterminado DESC, t.nombre
             """,
+            (self.empresa,),
             fetch="all",
         )
         if not turnos:
@@ -901,10 +1215,10 @@ class Database:
             """
             SELECT turno_id, orden, hora_entrada, hora_salida
             FROM turno_tramos
-            WHERE turno_id = ANY(%s)
+            WHERE empresa_id = %s AND turno_id = ANY(%s)
             ORDER BY turno_id, orden
             """,
-            ([t["id"] for t in turnos],),
+            (self.empresa, [t["id"] for t in turnos]),
             fetch="all",
         )
         por_turno: Dict[int, List[Dict[str, Any]]] = {}
@@ -917,16 +1231,19 @@ class Database:
     def get_turno(self, turno_id: int) -> Optional[Dict[str, Any]]:
         """Retorna un turno con sus tramos ordenados, o ``None``."""
         turno = self._execute(
-            "SELECT * FROM turnos WHERE id = %s", (turno_id,), fetch="one"
+            "SELECT * FROM turnos WHERE empresa_id = %s AND id = %s",
+            (self.empresa, turno_id),
+            fetch="one",
         )
         if not turno:
             return None
         turno["tramos"] = self._execute(
             """
             SELECT orden, hora_entrada, hora_salida
-            FROM turno_tramos WHERE turno_id = %s ORDER BY orden
+            FROM turno_tramos
+            WHERE empresa_id = %s AND turno_id = %s ORDER BY orden
             """,
-            (turno_id,),
+            (self.empresa, turno_id),
             fetch="all",
         )
         return turno
@@ -934,8 +1251,9 @@ class Database:
     def get_turno_por_nombre(self, nombre: str) -> Optional[Dict[str, Any]]:
         """Busca un turno por su nombre, que es único."""
         fila = self._execute(
-            "SELECT id FROM turnos WHERE lower(nombre) = lower(%s)",
-            (nombre,),
+            "SELECT id FROM turnos "
+            "WHERE empresa_id = %s AND lower(nombre) = lower(%s)",
+            (self.empresa, nombre),
             fetch="one",
         )
         return self.get_turno(fila["id"]) if fila else None
@@ -951,11 +1269,11 @@ class Database:
         """Inserta un turno con sus tramos en una sola transacción."""
         cursor = self._execute(
             """
-            INSERT INTO turnos (nombre, sucursal, dias, tolerancia_min)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO turnos (nombre, sucursal, dias, tolerancia_min, empresa_id)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (nombre, sucursal, dias, tolerancia_min),
+            (nombre, sucursal, dias, tolerancia_min, self.empresa),
         )
         turno_id = cursor.fetchone()["id"]
         self._reemplazar_tramos(turno_id, tramos)
@@ -990,9 +1308,11 @@ class Database:
             updates.append("tolerancia_min = %s")
             params.append(tolerancia_min)
         if updates:
-            params.append(turno_id)
+            params.extend([self.empresa, turno_id])
             self._execute(
-                f"UPDATE turnos SET {', '.join(updates)} WHERE id = %s", tuple(params)
+                f"UPDATE turnos SET {', '.join(updates)} "
+                f"WHERE empresa_id = %s AND id = %s",
+                tuple(params),
             )
         if tramos is not None:
             self._reemplazar_tramos(turno_id, tramos)
@@ -1003,20 +1323,25 @@ class Database:
 
     def _reemplazar_tramos(self, turno_id: int, tramos: List[Tuple[Any, Any]]) -> None:
         """Deja los tramos del turno exactamente como los describe la lista."""
-        self._execute("DELETE FROM turno_tramos WHERE turno_id = %s", (turno_id,))
+        self._execute(
+            "DELETE FROM turno_tramos WHERE empresa_id = %s AND turno_id = %s",
+            (self.empresa, turno_id),
+        )
         for orden, (entrada, salida) in enumerate(tramos, start=1):
             self._execute(
                 """
-                INSERT INTO turno_tramos (turno_id, orden, hora_entrada, hora_salida)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO turno_tramos
+                    (turno_id, orden, hora_entrada, hora_salida, empresa_id)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
-                (turno_id, orden, entrada, salida),
+                (turno_id, orden, entrada, salida, self.empresa),
             )
 
     def cambiar_estado_turno(self, turno_id: int, activo: bool) -> bool:
         """Activa o retira de circulación un turno sin borrar su historia."""
         cursor = self._execute(
-            "UPDATE turnos SET activo = %s WHERE id = %s", (activo, turno_id)
+            "UPDATE turnos SET activo = %s WHERE empresa_id = %s AND id = %s",
+            (activo, self.empresa, turno_id),
         )
         self.connection.commit()
         return cursor.rowcount > 0
@@ -1028,19 +1353,24 @@ class Database:
         que bajar el anterior antes de levantar el nuevo.
         """
         self._execute(
-            "UPDATE turnos SET predeterminado = FALSE WHERE predeterminado "
-            "AND id <> %s",
-            (turno_id,),
+            "UPDATE turnos SET predeterminado = FALSE "
+            "WHERE empresa_id = %s AND predeterminado AND id <> %s",
+            (self.empresa, turno_id),
         )
         cursor = self._execute(
-            "UPDATE turnos SET predeterminado = TRUE WHERE id = %s", (turno_id,)
+            "UPDATE turnos SET predeterminado = TRUE "
+            "WHERE empresa_id = %s AND id = %s",
+            (self.empresa, turno_id),
         )
         self.connection.commit()
         return cursor.rowcount > 0
 
     def eliminar_turno(self, turno_id: int) -> None:
         """Elimina un turno; sus tramos y asignaciones caen en cascada."""
-        self._execute("DELETE FROM turnos WHERE id = %s", (turno_id,))
+        self._execute(
+            "DELETE FROM turnos WHERE empresa_id = %s AND id = %s",
+            (self.empresa, turno_id),
+        )
         self.connection.commit()
 
     def contar_personal_en_turno(self, turno_id: int) -> int:
@@ -1054,9 +1384,10 @@ class Database:
                   AND a.turno_id = %s
                   AND a.desde <= CURRENT_DATE
                   AND (a.hasta IS NULL OR a.hasta >= CURRENT_DATE)
-            WHERE u.activo AND (u.turno_id = %s OR a.id IS NOT NULL)
+            WHERE u.empresa_id = %s
+              AND u.activo AND (u.turno_id = %s OR a.id IS NOT NULL)
             """,
-            (turno_id, turno_id),
+            (turno_id, self.empresa, turno_id),
             fetch="one",
         )
         return int(fila["total"])
@@ -1064,7 +1395,8 @@ class Database:
     def asignar_turno_base(self, user_id: int, turno_id: Optional[int]) -> bool:
         """Fija el turno de contrato del legajo (``None`` lo devuelve al predeterminado)."""
         cursor = self._execute(
-            "UPDATE users SET turno_id = %s WHERE id = %s", (turno_id, user_id)
+            "UPDATE users SET turno_id = %s WHERE empresa_id = %s AND id = %s",
+            (turno_id, self.empresa, user_id),
         )
         self.connection.commit()
         return cursor.rowcount > 0
@@ -1082,11 +1414,13 @@ class Database:
         cursor = self._execute(
             """
             INSERT INTO asignaciones_turno
-                (usuario_id, turno_id, desde, hasta, motivo, asignado_por)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (usuario_id, turno_id, desde, hasta, motivo, asignado_por,
+                 empresa_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (usuario_id, turno_id, desde, hasta, motivo, asignado_por),
+            (usuario_id, turno_id, desde, hasta, motivo, asignado_por,
+             self.empresa),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
@@ -1095,14 +1429,14 @@ class Database:
         self, usuario_id: Optional[int] = None, solo_vigentes: bool = False
     ) -> List[Dict[str, Any]]:
         """Lista rotaciones con el nombre del turno y del empleado."""
-        condiciones: List[str] = []
-        params: List[Any] = []
+        condiciones: List[str] = ["a.empresa_id = %s"]
+        params: List[Any] = [self.empresa]
         if usuario_id is not None:
             condiciones.append("a.usuario_id = %s")
             params.append(usuario_id)
         if solo_vigentes:
             condiciones.append("(a.hasta IS NULL OR a.hasta >= CURRENT_DATE)")
-        filtro = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
+        filtro = f"WHERE {' AND '.join(condiciones)}"
         return self._execute(
             f"""
             SELECT a.*, t.nombre AS turno_nombre, u.full_name
@@ -1119,7 +1453,8 @@ class Database:
     def eliminar_asignacion_turno(self, asignacion_id: int) -> bool:
         """Revoca una rotación; el empleado vuelve a su turno de contrato."""
         cursor = self._execute(
-            "DELETE FROM asignaciones_turno WHERE id = %s", (asignacion_id,)
+            "DELETE FROM asignaciones_turno WHERE empresa_id = %s AND id = %s",
+            (self.empresa, asignacion_id),
         )
         self.connection.commit()
         return cursor.rowcount > 0
@@ -1138,21 +1473,24 @@ class Database:
             FROM (
                 (SELECT turno_id, 'asignacion' AS origen, 1 AS prioridad
                    FROM asignaciones_turno
-                  WHERE usuario_id = %s AND desde <= %s
+                  WHERE empresa_id = %s AND usuario_id = %s AND desde <= %s
                     AND (hasta IS NULL OR hasta >= %s)
                   ORDER BY desde DESC, id DESC
                   LIMIT 1)
                 UNION ALL
                 (SELECT turno_id, 'legajo', 2
-                   FROM users WHERE id = %s AND turno_id IS NOT NULL)
+                   FROM users
+                  WHERE empresa_id = %s AND id = %s AND turno_id IS NOT NULL)
                 UNION ALL
                 (SELECT id, 'predeterminado', 3
-                   FROM turnos WHERE predeterminado AND activo)
+                   FROM turnos
+                  WHERE empresa_id = %s AND predeterminado AND activo)
             ) elegido
             ORDER BY elegido.prioridad
             LIMIT 1
             """,
-            (usuario_id, dia, dia, usuario_id),
+            (self.empresa, usuario_id, dia, dia,
+             self.empresa, usuario_id, self.empresa),
             fetch="one",
         )
         if not fila:
@@ -1188,9 +1526,12 @@ class Database:
             ) vigente ON TRUE
             LEFT JOIN turnos ta ON ta.id = vigente.turno_id
             LEFT JOIN turnos tu ON tu.id = u.turno_id
-            LEFT JOIN turnos td ON td.predeterminado AND td.activo
+            LEFT JOIN turnos td
+                   ON td.empresa_id = u.empresa_id
+                  AND td.predeterminado AND td.activo
+            WHERE u.empresa_id = %s
             """,
-            (dia, dia),
+            (dia, dia, self.empresa),
             fetch="all",
         )
         return {fila["usuario_id"]: fila for fila in filas}
@@ -1206,10 +1547,11 @@ class Database:
         return self._execute(
             """
             SELECT * FROM marcajes
-            WHERE user_id = %s AND hora_entrada >= %s AND NOT abandonado
+            WHERE empresa_id = %s AND user_id = %s
+              AND hora_entrada >= %s AND NOT abandonado
             ORDER BY hora_entrada
             """,
-            (user_id, desde),
+            (self.empresa, user_id, desde),
             fetch="all",
         )
 
@@ -1242,26 +1584,28 @@ class Database:
                 INSERT INTO marcajes (user_id, hora_entrada, es_tardanza,
                                       tipo_incidencia, tolerancia_aplicada,
                                       condicion_climatica, verificacion_facial,
-                                      sync_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                      sync_id, empresa_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (sync_id) WHERE sync_id IS NOT NULL DO NOTHING
                 RETURNING id
                 """,
                 (user_id, hora_entrada, es_tardanza, tipo_incidencia,
                  tolerancia_aplicada, condicion_climatica, verificacion_facial,
-                 sync_id),
+                 sync_id, self.empresa),
             )
         else:
             cursor = self._execute(
                 """
                 INSERT INTO marcajes (user_id, hora_entrada, es_tardanza,
                                       tipo_incidencia, tolerancia_aplicada,
-                                      condicion_climatica, verificacion_facial)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                      condicion_climatica, verificacion_facial,
+                                      empresa_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (user_id, hora_entrada, es_tardanza, tipo_incidencia,
-                 tolerancia_aplicada, condicion_climatica, verificacion_facial),
+                 tolerancia_aplicada, condicion_climatica, verificacion_facial,
+                 self.empresa),
             )
         self.connection.commit()
         fila = cursor.fetchone()
@@ -1275,10 +1619,10 @@ class Database:
             """
             SELECT COUNT(*) AS total
             FROM marcajes
-            WHERE user_id = %s AND es_tardanza = TRUE
+            WHERE empresa_id = %s AND user_id = %s AND es_tardanza = TRUE
               AND hora_entrada >= %s AND hora_entrada < %s
             """,
-            (user_id, datetime.combine(primer_dia, time.min),
+            (self.empresa, user_id, datetime.combine(primer_dia, time.min),
              datetime.combine(siguiente_mes, time.min)),
             fetch="one",
         )
@@ -1312,7 +1656,7 @@ class Database:
                 tipo_incidencia = %s,
                 horas_nocturnas = %s,
                 tipo_jornada = %s
-            WHERE id = %s
+            WHERE empresa_id = %s AND id = %s
             """,
             (
                 hora_salida,
@@ -1323,6 +1667,7 @@ class Database:
                 tipo_incidencia,
                 horas_nocturnas,
                 tipo_jornada,
+                self.empresa,
                 entry_id,
             ),
         )
@@ -1345,11 +1690,16 @@ class Database:
         marcación y esperan la corrección de Recursos Humanos.
         """
         filtro = "AND hora_entrada <= %s" if antes_de is not None else ""
-        parametros = (user_id, antes_de) if antes_de is not None else (user_id,)
+        parametros = (
+            (self.empresa, user_id, antes_de)
+            if antes_de is not None
+            else (self.empresa, user_id)
+        )
         return self._execute(
             f"""
             SELECT * FROM marcajes
-            WHERE user_id = %s AND hora_salida IS NULL AND NOT abandonado
+            WHERE empresa_id = %s AND user_id = %s
+              AND hora_salida IS NULL AND NOT abandonado
             {filtro}
             ORDER BY hora_entrada DESC, id DESC
             LIMIT 1
@@ -1374,13 +1724,14 @@ class Database:
             """
             UPDATE marcajes
             SET abandonado = TRUE, tipo_incidencia = %s
-            WHERE user_id = %s
+            WHERE empresa_id = %s
+              AND user_id = %s
               AND hora_salida IS NULL
               AND NOT abandonado
               AND hora_entrada < %s
             RETURNING id, hora_entrada
             """,
-            (incidencia, user_id, limite),
+            (incidencia, self.empresa, user_id, limite),
             fetch="all",
         )
         self.connection.commit()
@@ -1394,11 +1745,11 @@ class Database:
                    u.full_name, u.username
             FROM marcajes m
             JOIN users u ON u.id = m.user_id
-            WHERE m.abandonado AND m.hora_salida IS NULL
+            WHERE m.empresa_id = %s AND m.abandonado AND m.hora_salida IS NULL
             ORDER BY m.hora_entrada DESC
             LIMIT %s
             """,
-            (limite,),
+            (self.empresa, limite),
             fetch="all",
         )
 
@@ -1407,10 +1758,10 @@ class Database:
         return self._execute(
             """
             SELECT * FROM marcajes
-            WHERE user_id = %s AND hora_entrada::date = %s
+            WHERE empresa_id = %s AND user_id = %s AND hora_entrada::date = %s
             ORDER BY hora_entrada
             """,
-            (user_id, date),
+            (self.empresa, user_id, date),
             fetch="all",
         )
 
@@ -1419,10 +1770,10 @@ class Database:
         return self._execute(
             """
             SELECT * FROM marcajes
-            WHERE user_id = %s
+            WHERE empresa_id = %s AND user_id = %s
             ORDER BY hora_entrada DESC
             """,
-            (user_id,),
+            (self.empresa, user_id),
             fetch="all",
         )
 
@@ -1437,10 +1788,11 @@ class Database:
             """
             SELECT m.*, u.username, u.full_name
             FROM marcajes m JOIN users u ON u.id = m.user_id
-            WHERE m.hora_entrada >= %s AND m.hora_entrada < %s
+            WHERE m.empresa_id = %s
+              AND m.hora_entrada >= %s AND m.hora_entrada < %s
             ORDER BY u.username, m.hora_entrada
             """,
-            (inicio, fin),
+            (self.empresa, inicio, fin),
             fetch="all",
         )
 
@@ -1463,8 +1815,8 @@ class Database:
             """
             INSERT INTO justificaciones
                 (usuario_id, tipo_permiso, fecha_inicio, fecha_fin,
-                 aprobado_por, horas_usadas)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                 aprobado_por, horas_usadas, empresa_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -1474,6 +1826,7 @@ class Database:
                 fecha_fin,
                 aprobado_por,
                 horas_usadas,
+                self.empresa,
             ),
         )
         self.connection.commit()
@@ -1486,13 +1839,13 @@ class Database:
         return self._execute(
             """
             SELECT * FROM justificaciones
-            WHERE usuario_id = %s
+            WHERE empresa_id = %s AND usuario_id = %s
               AND aprobado_por IS NOT NULL
               AND %s BETWEEN fecha_inicio AND fecha_fin
             ORDER BY id DESC
             LIMIT 1
             """,
-            (usuario_id, fecha),
+            (self.empresa, usuario_id, fecha),
             fetch="one",
         )
 
@@ -1506,17 +1859,17 @@ class Database:
         sin el filtro traía el historial completo de toda la plantilla para
         descartar el 99 % en memoria.
         """
-        filtro = "WHERE j.usuario_id = %s" if usuario_id is not None else ""
+        filtro = "AND j.usuario_id = %s" if usuario_id is not None else ""
         return self._execute(
             f"""
             SELECT j.*, u.username, u.full_name, a.username AS aprobador
             FROM justificaciones j
             JOIN users u ON u.id = j.usuario_id
             JOIN users a ON a.id = j.aprobado_por
-            {filtro}
+            WHERE j.empresa_id = %s {filtro}
             ORDER BY j.fecha_inicio
             """,
-            (usuario_id,) if usuario_id is not None else None,
+            (self.empresa, usuario_id) if usuario_id is not None else (self.empresa,),
             fetch="all",
         )
 
@@ -1529,16 +1882,18 @@ class Database:
             FROM justificaciones j
             JOIN users u ON u.id = j.usuario_id
             JOIN users a ON a.id = j.aprobado_por
-            WHERE j.id = %s
+            WHERE j.empresa_id = %s AND j.id = %s
             """,
-            (justificacion_id,),
+            (self.empresa, justificacion_id),
             fetch="one",
         )
 
     def contar_justificaciones(self) -> int:
         """Total de justificaciones emitidas, sin traerlas todas."""
         fila = self._execute(
-            "SELECT COUNT(*) AS total FROM justificaciones", fetch="one"
+            "SELECT COUNT(*) AS total FROM justificaciones WHERE empresa_id = %s",
+            (self.empresa,),
+            fetch="one",
         )
         return int(fila["total"])
 
@@ -1553,11 +1908,12 @@ class Database:
         """Persiste una notificación activa para Recursos Humanos."""
         cursor = self._execute(
             """
-            INSERT INTO alertas (tipo, severidad, mensaje, detalle, usuario_id)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO alertas
+                (tipo, severidad, mensaje, detalle, usuario_id, empresa_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id, creado_en
             """,
-            (tipo, severidad, mensaje, detalle, usuario_id),
+            (tipo, severidad, mensaje, detalle, usuario_id, self.empresa),
         )
         self.connection.commit()
         fila = cursor.fetchone()
@@ -1574,12 +1930,13 @@ class Database:
 
     def listar_alertas(self, limite: int = 60, no_leidas: bool = False) -> List[Dict[str, Any]]:
         """Lista las alertas activas, de la más reciente a la más antigua."""
-        consulta = (
-            "SELECT * FROM alertas WHERE leida = FALSE ORDER BY creado_en DESC LIMIT %s"
-            if no_leidas
-            else "SELECT * FROM alertas ORDER BY creado_en DESC LIMIT %s"
+        pendientes = "AND NOT leida" if no_leidas else ""
+        return self._execute(
+            f"SELECT * FROM alertas WHERE empresa_id = %s {pendientes} "
+            f"ORDER BY creado_en DESC LIMIT %s",
+            (self.empresa, limite),
+            fetch="all",
         )
-        return self._execute(consulta, (limite,), fetch="all")
 
     def list_solicitudes_correccion(self) -> List[Dict[str, Any]]:
         """Lista las solicitudes de corrección con datos del solicitante."""
@@ -1589,8 +1946,10 @@ class Database:
             FROM solicitudes_correccion s
             JOIN users u ON u.id = s.usuario_id
             LEFT JOIN users r ON r.id = s.revisado_por
+            WHERE s.empresa_id = %s
             ORDER BY s.id DESC
             """,
+            (self.empresa,),
             fetch="all",
         )
 
@@ -1604,10 +1963,11 @@ class Database:
             """
             SELECT COUNT(*) AS total
             FROM marcajes
-            WHERE verificacion_facial <> 'Verificada'
+            WHERE empresa_id = %s
+              AND verificacion_facial <> 'Verificada'
               AND hora_entrada >= NOW() - make_interval(days => %s)
             """,
-            (dias,),
+            (self.empresa, dias),
             fetch="one",
         )
         return int(fila["total"])
@@ -1615,7 +1975,9 @@ class Database:
     def count_marcajes_hoy(self) -> int:
         """Cantidad de marcajes con entrada registrada en la fecha actual."""
         fila = self._execute(
-            "SELECT COUNT(*) AS total FROM marcajes WHERE hora_entrada::date = CURRENT_DATE",
+            "SELECT COUNT(*) AS total FROM marcajes "
+            "WHERE empresa_id = %s AND hora_entrada::date = CURRENT_DATE",
+            (self.empresa,),
             fetch="one",
         )
         return int(fila["total"]) if fila else 0
@@ -1623,7 +1985,9 @@ class Database:
     def marcar_alertas_leidas(self) -> int:
         """Marca todas las alertas como leídas y devuelve la cantidad."""
         cursor = self._execute(
-            "UPDATE alertas SET leida = TRUE WHERE leida = FALSE RETURNING id"
+            "UPDATE alertas SET leida = TRUE "
+            "WHERE empresa_id = %s AND NOT leida RETURNING id",
+            (self.empresa,),
         )
         self.connection.commit()
         return len(cursor.fetchall())
@@ -1631,9 +1995,9 @@ class Database:
     def limpiar_marcajes_prueba(self, user_id: int, desde: Any, hasta: Any) -> None:
         """Helper de tests: elimina marcajes de un rango de fechas."""
         self._execute(
-            "DELETE FROM marcajes WHERE user_id = %s "
+            "DELETE FROM marcajes WHERE empresa_id = %s AND user_id = %s "
             "AND hora_entrada::date BETWEEN %s AND %s",
-            (user_id, desde, hasta),
+            (self.empresa, user_id, desde, hasta),
         )
         self.connection.commit()
 
@@ -1646,18 +2010,21 @@ class Database:
         """
         self._execute(
             """
-            INSERT INTO fotos (user_id, imagen) VALUES (%s, %s)
+            INSERT INTO fotos (user_id, imagen, empresa_id) VALUES (%s, %s, %s)
             ON CONFLICT (user_id) DO UPDATE SET imagen = EXCLUDED.imagen,
                                                 actualizado_en = NOW()
             """,
-            (user_id, psycopg2.Binary(biometria.cifrar(imagen_jpg, user_id))),
+            (user_id, psycopg2.Binary(biometria.cifrar(imagen_jpg, user_id)),
+             self.empresa),
         )
         self.connection.commit()
 
     def get_foto(self, user_id: int) -> Optional[bytes]:
         """Retorna los bytes JPEG de la foto del usuario, si existe."""
         fila = self._execute(
-            "SELECT imagen FROM fotos WHERE user_id = %s", (user_id,), fetch="one"
+            "SELECT imagen FROM fotos WHERE empresa_id = %s AND user_id = %s",
+            (self.empresa, user_id),
+            fetch="one",
         )
         if not fila or fila["imagen"] is None:
             return None
@@ -1666,7 +2033,9 @@ class Database:
     def tiene_foto(self, user_id: int) -> bool:
         """Indica si el usuario tiene una foto biométrica registrada."""
         fila = self._execute(
-            "SELECT 1 AS existe FROM fotos WHERE user_id = %s", (user_id,), fetch="one"
+            "SELECT 1 AS existe FROM fotos WHERE empresa_id = %s AND user_id = %s",
+            (self.empresa, user_id),
+            fetch="one",
         )
         return fila is not None
 
@@ -1679,7 +2048,10 @@ class Database:
         entrenar el modelo con basura.
         """
         filas = self._execute(
-            "SELECT user_id, imagen FROM fotos ORDER BY user_id", fetch="all"
+            "SELECT user_id, imagen FROM fotos WHERE empresa_id = %s "
+            "ORDER BY user_id",
+            (self.empresa,),
+            fetch="all",
         )
         if not descifrar:
             return filas
@@ -1692,7 +2064,10 @@ class Database:
 
     def eliminar_foto(self, user_id: int) -> None:
         """Elimina la foto biométrica del usuario."""
-        self._execute("DELETE FROM fotos WHERE user_id = %s", (user_id,))
+        self._execute(
+            "DELETE FROM fotos WHERE empresa_id = %s AND user_id = %s",
+            (self.empresa, user_id),
+        )
         self.connection.commit()
 
     def get_horas_extra_year(self, anio: int) -> List[Dict[str, Any]]:
@@ -1710,10 +2085,10 @@ class Database:
                    COALESCE(SUM(horas_extra_100), INTERVAL '0 seconds') AS extra_100,
                    COALESCE(SUM(horas_nocturnas), INTERVAL '0 seconds') AS nocturnas
             FROM marcajes
-            WHERE hora_entrada >= %s AND hora_entrada < %s
+            WHERE empresa_id = %s AND hora_entrada >= %s AND hora_entrada < %s
             GROUP BY user_id
             """,
-            (inicio, fin),
+            (self.empresa, inicio, fin),
             fetch="all",
         )
 
@@ -1724,10 +2099,11 @@ class Database:
         return self._execute(
             """
             SELECT * FROM marcajes
-            WHERE user_id = %s AND hora_entrada BETWEEN %s AND %s
+            WHERE empresa_id = %s AND user_id = %s
+              AND hora_entrada BETWEEN %s AND %s
             ORDER BY hora_entrada
             """,
-            (user_id, inicio, fin),
+            (self.empresa, user_id, inicio, fin),
             fetch="all",
         )
 
@@ -1743,11 +2119,13 @@ class Database:
         cursor = self._execute(
             """
             INSERT INTO solicitudes_correccion
-                (usuario_id, fecha_registro, tipo_marca, hora_propuesta, motivo)
-            VALUES (%s, %s, %s, %s, %s)
+                (usuario_id, fecha_registro, tipo_marca, hora_propuesta, motivo,
+                 empresa_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (usuario_id, fecha_registro, tipo_marca, hora_propuesta, motivo),
+            (usuario_id, fecha_registro, tipo_marca, hora_propuesta, motivo,
+             self.empresa),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
@@ -1760,9 +2138,9 @@ class Database:
             FROM solicitudes_correccion s
             JOIN users u ON u.id = s.usuario_id
             LEFT JOIN users r ON r.id = s.revisado_por
-            WHERE s.id = %s
+            WHERE s.empresa_id = %s AND s.id = %s
             """,
-            (solicitud_id,),
+            (self.empresa, solicitud_id),
             fetch="one",
         )
 
@@ -1774,8 +2152,10 @@ class Database:
             FROM solicitudes_correccion s
             JOIN users u ON u.id = s.usuario_id
             LEFT JOIN users r ON r.id = s.revisado_por
+            WHERE s.empresa_id = %s
             ORDER BY (s.estado = 'Pendiente') DESC, s.fecha_registro, s.id
             """,
+            (self.empresa,),
             fetch="all",
         )
 
@@ -1787,9 +2167,9 @@ class Database:
             """
             UPDATE solicitudes_correccion
             SET estado = %s, revisado_por = %s
-            WHERE id = %s
+            WHERE empresa_id = %s AND id = %s
             """,
-            (estado, revisado_por, solicitud_id),
+            (estado, revisado_por, self.empresa, solicitud_id),
         )
         self.connection.commit()
         return cursor.rowcount > 0
@@ -1814,9 +2194,9 @@ class Database:
         cursor = self._execute(
             """
             INSERT INTO condiciones_dia
-                (fecha, condicion, tolerancia_min, nota, declarado_por)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (fecha) DO UPDATE SET
+                (fecha, condicion, tolerancia_min, nota, declarado_por, empresa_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (empresa_id, fecha) DO UPDATE SET
                 condicion = EXCLUDED.condicion,
                 tolerancia_min = EXCLUDED.tolerancia_min,
                 nota = EXCLUDED.nota,
@@ -1824,7 +2204,7 @@ class Database:
                 creado_en = NOW()
             RETURNING *
             """,
-            (fecha, condicion, tolerancia_min, nota, declarado_por),
+            (fecha, condicion, tolerancia_min, nota, declarado_por, self.empresa),
         )
         self.connection.commit()
         return cursor.fetchone()
@@ -1832,8 +2212,8 @@ class Database:
     def get_condicion_dia(self, fecha: Any) -> Optional[Dict[str, Any]]:
         """Condición declarada para una fecha, o ``None`` si el día es normal."""
         return self._execute(
-            "SELECT * FROM condiciones_dia WHERE fecha = %s",
-            (fecha,),
+            "SELECT * FROM condiciones_dia WHERE empresa_id = %s AND fecha = %s",
+            (self.empresa, fecha),
             fetch="one",
         )
 
@@ -1844,17 +2224,19 @@ class Database:
             SELECT c.*, u.full_name AS declarante
             FROM condiciones_dia c
             JOIN users u ON u.id = c.declarado_por
+            WHERE c.empresa_id = %s
             ORDER BY c.fecha DESC
             LIMIT %s
             """,
-            (limite,),
+            (self.empresa, limite),
             fetch="all",
         )
 
     def borrar_condicion_dia(self, fecha: Any) -> bool:
         """Revoca la condición de un día; el día vuelve a ser normal."""
         cursor = self._execute(
-            "DELETE FROM condiciones_dia WHERE fecha = %s", (fecha,)
+            "DELETE FROM condiciones_dia WHERE empresa_id = %s AND fecha = %s",
+            (self.empresa, fecha),
         )
         self.connection.commit()
         return cursor.rowcount > 0
@@ -1877,12 +2259,12 @@ class Database:
             """
             INSERT INTO solicitudes_permiso
                 (usuario_id, tipo_permiso, fecha_inicio, fecha_fin,
-                 horas_solicitadas, motivo)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                 horas_solicitadas, motivo, empresa_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (usuario_id, tipo_permiso, fecha_inicio, fecha_fin,
-             horas_solicitadas, motivo),
+             horas_solicitadas, motivo, self.empresa),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
@@ -1896,9 +2278,9 @@ class Database:
             FROM solicitudes_permiso s
             JOIN users u ON u.id = s.usuario_id
             LEFT JOIN users r ON r.id = s.resuelto_por
-            WHERE s.id = %s
+            WHERE s.empresa_id = %s AND s.id = %s
             """,
-            (solicitud_id,),
+            (self.empresa, solicitud_id),
             fetch="one",
         )
 
@@ -1910,14 +2292,14 @@ class Database:
         Las pendientes encabezan la lista porque son las accionables; el
         resto queda por fecha de pedido descendente.
         """
-        condiciones: List[str] = []
-        parametros: List[Any] = []
+        condiciones: List[str] = ["s.empresa_id = %s"]
+        parametros: List[Any] = [self.empresa]
         if usuario_id is not None:
             condiciones.append("s.usuario_id = %s")
             parametros.append(usuario_id)
         if solo_pendientes:
             condiciones.append("s.estado = 'Pendiente'")
-        filtro = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
+        filtro = f"WHERE {' AND '.join(condiciones)}"
         return self._execute(
             f"""
             SELECT s.*, u.username, u.full_name, u.tipo_vinculo,
@@ -1928,7 +2310,7 @@ class Database:
             {filtro}
             ORDER BY (s.estado = 'Pendiente') DESC, s.creado_en DESC
             """,
-            tuple(parametros) or None,
+            tuple(parametros),
             fetch="all",
         )
 
@@ -1950,9 +2332,10 @@ class Database:
             UPDATE solicitudes_permiso
             SET estado = %s, resuelto_por = %s, resuelto_en = NOW(),
                 observacion = %s, justificacion_id = %s
-            WHERE id = %s AND estado = 'Pendiente'
+            WHERE empresa_id = %s AND id = %s AND estado = 'Pendiente'
             """,
-            (estado, resuelto_por, observacion, justificacion_id, solicitud_id),
+            (estado, resuelto_por, observacion, justificacion_id,
+             self.empresa, solicitud_id),
         )
         self.connection.commit()
         return cursor.rowcount > 0
@@ -1964,11 +2347,11 @@ class Database:
         cursor = self._execute(
             """
             INSERT INTO marcajes
-                (user_id, hora_entrada, es_tardanza, es_feriado)
-            VALUES (%s, %s, %s, %s)
+                (user_id, hora_entrada, es_tardanza, es_feriado, empresa_id)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (user_id, hora_entrada, es_tardanza, es_feriado),
+            (user_id, hora_entrada, es_tardanza, es_feriado, self.empresa),
         )
         self.connection.commit()
         return cursor.fetchone()["id"]
@@ -1981,9 +2364,9 @@ class Database:
             """
             UPDATE marcajes
             SET hora_entrada = %s, es_tardanza = %s, tipo_incidencia = %s
-            WHERE id = %s
+            WHERE empresa_id = %s AND id = %s
             """,
-            (hora_entrada, es_tardanza, tipo_incidencia, entry_id),
+            (hora_entrada, es_tardanza, tipo_incidencia, self.empresa, entry_id),
         )
         self.connection.commit()
 
@@ -1996,12 +2379,14 @@ class Database:
             SELECT DATE(hora_entrada AT TIME ZONE 'America/Asuncion') AS fecha,
                    COUNT(*) AS cantidad
             FROM marcajes
-            WHERE es_tardanza = TRUE
+            WHERE empresa_id = %s
+              AND es_tardanza = TRUE
               AND hora_entrada >= %s AND hora_entrada < %s
             GROUP BY DATE(hora_entrada AT TIME ZONE 'America/Asuncion')
             ORDER BY fecha
             """,
             (
+                self.empresa,
                 datetime.combine(desde, time.min),
                 datetime.combine(hasta + timedelta(days=1), time.min),
             ),
@@ -2018,10 +2403,12 @@ class Database:
                    EXTRACT(EPOCH FROM SUM(m.horas_extra_100)) / 3600.0 AS horas_100
             FROM marcajes m
             JOIN users u ON u.id = m.user_id
+            WHERE m.empresa_id = %s
             GROUP BY u.departamento
             ORDER BY (EXTRACT(EPOCH FROM SUM(m.horas_extra_50)) +
                       EXTRACT(EPOCH FROM SUM(m.horas_extra_100))) DESC
             """,
+            (self.empresa,),
             fetch="all",
         )
         return [dict(fila) for fila in cursor]
@@ -2032,9 +2419,10 @@ class Database:
             """
             SELECT id, full_name, departamento, salario_mensual
             FROM users
-            WHERE salario_mensual > 0
+            WHERE empresa_id = %s AND salario_mensual > 0
             ORDER BY departamento, full_name
             """,
+            (self.empresa,),
             fetch="all",
         )
         return [dict(fila) for fila in cursor]

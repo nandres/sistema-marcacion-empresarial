@@ -138,7 +138,7 @@ verificar("la cuota pasa de reservada a usada",
           f"usados {art['usados']} · pendientes {art['pendientes']}")
 
 # 7) El PDF del permiso se genera sin intervención.
-ruta = Path(reports.generar_pdf_permiso(resultado["justificacion_id"]))
+ruta = Path(reports.generar_pdf_permiso(db, resultado["justificacion_id"]))
 verificar("el PDF del permiso se emite solo", ruta.exists() and ruta.stat().st_size > 1000,
           f"{ruta.name} · {ruta.stat().st_size} bytes")
 

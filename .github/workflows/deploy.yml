@@ -82,6 +82,11 @@ jobs:
       - name: Turnos, rotación y jornada partida (P2-4, P2-5)
         run: python tests/test_turnos.py
 
+      - name: Aislamiento entre empresas alojadas
+        run: |
+          python tests/guardia_arrendamiento.py
+          python tests/test_multiempresa.py
+
       - name: Antigüedad desde el contrato y baja lógica (P3-6)
         run: python tests/test_antiguedad_y_bajas.py
 

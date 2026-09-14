@@ -62,13 +62,19 @@ def registrar_alerta(
     detalle: str = "",
     usuario_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Persiste (si hay base) y publica una alerta activa."""
+    """Persiste (si hay base) y publica una alerta activa.
+
+    La alerta viaja con su ``empresa_id``. El bus es un objeto en memoria
+    compartido por todo el proceso, así que sin ese dato la tardanza de un
+    cliente aparecería en la campana del panel de otro.
+    """
     alerta: Dict[str, Any] = {
         "tipo": tipo,
         "severidad": severidad,
         "mensaje": mensaje,
         "detalle": detalle,
         "usuario_id": usuario_id,
+        "empresa_id": getattr(db, "empresa_id", None) if db is not None else None,
         "creado_en": datetime.now().astimezone().isoformat(),
         "leida": False,
     }
@@ -81,6 +87,19 @@ def registrar_alerta(
             alerta["id"] = None
     BUS.publicar(alerta)
     return alerta
+
+
+def es_de_la_empresa(alerta: Dict[str, Any], empresa_id: Optional[int]) -> bool:
+    """Indica si una alerta del bus le corresponde a esa empresa.
+
+    Una alerta sin empresa (la base estaba caída al registrarla) no se
+    entrega a nadie: mostrarla a todos sería peor que perderla.
+    """
+    return (
+        empresa_id is not None
+        and alerta.get("empresa_id") is not None
+        and int(alerta["empresa_id"]) == int(empresa_id)
+    )
 
 
 def _config_smtp() -> Optional[Dict[str, str]]:
