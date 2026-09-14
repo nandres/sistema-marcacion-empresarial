@@ -141,6 +141,8 @@ SMTP_PASSWORD=****
 SMTP_FROM=no-reply@sistema-marcacion.com
 HOST=127.0.0.1                   # Servidor web
 PORT=8000
+DB_POOL_MIN=1                    # Pool de conexiones del proceso que atiende
+DB_POOL_MAX=10
 ```
 
 > **`JWT_SECRET_KEY` y `COMPROBANTE_CLAVE` son obligatorias y no tienen valor por defecto.** Si falta alguna, o mide menos de 32 caracteres, el proceso aborta al arrancar en lugar de firmar con una clave conocida. Generá cada una con:

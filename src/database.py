@@ -13,12 +13,14 @@ Responsabilidades:
 from __future__ import annotations
 
 import os
+import threading
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
 import psycopg2
+import psycopg2.pool
 from psycopg2.extras import Json, RealDictCursor
 
 import biometria
@@ -64,6 +66,44 @@ Agregar una tabla al esquema obliga a decidir si entra acá.
 SLUG_EMPRESA_BASE: str = "principal"
 RAZON_SOCIAL_BASE: str = "Empresa"
 
+
+POOL_MINIMO: int = int(os.getenv("DB_POOL_MIN", "1"))
+POOL_MAXIMO: int = int(os.getenv("DB_POOL_MAX", "10"))
+
+_POOLS: Dict[Tuple, Any] = {}
+_POOL_BLOQUEO = threading.Lock()
+
+
+def _pool_de(config: Dict[str, str]) -> Any:
+    """Pool de conexiones del proceso para esa configuración.
+
+    Abrir y cerrar una conexión por petición cuesta un saludo TCP y una
+    autenticación cada vez. Con un cliente no se nota; con varios alojados y
+    el pico de las ocho de la mañana, sí.
+
+    Solo lo usa el proceso que atiende tráfico. Una conexión de vida larga
+    —el escritorio, el hilo que escucha las alertas, una migración— se queda
+    con un lugar del pool durante horas y se lo saca a las peticiones, así
+    que esas siguen abriendo la suya.
+    """
+    clave = tuple(sorted(config.items()))
+    with _POOL_BLOQUEO:
+        if clave not in _POOLS:
+            _POOLS[clave] = psycopg2.pool.ThreadedConnectionPool(
+                POOL_MINIMO, POOL_MAXIMO, client_encoding="UTF8", **config
+            )
+        return _POOLS[clave]
+
+
+def cerrar_pools() -> None:
+    """Cierra todos los pools del proceso. Para el apagado ordenado."""
+    with _POOL_BLOQUEO:
+        for pool in _POOLS.values():
+            try:
+                pool.closeall()
+            except Exception:
+                continue
+        _POOLS.clear()
 
 class SinEmpresa(RuntimeError):
     """Se intentó leer o escribir datos de cliente sin una empresa activa.
@@ -142,10 +182,12 @@ class Database:
         self,
         config: Optional[Dict[str, str]] = None,
         empresa_id: Optional[int] = None,
+        agrupada: bool = False,
     ) -> None:
         self.config: Dict[str, str] = config or load_config()
         self.connection: Optional[psycopg2.connection] = None
         self._empresa_id: Optional[int] = empresa_id
+        self.agrupada: bool = agrupada
 
     @property
     def empresa_id(self) -> Optional[int]:
@@ -189,17 +231,42 @@ class Database:
         return self._empresa_id
 
     def connect(self) -> psycopg2.connection:
-        """Abre la conexión y le publica la empresa activa, si ya la tiene."""
-        self.connection = psycopg2.connect(client_encoding="UTF8", **self.config)
+        """Toma una conexión —del pool o propia— con la empresa ya publicada."""
+        if self.agrupada:
+            self.connection = _pool_de(self.config).getconn()
+        else:
+            self.connection = psycopg2.connect(
+                client_encoding="UTF8", **self.config
+            )
         self.connection.autocommit = False
         self._publicar_empresa()
         return self.connection
 
     def cerrar(self) -> None:
-        """Cierra la conexión activa liberando el socket de PostgreSQL."""
-        if self.connection is not None:
+        """Suelta la conexión: al pool si venía de ahí, o cerrándola.
+
+        Una conexión que vuelve al pool arrastra su estado, y el estado que
+        más importa acá es la empresa: sin limpiarla, la petición siguiente
+        heredaría la del cliente anterior. Se deshace la transacción y se
+        borra el contexto antes de devolverla.
+        """
+        if self.connection is None:
+            return
+        if self.agrupada and not self.connection.closed:
+            try:
+                self.connection.rollback()
+                self._empresa_id = None
+                self._publicar_empresa()
+                self.connection.commit()
+            except Exception:
+                pass
+            try:
+                _pool_de(self.config).putconn(self.connection)
+            except Exception:
+                self.connection.close()
+        else:
             self.connection.close()
-            self.connection = None
+        self.connection = None
 
     def ensure_database(self) -> None:
         """Garantiza que la base de datos configurada exista.

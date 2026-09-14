@@ -84,6 +84,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         escucha.detener()
+        database.cerrar_pools()
 
 
 def _conexion_de_escucha() -> Optional[database.Database]:
@@ -153,7 +154,7 @@ def _cliente(empresa_id: Optional[int] = None) -> database.Database:
     que un endpoint que se olvide de pasarla no devuelve los datos de todos
     los clientes: falla.
     """
-    db = database.Database(empresa_id=empresa_id)
+    db = database.Database(empresa_id=empresa_id, agrupada=True)
     db.connect()
     return db
 

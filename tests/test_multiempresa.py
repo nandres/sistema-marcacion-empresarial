@@ -368,6 +368,41 @@ if restringido is not None:
     db._execute("DROP ROLE IF EXISTS marcacion_prueba_rls")
     db.connection.commit()
 
+# ------------------------------------ 11. El pool no arrastra la empresa
+print("\n11) Una conexión reutilizada no hereda la empresa anterior")
+
+# El servidor toma las conexiones de un pool, así que la que atiende una
+# petición ya atendió otras. Si el contexto sobreviviera a la devolución, la
+# petición siguiente leería los datos del cliente anterior: es la misma fuga
+# de siempre, entrando por una puerta nueva.
+primera = Database(agrupada=True)
+primera.connect()
+primera.empresa_id = empresa_a["id"]
+vistos = {u["id"] for u in primera.list_users(incluir_bajas=True)}
+verificar("la primera petición ve su empresa", vistos and vistos <= ids_a,
+          f"{len(vistos)} legajos")
+primera.cerrar()
+
+segunda = Database(agrupada=True)
+segunda.connect()
+cursor = segunda.connection.cursor()
+cursor.execute("SELECT current_setting('app.empresa_id', true)")
+heredado = cursor.fetchone()[0]
+verificar("la siguiente no hereda el contexto de la base",
+          heredado in ("", None), repr(heredado))
+try:
+    segunda.list_users()
+    verificar("ni puede leer sin declarar su empresa", False, "devolvió datos")
+except SinEmpresa:
+    verificar("ni puede leer sin declarar su empresa", True)
+
+segunda.empresa_id = empresa_b["id"]
+propios = {u["id"] for u in segunda.list_users(incluir_bajas=True)}
+verificar("y al declarar la suya ve la suya, no la anterior",
+          propios and not (propios & ids_a), f"{len(propios)} legajos")
+segunda.cerrar()
+database.cerrar_pools()
+
 # ------------------------------------------------------------- Limpieza
 for empresa in (empresa_a, empresa_b):
     db._execute("DELETE FROM empresas WHERE id = %s", (empresa["id"],))
