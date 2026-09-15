@@ -436,7 +436,7 @@ El `Dockerfile` no crea usuario sin privilegios. Cualquier ejecución de código
 
 ### P3-12 · El pipeline de CI nunca llegó a ejecutarse ✅ corregido
 
-> Cerrado el 2026-09-15. El hook de despliegue pasa por `env`, que sí se puede leer desde una condición. Verificado por el propio pipeline: primer run completo en verde —35 pasos de pruebas y 2 de despliegue— con la imagen publicada en el registro de contenedores.
+> Cerrado el 2026-09-15. El hook de despliegue pasa por `env`, que sí se puede leer desde una condición. Verificado por el propio pipeline: primer run completo en verde —35 pasos de pruebas y 2 de despliegue— con la imagen publicada en el registro de contenedores. Ese verde resultó ser parcialmente accidental en los pasos que levantan servidor; ver [[#P3-14 · Las pruebas de CI corrían contra el servidor del paso anterior ✅ corregido|P3-14]].
 
 El paso final del despliegue se salteaba con `if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}`. `secrets` no es un contexto válido dentro de un `if`: nombrarlo ahí no deja el paso en gris, **invalida el workflow completo al validarlo**. Todos los runs del repositorio, desde el commit que trajo el archivo, figuraban en rojo con cero jobs y cero anotaciones — un estado que desde la lista de Actions se parece bastante a un test que falla.
 
@@ -499,6 +499,22 @@ Escribir la prueba encontró que `--forzar` hacía dos cosas a la vez: saltear l
 
 ---
 
+### P3-14 · Las pruebas de CI corrían contra el servidor del paso anterior ✅ corregido
+
+> Cerrado el 2026-09-15. `tests/servidor.sh` libera el puerto antes de arrancar y espera a que el servidor conteste de verdad.
+
+Los tres pasos que necesitan el portal levantado hacían lo mismo: `timeout 25 python src/web_server.py &`, `sleep 6`, y a probar. Cada paso del workflow corre en su propia shell, pero **un proceso en segundo plano le sobrevive**: el servidor del paso 28 seguía ocupando el puerto 8000 durante los pasos 29 y 30. Los servidores de esos dos pasos no llegaban a ligar —`address already in use`— y morían en el acto, con el error enterrado en segundo plano donde nadie lo mira, mientras las pruebas se ejecutaban contra el servidor del paso 28.
+
+Mientras los plazos se solaparon, todo se veía verde. Se rompió cuando el paso de carga arrancó a las 04:06:18: su propio servidor no pudo ligar, durmió seis segundos, y al despertar a las 04:06:24 el único servidor vivo se había apagado un segundo antes por su `timeout 25`. El diagnóstico desde la lista de Actions es engañoso al máximo: el paso que falla es el de carga, el paso culpable es otro, y la prueba de carga no tenía nada malo.
+
+Lo importante no es el paso caído sino lo que estuvo tapando: **tres pasos de prueba nunca comprobaron que su servidor hubiera arrancado**. `sleep 6` es una suposición, no una verificación; un servidor que no levanta y uno que tarda siete segundos producen exactamente la misma línea de log, que es ninguna.
+
+Ahora el arranque es explícito: se libera el puerto —el PID va a un archivo, porque la shell que lo lanzó ya no existe cuando el paso siguiente necesita matarlo—, se sondea la portada hasta que responde, y si no levanta se vuelca el registro del proceso en lugar de fallar más tarde con un error de conexión. Cada paso apaga lo suyo al terminar.
+
+**Lección de método.** El fallo no estaba en el paso que se puso rojo, y el verde anterior tampoco significaba lo que parecía. Una prueba de integración que asume su entorno en vez de comprobarlo mide dos cosas mezcladas —el código y la suerte— y solo se separan el día que la suerte se acaba.
+
+---
+
 ## Prioridad de remediación sugerida
 
 | Orden | Trabajo | Cierra | Estado |
@@ -518,6 +534,7 @@ Escribir la prueba encontró que `--forzar` hacía dos cosas a la vez: saltear l
 | 12 | Pipeline que arranca: contexto válido en el `if`, clave biométrica en CI y cabeceras medidas sobre un GET | P3-12 | ✅ hecho |
 | 13 | Entregable: instalador del kiosco, despliegue en servidor propio y respaldo verificable | P3-13 | ✅ hecho |
 | 14 | El pico de marcación y el origen de cada marca | P0-6, P2-7 | ✅ hecho |
+| 15 | Arranque verificado del servidor en cada paso de CI | P3-14 | ✅ hecho |
 
 El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].
 
