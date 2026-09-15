@@ -47,12 +47,16 @@ cookie; cada petición se valida con un token firmado criptográficamente.
 
 ## Sesión en el navegador
 
-- El token se guarda en `localStorage` y se adjunta automáticamente a cada
-  petición por JavaScript.
-- Si el token falta o expiró, el cliente recibe 401 y la interfaz limpia la
-  sesión y **redirige al formulario de login** con el mensaje "Sesión
-  expirada. Ingrese nuevamente".
-- El botón "Cerrar sesión" elimina el token del navegador al instante.
+- El token vive en la cookie `marcacion_sesion`, marcada `HttpOnly`,
+  `SameSite=Strict` y `Secure` cuando la conexión lo es. JavaScript no puede
+  leerla, así que un XSS no se la lleva.
+- El navegador la adjunta solo; el cliente nunca la toca. El WebSocket es el
+  caso que forzó la decisión: un saludo de WebSocket no admite cabeceras
+  propias, y la alternativa era el token en la query string.
+- Si falta o expiró, el cliente recibe 401 y la interfaz **redirige al login**
+  con el mensaje "Sesión expirada. Ingrese nuevamente".
+- "Cerrar sesión" pega contra `POST /api/logout`, que borra la cookie desde el
+  servidor: es el único que puede, justamente por ser `HttpOnly`.
 
 ```mermaid
 flowchart LR
@@ -64,29 +68,23 @@ flowchart LR
     SECRET[JWT_SECRET_KEY · .env gitignored] --> JWT
 ```
 
-## Brechas abiertas
+## Brechas que hubo, y cómo se cerraron
 
-Lo que esta nota afirma y el código no sostiene, ordenado por gravedad:
+Esta sección listaba seis brechas abiertas. Están todas cerradas; queda el
+registro porque el *por qué* de cada defensa se entiende mejor junto al ataque
+que la motivó. El detalle vive en [[Auditoría Técnica · Hallazgos Críticos]].
 
-**La cadena de toma de cuenta (P0-3).** `POST /api/alertas` exige token pero no valida rol, así que cualquier empleado publica una alerta con contenido arbitrario dirigida a todos los conectados. El toast que la muestra renderiza con `innerHTML` sin escapar. El siguiente usuario de RRHH que abra el portal ejecuta ese código con su sesión, y como el token vive en `localStorage`, se lo lleva. Ocho horas de acceso administrativo.
+| Brecha | Qué permitía | Cómo se cerró |
+| --- | --- | --- |
+| **P0-3 · Cadena de toma de cuenta** | `POST /api/alertas` exigía token pero no rol, y el toast renderizaba con `innerHTML` sin escapar. El siguiente usuario de RRHH que abriera el portal ejecutaba ese código con su sesión | Rol exigido en el endpoint, escapado en el toast y `Content-Security-Policy` que contiene lo que se escape |
+| **P0-4 · El respaldo de clave era la vulnerabilidad** | `JWT_SECRET_KEY` ausente no rompía nada: el sistema firmaba con una clave publicada en el repositorio, y cualquiera fabricaba un token `rol: Administrador`. Igual en `COMPROBANTE_CLAVE`, que dejaba los comprobantes falsificables | Los secretos no tienen valor por defecto y se validan al arrancar. Sin ellos el proceso no levanta |
+| **P3-2 · La sesión en `localStorage`** | Es lo que convertía el XSS en robo de sesión. El mismo hallazgo cubría el token viajando en la query string de los PDF y del WebSocket, donde queda en logs de acceso, historial e `Referer` | Cookie `HttpOnly` + `SameSite=Strict` + `Secure`, descrita arriba |
+| **P3-3 · Login sin límite de intentos** | Fuerza bruta contra las contraseñas y, a la vez, denegación de servicio: bcrypt es caro por diseño, así que bastaba con mandar credenciales inválidas en volumen | Freno por intentos, más abajo en esta nota |
+| **Faltaban cabeceras de seguridad** | Sin CSP nada contiene un XSS una vez que ocurre; tampoco había `X-Frame-Options`, `X-Content-Type-Options` ni HSTS | Se emiten en toda respuesta, y CI lo comprueba sobre un `GET` real |
+| **P3-1 · Biometría sin cifrar** | La tabla `fotos` guardaba el rostro en `BYTEA` plano. Bajo la Ley 6534/2020 es dato de categoría especial: un backup filtrado exponía la plantilla facial completa | AES-256-GCM con la clave fuera de la base, en la sección siguiente |
 
-**El respaldo de clave es la vulnerabilidad (P0-4).** Donde arriba se lee *"si falta, el código cae a una clave de desarrollo claramente marcada como insegura"*, hay que leer: **si la variable falta, el sistema firma tokens con una clave que está publicada en el repositorio**. Un atacante fabrica un token con `rol: Administrador` y entra. Un secreto ausente debe impedir el arranque, no degradarse en silencio. Mismo problema en `COMPROBANTE_CLAVE` (`reports.py`), que deja los comprobantes "de fidelidad legal" falsificables.
-
-**`localStorage` es alcanzable por JavaScript (P3-2).** Es lo que convierte el XSS anterior en robo de sesión. Una cookie `HttpOnly` + `Secure` + `SameSite=Strict` corta ese vector. El mismo hallazgo cubre el token viajando en la query string de los PDF y del WebSocket, donde queda en logs de acceso, historial del navegador y cabecera `Referer`.
-
-**`POST /api/login` no tiene límite de intentos (P3-3).** Fuerza bruta contra contraseñas de empleados y, a la vez, vector de denegación de servicio: bcrypt es caro por diseño, así que basta con enviar credenciales inválidas en volumen para saturar la CPU.
-
-**Faltan cabeceras de seguridad.** Sin `Content-Security-Policy`, nada contiene un XSS una vez que ocurre. Tampoco hay `X-Frame-Options`, `X-Content-Type-Options` ni HSTS.
-
-**Los datos biométricos están sin cifrar (P3-1).** La tabla `fotos` guarda el rostro en `BYTEA` plano. Bajo la Ley 6534/2020 es dato de categoría especial; un backup filtrado expone la plantilla facial completa.
-
-### Orden de corrección
-
-1. Escapar el toast + exigir rol en `POST /api/alertas` + CSP — cierra la cadena de toma de cuenta.
-2. Secretos sin valor por defecto, con validación al arrancar.
-3. Migrar la sesión a cookie `HttpOnly`.
-4. *Rate limiting* en autenticación.
-5. Cifrado de la columna biométrica con clave gestionada fuera de la base.
+**Lo que queda abierto es uno solo, y es honesto**: la prueba de vida del kiosco
+es un disuasivo, no una prueba. Ver P1-2b en la auditoría.
 
 ## Datos biométricos en reposo (Ley N.º 6534/2020)
 

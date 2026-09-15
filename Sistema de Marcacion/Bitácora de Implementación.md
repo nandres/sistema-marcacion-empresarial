@@ -280,20 +280,22 @@ Los scripts de humo viven en `tests/` del repositorio (antes en la carpeta tempo
 - `smoke_web_panel.py` — kiosco web (ticket con serie EMPRESA, contraseña incorrecta/usuario inexistente → 401), panel RRHH (resumen, CRUD personal, justificación + PDF, correcciones, auditoría, alertas) y 403 para roles sin permiso. **OK**
 - `smoke_panel.py`, `prueba_dashboard.py`, `prueba_conatel_gui.py`, `diag_tema*.py`, `pdf_e2e.py`, `web_reglamento.py` — regresiones de UX, analítica, PDF y web. **OK**
 
-### Lo que la suite no cubre
+### La brecha de cobertura que encontró la auditoría
 
-La auditoría del 2026-09-13 encontró defectos reproducibles **con la suite completa en verde**. El patrón es consistente: las pruebas son de humo sobre el camino feliz y no ejercitan fronteras ni rutas de error.
+La auditoría del 2026-09-13 encontró defectos reproducibles **con la suite completa en verde**. El patrón era consistente: pruebas de humo sobre el camino feliz, sin fronteras ni rutas de error. Cada fila se cerró con la prueba que faltaba.
 
-| Defecto no detectado | Qué prueba falta |
-| --- | --- |
-| Jornada mixta con 9 h ordinarias | Tabla de turnos frontera contra `calcular_horas_paraguay` (hoy no hay ninguna prueba unitaria del motor) |
-| Feriado mal atribuido al cruzar medianoche | Turno sábado → domingo y domingo → lunes |
-| Feriados ciegos desde 2027 | Aserción sobre una fecha del año siguiente |
-| `TypeError` al aprobar corrección de salida | Caso de aprobación de reclamo tipo "Salida" de punta a punta |
-| Turno nocturno que no se puede cerrar | `detectar_accion_hoy` con entrada abierta del día anterior |
-| Esquema que no se crea desde cero | CI sobre base virgen, sin `setup_ci.py` previo |
+| Defecto que pasó inadvertido | Prueba que lo habría visto | Dónde vive hoy |
+| --- | --- | --- |
+| Jornada mixta con 9 h ordinarias | Tabla de turnos frontera contra `calcular_horas_paraguay` | `test_motor_horario.py` |
+| Feriado mal atribuido al cruzar medianoche | Turno sábado → domingo y domingo → lunes | `test_motor_horario.py` |
+| Feriados ciegos desde 2027 | Aserción sobre una fecha del año siguiente | `test_motor_horario.py` |
+| `TypeError` al aprobar corrección de salida | Aprobación de un reclamo tipo "Salida" de punta a punta | `smoke_web_panel.py` |
+| Turno nocturno que no se puede cerrar | `detectar_accion_hoy` con entrada abierta del día anterior | `test_turno_nocturno.py` |
+| Esquema que no se crea desde cero | CI sobre base virgen, sin `setup_ci.py` previo | El pipeline, desde que arranca (fase 21) |
 
-Las dos primeras filas son la brecha de mayor valor: el motor horario es lógica pura, sin dependencias, y admite pruebas de tabla exhaustivas a costo casi nulo. Es el módulo más crítico del sistema y el único sin pruebas propias.
+El motor horario era la brecha de mayor valor —lógica pura, sin dependencias, con pruebas de tabla a costo casi nulo— y era a la vez el módulo más crítico sin pruebas propias. Hoy las tiene.
+
+**Lo que la suite sigue sin cubrir es la carga.** No hay ninguna prueba de qué pasa cuando doscientas personas marcan en el mismo minuto, que es exactamente el perfil de uso de un control de asistencia: todo el tráfico del día concentrado en dos ventanas de quince minutos. Ver [[Antifraude y Resiliencia en Picos de Marcación]].
 
 ## Lecciones registradas
 

@@ -15,21 +15,22 @@ El sistema funciona, pero tres decisiones tempranas limitan todo lo que venga de
 
 **Falta el modelo de horarios.** No hay tabla de turnos: la hora de entrada es `INICIO_JORNADA`, una constante global del proceso leída de una variable de entorno. El sistema no puede representar turnos rotativos, jornadas partidas, horarios por sucursal ni cambios de turno — que es la razón principal por la que una empresa compra un software de asistencia en lugar de una planilla.
 
-## Modelo de datos faltante
+## Modelo de datos: lo que se construyó y lo que falta
 
-Las entidades que hoy no existen y bloquean los casos de uso reales:
+De las entidades que esta nota proponía, casi todas existen. Queda el registro
+de por qué cada una bloqueaba un caso de uso real.
 
-| Entidad | Por qué falta hoy | Qué desbloquea |
+| Entidad | Estado | Qué desbloqueó |
 | --- | --- | --- |
-| `turnos` | La jornada es una constante de proceso | Horarios rotativos, jornada partida, nocturnidad real |
-| `asignaciones_turno` | — | Qué turno le toca a quién y desde cuándo |
-| `feriados` | `frozenset` hardcodeado de 2026 | Que el sistema siga siendo correcto en 2027 |
-| `empresas` / `sucursales` | ✅ `empresas` con aislamiento verificado; la sucursal vive en el turno | Multi-sede con husos propios por sede |
-| `dispositivos` | El kiosco no se identifica | Trazabilidad de dónde se marcó, geocerca |
-| `users.fecha_ingreso` | Se usa `created_at` | Antigüedad y aguinaldo correctos tras migrar la plantilla |
-| `users.activo` / `fecha_baja` | Solo existe `DELETE` | Histórico de bajas sin borrar marcajes |
-
-El campo `activo` merece mención aparte: `_personal_publico` (`web_server.py:1187`) ya lo lista como campo público, pero **la columna no existe en el esquema**. El filtro por comprensión lo descarta en silencio. Es documentación que se adelantó a la implementación.
+| `turnos` · `turno_tramos` | ✅ | Horarios rotativos, jornada partida, nocturnidad real. Antes la jornada era una constante del proceso |
+| `asignaciones_turno` | ✅ | Qué turno le toca a quién y desde cuándo, con vencimiento que devuelve solo al turno de contrato |
+| `ciclos_rotacion` · `ciclo_turnos` | ✅ | La rotación se calcula en lugar de cargarse semana por semana |
+| Feriados | ✅ | `feriados_de(año)` los deriva, incluida la Pascua. Ya no hay un `frozenset` de 2026 que deje el sistema ciego en 2027 |
+| `empresas` | ✅ | Varios clientes alojados, con el aislamiento impuesto por PostgreSQL y no solo por la aplicación |
+| `users.fecha_ingreso` | ✅ | Antigüedad y aguinaldo correctos después de migrar una plantilla |
+| `users.activo` · `fecha_baja` | ✅ | Histórico de bajas sin destruir los marcajes que respaldan liquidaciones ya pagadas |
+| `sucursales` | Parcial | La sucursal es hoy un campo del turno. Alcanza para horarios por sede; no alcanza para husos horarios propios por sede |
+| `dispositivos` | **Falta** | El kiosco no se identifica. Sin esto, una marca no registra desde dónde se hizo y *"marqué desde casa"* no es detectable. Ver [[Antifraude y Resiliencia en Picos de Marcación]] |
 
 ## Separación en capas
 
