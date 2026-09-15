@@ -93,7 +93,14 @@ def _binario(nombre: str) -> str:
             if binario.exists():
                 candidatos.append(binario)
     if candidatos:
-        return str(sorted(candidatos)[-1])
+        # Por número y no por texto: ordenado como cadena, "9.6" queda después
+        # de "16" y se elegiría el cliente más viejo contra un servidor nuevo,
+        # que es justo lo que pg_dump se niega a hacer.
+        def version_de(ruta: Path) -> tuple:
+            partes = ruta.parent.parent.name.split(".")
+            return tuple(int(p) if p.isdigit() else 0 for p in partes)
+
+        return str(max(candidatos, key=version_de))
 
     raise RespaldoInvalido(
         f"No encontré {nombre}. Instalá las herramientas de cliente de "

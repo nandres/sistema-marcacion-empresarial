@@ -126,8 +126,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          timeout 25 python src/web_server.py &
-          sleep 6
+          source tests/servidor.sh
+          arrancar
           curl -fsS http://127.0.0.1:8000/ | grep -q "Sistema de Marcación"
           curl -fsS -X POST http://127.0.0.1:8000/api/login \
             -H "Content-Type: application/json" \
@@ -141,22 +141,27 @@ jobs:
           # Cabeceras de seguridad en la respuesta real: -I manda HEAD y la
           # portada solo sirve GET, así que medía las cabeceras de un 405.
           curl -fsS -D - -o /dev/null http://127.0.0.1:8000/ | grep -qi "content-security-policy"
+          detener
 
       - name: Kiosco web + Panel de Gestión (RRHH)
+        shell: bash
         run: |
-          timeout 25 python src/web_server.py &
-          sleep 6
-          WEB_BASE=http://127.0.0.1:8000 python tests/smoke_web_panel.py
-          WEB_BASE=http://127.0.0.1:8000 python tests/test_sesion_cookie.py
-          WEB_BASE=http://127.0.0.1:8000 python tests/test_dispositivos.py
+          set -o pipefail
+          source tests/servidor.sh
+          arrancar
+          WEB_BASE=$SERVIDOR python tests/smoke_web_panel.py
+          WEB_BASE=$SERVIDOR python tests/test_sesion_cookie.py
+          WEB_BASE=$SERVIDOR python tests/test_dispositivos.py
+          detener
 
       - name: Pico de marcacion · todos a la vez
         shell: bash
         run: |
           set -o pipefail
-          timeout 120 python src/web_server.py &
-          sleep 6
-          WEB_BASE=http://127.0.0.1:8000 CARGA_EMPLEADOS=40 python tests/test_carga.py
+          source tests/servidor.sh
+          arrancar
+          WEB_BASE=$SERVIDOR CARGA_EMPLEADOS=40 python tests/test_carga.py
+          detener
 
       - name: GUI login / cambio de clave / temas (pantalla virtual)
         run: xvfb-run -a python tests/smoke_login.py
@@ -167,8 +172,16 @@ jobs:
       # Al final de todo: la restauracion reemplaza el contenido de la base,
       # asi que ningun paso posterior puede depender de lo que quede despues.
       - name: Respaldo y restauracion (viaje redondo)
+        shell: bash
         run: |
-          sudo apt-get install -y postgresql-client
+          set -o pipefail
+          # La imagen del runner ya suele traerlas; instalar a ciegas falla
+          # cuando el índice de apt está viejo, y actualizarlo siempre cuesta
+          # medio minuto por nada.
+          command -v pg_dump >/dev/null || {
+            sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          }
+          pg_dump --version
           python tests/test_respaldo.py
 
   deploy:
