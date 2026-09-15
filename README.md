@@ -5,43 +5,79 @@
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-2496ED)](https://docs.github.com/es/packages)
 [![CI/CD](https://github.com/nandres/sistema-marcacion-empresarial/actions/workflows/deploy.yml/badge.svg)](https://github.com/nandres/sistema-marcacion-empresarial/actions/workflows/deploy.yml)
 
-Sistema integral y resiliente para el control de asistencia laboral adaptado al marco legal paraguayo. Combina un kiosco de escritorio híbrido (Online/Offline), un portal web con kiosco de navegador y panel de gestión para Recursos Humanos, procesamiento biométrico por hardware e inteligencia normativa automatizada.
+Control de asistencia laboral para Paraguay. Un kiosco de escritorio que sigue funcionando sin conexión, un portal web con kiosco de navegador y panel de Recursos Humanos, lectura biométrica por hardware y un motor que liquida la jornada según la ley paraguaya en lugar de dejarla para la planilla de Excel del cierre de mes.
+
+Una misma instalación puede alojar a varias empresas sin que ninguna vea los datos de otra.
 
 ---
 
 ## Cumplimiento Normativo Integrado
 
-El núcleo de cálculo del sistema (`clock_engine.py`) procesa las marcas abstrayendo la complejidad de la legislación laboral de Paraguay:
+El núcleo de cálculo (`clock_engine.py`) procesa las marcas abstrayendo la complejidad de la legislación laboral paraguaya:
 
 *   **Código del Trabajo (Ley 213/1993):** El turno se parte en tramos homogéneos por naturaleza (diurno/nocturno) y por día calendario, de modo que un turno que cruza hacia un domingo liquida al 100 % **solo esa porción**. El tope de jornada ordinaria se decide una vez para todo el turno (8 h diurna, 7 h nocturna, 7 h 30 mixta; nocturno ≥ 5 h reputa la jornada nocturna) y el excedente es extraordinario: +50 % diurno, +100 % nocturno. Las horas ordinarias nocturnas llevan el recargo del 30 % del Art. 232 y se liquidan en columna propia.
-*   **Reforma Tributaria (Ley 6380/2019):** Cálculo automatizado del aguinaldo proporcional y acumulado.
-*   **Res. Directorio 3028/2024:** Tolerancia climática y diferenciación estricta de reglas entre pasantes y funcionarios. La condición excepcional del día (lluvia intensa, corte de rutas, paro de transporte) la **declara Recursos Humanos** para toda la plantilla, con firma y auditoría: no es una casilla que marque quien llega tarde.
-*   **Reglamento Interno (Res. 1307/2010):** Catálogo automatizado de permisos, licencias y control estricto de cuotas mensuales por horas o usos (bloqueo automático al 4.° uso del Art. 14).
+*   **Reforma Tributaria (Ley 6380/2019):** Aguinaldo proporcional y acumulado, calculado sobre la antigüedad real del contrato.
+*   **Res. Directorio 3028/2024:** Tolerancia climática y reglas distintas para pasantes y funcionarios. La condición excepcional del día —lluvia intensa, corte de rutas, paro de transporte— la **declara Recursos Humanos** para toda la plantilla, con firma y auditoría: no es una casilla que marque quien llega tarde.
+*   **Reglamento Interno (Res. 1307/2010):** Catálogo de 32 artículos de permisos y licencias, con cuotas por horas o por usos y bloqueo automático al agotarlas. Los artículos que el reglamento cuenta en días hábiles se cuentan en días hábiles, y un permiso que cruza el año imputa a cada período los días que le tocan.
+*   **Ley 6534/2020 · datos personales:** La plantilla facial es dato de categoría especial. Se guarda cifrada y se destruye con la baja del empleado.
 
-Una misma instalación puede alojar a **varias empresas** sin que ninguna vea los datos de otra. Cuatro capas lo sostienen: doce tablas llevan `empresa_id`; la conexión falla si no tiene empresa activa; un verificador estático impide que una consulta nueva quede sin acotar; y PostgreSQL lo impone con políticas de seguridad por fila, de modo que una consulta a la que se le olvidó el `WHERE` no devuelve ninguna fila en lugar de devolver las de todos. Ninguna sesión puede ver dos clientes a la vez.
+---
 
-La hora contra la que se mide cada llegada sale del **turno** del empleado: cada turno tiene su horario (una franja, o dos si la jornada es partida), los días de la semana que cubre y, si hace falta, su propia tolerancia. Una empresa que rota turnos define un **ciclo** —qué turnos, en qué orden y cada cuántos días— y el turno de cada día se calcula, sin cargar semana por semana. La rotación puntual se programa con vigencia y le gana al ciclo, así que al vencer la persona vuelve sola a donde estaba. Los días que su turno no cubre figuran como **franco** en lugar de contarse como ausencia.
+## Cómo se decide a qué hora entra cada persona
+
+La hora contra la que se mide cada llegada sale del **turno** del empleado: su horario (una franja, o dos si la jornada es partida), los días de la semana que cubre y, si hace falta, su propia tolerancia.
+
+Una empresa que rota turnos define un **ciclo** —qué turnos, en qué orden y cada cuántos días— y el turno de cada día se calcula. No hay que cargar semana por semana, y el calendario sigue siendo correcto en cualquier fecha futura. La posición dentro del ciclo es lo que mantiene a dos compañeros en turnos distintos rotando juntos.
+
+La rotación puntual se programa con vigencia y le gana al ciclo, así que al vencer la persona vuelve sola a donde estaba: nadie tiene que acordarse de deshacer el cambio. Los días que su turno no cubre figuran como **franco**, no como ausencia — es una diferencia que se paga.
+
+Decidir si una marca abre una jornada o cierra la anterior no se hace por fecha (el turno nocturno reparte una jornada entre dos días) sino por el **descanso**: se camina hacia atrás y se corta en el primer hueco que constituya descanso entre jornadas.
+
+---
+
+## Aislamiento entre empresas alojadas
+
+Cuatro capas lo sostienen, y cada una tapa lo que la anterior deja pasar:
+
+| Capa | Qué hace |
+| --- | --- |
+| Esquema | Catorce tablas de datos llevan `empresa_id` |
+| Tiempo de ejecución | Una conexión sin empresa activa **falla**, no devuelve todo |
+| Verificador estático | Una consulta nueva sin acotar rompe la build |
+| PostgreSQL | Políticas de seguridad por fila: al `WHERE` olvidado no le devuelve las filas de todos, le devuelve ninguna |
+
+Ninguna sesión puede ver dos clientes a la vez. El cliente se resuelve por subdominio (`acme.midominio.com.py`) y cada empresa tiene su cupo de empleados activos, que se comprueba al dar de alta.
+
+> Las políticas por fila **no alcanzan a un superusuario**: PostgreSQL lo exceptúa siempre. Ver [Rol del servicio](#rol-del-servicio-aislamiento-en-vigor).
 
 ---
 
 ## Stack Tecnológico y Módulos Core
 
 ### Frontend & Interfaces
-Ambas interfaces comparten un lenguaje visual llamado **Planilla**, tomado del objeto que este software reemplaza: la hoja rayada de asistencia. La jerarquía la dan filetes tipográficos y espacio en blanco —ni una esquina redondeada ni una sombra proyectada en toda la hoja de estilos—, toda cifra va monoespaciada y tabular, y el color aparece sólo cuando significa algo. Se define una sola vez por tema y `tests/test_paleta.py` lo verifica en tres frentes: contraste WCAG AA, paridad entre web y escritorio, y deriva del lenguaje.
+
+Ambas interfaces comparten un lenguaje visual llamado **Planilla**, tomado del objeto que este software reemplaza: la hoja rayada de asistencia. La jerarquía la dan filetes tipográficos y espacio en blanco —ni una esquina redondeada ni una sombra proyectada en toda la hoja de estilos—, toda cifra va monoespaciada y tabular, y el color aparece solo cuando significa algo. Se define una vez por tema y `tests/test_paleta.py` lo verifica en tres frentes: contraste WCAG AA, paridad entre web y escritorio, y deriva del lenguaje.
 
 *   **Kiosco de Escritorio:** `CustomTkinter` con gráficos en vivo por `matplotlib`, temas claro/oscuro y paleta tokenizada.
-*   **Web (Kiosco + Portal + Gestión):** `FastAPI` + `WebSockets` sirviendo una interfaz en archivos propios (`src/static`). El portal del empleado se ordena por lo que la persona realmente pregunta: **si marcó hoy**, cómo viene el mes en un registro día por día, cuántos días le quedan, y un pedido de corrección que nace desde el día que se toca. El panel de RRHH abre por **excepción** —lo que está sin resolver— y no por contadores de plantilla.
-*   **Turnos reales:** un turno que entra un día y sale al siguiente se cierra normalmente —la acción se decide por el estado del empleado, no por el calendario— y una entrada que nadie cerró no lo deja trabado: pasadas 18 horas se marca como sin cierre, se avisa a Recursos Humanos y la hora se repone por el circuito de correcciones.
+*   **Web (Kiosco + Portal + Gestión):** `FastAPI` + `WebSockets` sirviendo una interfaz en archivos propios (`src/static`). El portal del empleado se ordena por lo que la persona realmente pregunta: **si marcó hoy**, cómo viene el mes día por día, cuántos días le quedan, cómo rota su turno, y un pedido de corrección que nace desde el día que se toca. El panel de RRHH abre por **excepción** —lo que está sin resolver— y no por contadores de plantilla.
+*   **Turnos reales:** un turno que entra un día y sale al siguiente se cierra normalmente —la acción se decide por el estado del empleado, no por el calendario— y una entrada que nadie cerró no lo deja trabado: pasadas 18 horas se marca como sin cierre, se avisa a RRHH y la hora se repone por el circuito de correcciones.
 *   **Legajo con historia:** la antigüedad sale de la **fecha de ingreso del contrato**, de la que dependen los días de vacaciones y los meses de aguinaldo. La baja es lógica: el empleado pierde el acceso y sale de la nómina, pero sus marcajes y comprobantes se conservan para el archivo laboral.
-*   **Autoservicio real:** el empleado pide cualquiera de los **32 artículos** del reglamento desde el portal, con su saldo y sus condiciones a la vista; el pedido se valida contra el artículo invocado antes de guardarse y una solicitud pendiente ya compromete la cuota. Aprobar emite la justificación y su PDF sin ningún paso extra. La **planilla de horas extraordinarias** (Art. 232/233/234) y la **constancia de asistencia** se componen solas desde los marcajes liquidados: ningún formulario se llena a mano.
+*   **Autoservicio real:** el empleado pide cualquiera de los 32 artículos desde el portal, con su saldo y sus condiciones a la vista; el pedido se valida contra el artículo invocado antes de guardarse y una solicitud pendiente ya compromete la cuota. Aprobar emite la justificación y su PDF sin ningún paso extra. La **planilla de horas extraordinarias** (Art. 232/233/234) y la **constancia de asistencia** se componen solas desde los marcajes liquidados: ningún formulario se llena a mano.
 
 ### Backend, Datos y Resiliencia
-*   **Base de Datos Principal:** `PostgreSQL 14+` con esquemas de auto-migración y pistas de auditoría mediante tipos de datos nativos `JSONB`.
-*   **Arquitectura Tolerante a Fallos:** Si el servidor central PostgreSQL no responde, `offline_queue.py` captura localmente las marcas en `SQLite`. El componente `sync_worker.py` procesa la cola de fondo de manera **idempotente** (vía `sync_id` único), preservando el *timestamp* original de la marca sin duplicar registros.
+
+*   **Base de datos:** `PostgreSQL 14+`, con auditoría en `JSONB`. El esquema se aplica en un **paso explícito de despliegue**, nunca dentro del ciclo de una petición: el DDL toma locks exclusivos de tabla.
+*   **Sin conexión no se pierde una marca:** si PostgreSQL no responde, `offline_queue.py` guarda la marca en `SQLite` local. Cada marca se **firma con HMAC-SHA256** sobre todo lo que el servidor central va a creer, con la clave fuera del archivo: quien edite la base local a mano no puede fabricar una marca válida. Lo que no verifica se aparta con su motivo y avisa a RRHH, en vez de desaparecer en silencio.
+*   **Reposición idempotente:** `sync_worker.py` procesa la cola en segundo plano preservando el *timestamp* original, sin duplicar registros (`sync_id` único) y con techo de reintentos — una marca que nunca va a entrar deja de consumir el ciclo cada quince segundos para siempre.
+*   **Alertas en vivo entre procesos:** el aviso se difunde por `LISTEN`/`NOTIFY` de PostgreSQL, así que llega a los clientes conectados a **cualquier** worker y no solo al que la originó. Se eligió la base y no una pieza nueva porque la base ya es dependencia.
+*   **Pool de conexiones** en el proceso que atiende tráfico, con la empresa borrada al devolver la conexión: una conexión reutilizada no hereda el cliente anterior.
 
 ### Hardware & Visión Artificial
-*   **Validación Biométrica:** Integración directa por protocolo `TCP/IP` (Puerto 4370) con relojes biométricos `ZKTeco` para sincronización de personal. Las plantillas faciales se guardan **cifradas con AES-256-GCM** y se destruyen con la baja del empleado, conforme a la Ley N.º 6534/2020 de protección de datos personales.
-*   **Seguridad y Auditoría:** Validación facial integrada con `OpenCV` (algoritmo LBPH) con **tres veredictos**, no dos. Un rostro que no coincide bloquea siempre y dispara una alerta de **FRAUDE**. Lo que el motor no puede verificar —sin foto de referencia, sin cámara— nunca se da por verificado: según `BIOMETRIA_OBLIGATORIA`, se bloquea o se registra en `marcajes.verificacion_facial` como *No verificada* con aviso a RRHH.
+
+*   **Relojes biométricos:** comunicación directa por `TCP/IP` (puerto 4370) con equipos `ZKTeco` para sincronizar el personal.
+*   **Validación facial:** `OpenCV` (LBPH) con **tres veredictos**, no dos. Un rostro que no coincide bloquea siempre y dispara alerta de **fraude**. Lo que el motor no puede verificar —sin foto de referencia, sin cámara— nunca se da por verificado: según `BIOMETRIA_OBLIGATORIA` se bloquea o se registra como *No verificada* con aviso a RRHH.
+*   **Prueba de vida opcional:** con `BIOMETRIA_PRUEBA_VIDA` encendida el kiosco sortea un gesto —acercarse, girar— y lo exige antes de capturar. Una foto quieta no pasa. Es un **disuasivo, no una prueba**: ver [Límites conocidos](#límites-conocidos).
+*   **Plantillas cifradas:** `AES-256-GCM` con el `user_id` como dato asociado, y la clave fuera de la base. Mover una foto de una fila a otra la vuelve ilegible.
 
 ---
 
@@ -49,26 +85,28 @@ Ambas interfaces comparten un lenguaje visual llamado **Planilla**, tomado del o
 
 ```text
 src/
-├── app.py            # Interfaz de Línea de Comandos (CLI) administrativa
-├── gui.py            # Kiosco y Panel de Gestión de Escritorio (CustomTkinter)
+├── app.py            # CLI administrativa
+├── gui.py            # Kiosco y Panel de Gestión de escritorio (CustomTkinter)
 ├── web_server.py     # API del kiosco, el portal y el panel (FastAPI + WebSockets)
 ├── static/           # Interfaz web: index.html, estilos.css y portal.js
 ├── migrate.py        # Paso de despliegue: aplica el esquema antes de servir tráfico
-├── database.py       # Capa de datos PostgreSQL, esquema y auditorías JSONB
-├── auth.py           # Autenticación unificada, Control de Acceso Basado en Roles (RBAC) y JWT
+├── database.py       # Capa de datos PostgreSQL, esquema, aislamiento y auditoría JSONB
+├── auth.py           # Autenticación, control de acceso por roles (RBAC) y JWT
 ├── clock_engine.py   # Motor de evaluación horaria y desglose legal paraguayo
-├── turnos.py         # Horarios por empleado: tramos, días, rotación con vigencia
-├── reglamento.py     # Lógica e interpretación de cuotas del catálogo de permisos
-├── reports.py        # Módulo generador de reportes (PDF, XLSX, CSV, Aguinaldos)
-├── offline_queue.py  # Gestor de cola transaccional local (SQLite)
-├── sync_worker.py    # Trabajador en segundo plano para sincronización idempotente
-├── notifications.py  # Bus de eventos en tiempo real y alertas SMTP
-├── facial.py         # Módulo de reconocimiento facial y visión artificial
-└── biometric_sync.py # Driver de comunicación TCP con relojes ZKTeco
+├── turnos.py         # Horarios por empleado: tramos, días, rotación y ciclos
+├── reglamento.py     # Catálogo de permisos, cuotas y conteo en días hábiles
+├── reports.py        # Reportes y formularios (PDF, XLSX, CSV, aguinaldos)
+├── biometria.py      # Cifrado en reposo de las plantillas faciales (AES-256-GCM)
+├── facial.py         # Reconocimiento facial, veredictos y prueba de vida
+├── biometric_sync.py # Driver TCP con relojes ZKTeco
+├── offline_queue.py  # Cola local firmada (SQLite + HMAC)
+├── sync_worker.py    # Reposición idempotente en segundo plano
+├── rate_limit.py     # Freno a la fuerza bruta en autenticación
+└── notifications.py  # Bus de alertas en vivo (LISTEN/NOTIFY) y correo SMTP
 
 tests/                # Suite de regresión y automatización (CI) + setup_ci.py
 data/                 # Modelos Haar Cascade para detección facial
-.github/workflows/    # Pipeline de Integración y Despliegue Continuo (CI/CD)
+.github/workflows/    # Pipeline de integración y despliegue continuo
 ```
 
 ---
@@ -88,14 +126,14 @@ cd sistema-marcacion-empresarial
 
 # 2. Configurar el entorno virtual de Python
 python -m venv .venv
-source .venv/bin/activate  # En Windows use: .venv\Scripts\activate
+source .venv/bin/activate  # En Windows: .venv\Scripts\activate
 
-# 3. Instalar dependencias del sistema
+# 3. Instalar dependencias
 pip install -r requirements.txt
 ```
 
 ### Configuración de Variables de Entorno
-Cree un archivo `.env` en la raíz del proyecto basándose en las siguientes variables obligatorias:
+Cree un archivo `.env` en la raíz del proyecto:
 ```ini
 DB_HOST=localhost
 DB_PORT=5432
@@ -154,6 +192,9 @@ DB_POOL_MAX=10
 > ```bash
 > python -c "import secrets; print(secrets.token_urlsafe(48))"
 > ```
+> `COMPROBANTE_CLAVE` firma además las marcas de la cola sin conexión. Cambiarla invalida lo que haya quedado encolado sin reponer.
+
+> **`BIOMETRIA_CLAVE` vive fuera de la base a propósito**, para que un backup robado no traiga con qué abrirlo. La contracara es que **restaurar la base sin la clave no recupera las fotos**: guardarla junto al backup anula la protección, no guardarla en ningún lado pierde el dato.
 
 ### Rol del servicio (aislamiento en vigor)
 
@@ -163,35 +204,36 @@ Las políticas de aislamiento por fila **no alcanzan a un superusuario**: Postgr
 python src/migrate.py rol-app
 ```
 
-Imprime el `DB_USER` y el `DB_PASSWORD` que van en el `.env` del servicio. El rol administrador se sigue usando solo para migrar. `python src/migrate.py` informa en cada corrida si el aislamiento está activo o inerte.
+Imprime el `DB_USER` y el `DB_PASSWORD` que van en el `.env` **del servicio**; el rol administrador se sigue usando solo para migrar, porque el rol restringido no puede —ni debe— alterar tablas. El nombre y la contraseña se pueden fijar con `DB_APP_USER` y `DB_APP_PASSWORD`. El comando es idempotente: sobre un rol que ya existe refresca los permisos sin rotar la contraseña, para no cortarle el acceso a un servicio en marcha.
+
+`python src/migrate.py` informa en cada corrida si el aislamiento está activo o inerte.
 
 ### Inicialización de Componentes
-El esquema se aplica en un paso explícito, previo a levantar cualquier proceso que atienda tráfico. Las migraciones toman locks exclusivos de tabla, así que no pueden correr dentro del ciclo de una petición:
 ```bash
 # 1. Aplicar el esquema (crea la base si no existe)
 python src/migrate.py
 
-# 2. Ejecutar la CLI Administrativa
+# 2. Ejecutar la CLI administrativa
 python src/app.py
 
-# Lanzar la Interfaz Gráfica de Escritorio (Kiosco + Panel)
+# Interfaz gráfica de escritorio (kiosco + panel)
 python src/gui.py
 
-# Iniciar el Servidor Web (Acceso en http://127.0.0.1:8000)
+# Servidor web (http://127.0.0.1:8000)
 python src/web_server.py
 ```
-*Credenciales de demostración predeterminadas:*
+*Credenciales de demostración:*
 *   **Administrador / RRHH:** `admin` / `admin123`
-*   **Empleado Funcionario:** `juan` / `clave123`
+*   **Empleado funcionario:** `juan` / `clave123`
 
 ---
 
 ## Pruebas Automatizadas (CI)
 
-La suite de pruebas incluye tests de humo de regresión funcional y simulación de interfaces gráficas sin entorno de visualización real (*headless*):
+Veinticinco conjuntos, entre pruebas de regresión funcional y simulación de interfaces gráficas sin pantalla real (*headless*):
 
 ```bash
-python tests/setup_ci.py             # Siembra de datos iniciales en DB limpia
+python tests/setup_ci.py             # Siembra de datos iniciales en base limpia
 python tests/smoke_portal_js.py      # Interfaz estática: sintaxis, CSP y sin scripts embebidos
 python tests/test_motor_horario.py   # Turnos frontera: jornadas, recargos y feriados
 python tests/test_paleta.py          # Contraste WCAG, paridad web/escritorio y deriva visual
@@ -199,7 +241,7 @@ python tests/test_condicion_dia.py   # Antifraude: la tolerancia la declara RRHH
 python tests/smoke_permisos_autoservicio.py  # Pedido, cuota reservada, aprobación y PDF
 python tests/test_planilla_extras.py # Planilla de horas extra y constancia de asistencia
 python tests/test_turno_nocturno.py  # Turnos que cruzan la medianoche y jornadas sin cierre
-python tests/test_turnos.py          # Horarios por empleado, rotación, jornada partida y francos
+python tests/test_turnos.py          # Horarios por empleado, jornada partida y francos
 python tests/test_rotacion.py        # Ciclos: semana A / semana B calculada, no cargada a mano
 python tests/guardia_arrendamiento.py  # Ninguna consulta de datos de cliente sin acotar
 python tests/test_multiempresa.py    # Dos clientes alojados: ningún dato cruzado
@@ -218,16 +260,18 @@ python tests/smoke_reglamento_gui.py # GUI: justificaciones y dashboard
 python tests/smoke_web_panel.py      # Web: kiosco de navegador + panel RRHH
 ```
 
+El aislamiento entre empresas se verifica **atacándolo**: `test_multiempresa.py` crea un rol restringido, se conecta con él y lanza consultas deliberadamente sin acotar, además de un `INSERT` contra la empresa ajena. Comprobar que la política existe en `pg_policies` no dice nada; esto sí.
+
 ---
 
 ## Despliegue y Pipeline DevOps
 
-El repositorio cuenta con automatización total a través de **GitHub Actions** (`.github/workflows/deploy.yml`). Con cada `push` a la rama `main`, el pipeline ejecuta de forma asíncrona:
+Con cada `push` a `main`, **GitHub Actions** (`.github/workflows/deploy.yml`) ejecuta:
 
-1.  **Testing en Aislamiento:** Levanta un servicio transitorio de PostgreSQL 16 y corre la suite completa de pruebas. Las pruebas de la GUI de escritorio se ejecutan utilizando un servidor virtual de pantalla mediante `xvfb-run`.
-2.  **Containerización:** Construye la imagen Docker basada en `python:3.11-slim` garantizando un entorno optimizado y seguro.
-3.  **Distribución (GHCR):** Publica de forma automática el artefacto en GitHub Container Registry (`ghcr.io`).
-4.  **Continuous Deployment (Opcional):** Si se detecta el webhook secreto `RENDER_DEPLOY_HOOK`, gatilla de forma automática la actualización del entorno de producción en Render.
+1.  **Pruebas en aislamiento.** Levanta un PostgreSQL 16 transitorio, aplica el esquema sobre una base virgen y corre la suite completa. Las pruebas de la GUI de escritorio usan una pantalla virtual (`xvfb-run`).
+2.  **Contenedor.** Construye la imagen sobre `python:3.11-slim`, con un usuario sin privilegios y las migraciones fuera de los workers.
+3.  **Distribución.** Publica el artefacto en GitHub Container Registry (`ghcr.io`).
+4.  **Despliegue (opcional).** Si existe el secreto `RENDER_DEPLOY_HOOK`, gatilla la actualización en Render. Si no, el paso saltea.
 
 Para despliegues manuales en local:
 ```bash
@@ -237,9 +281,22 @@ docker run -p 8000:8000 --env-file .env marcacion
 
 ---
 
-## Documentación
+## Límites conocidos
 
-La bóveda de documentación vive en [`Sistema de Marcacion/`](Sistema%20de%20Marcacion/) (Obsidian): la **Bitácora de Implementación** resume las fases construidas con sus commits, y las notas temáticas profundizan cada módulo (motor de horas extra, reglamento, despliegue, seguridad, etc.).
+Lo que el sistema todavía no hace, dicho de frente:
+
+*   **El kiosco no tiene identidad propia.** Una marca no registra desde dónde se hizo, así que *"marqué desde casa"* no es hoy un hecho detectable. Cerrarlo pide un certificado o token por dispositivo.
+*   **La prueba de vida es un disuasivo, no una prueba.** Deja afuera el ataque habitual —una foto sostenida frente a la cámara— pero quien mueva el teléfono siguiendo la consigna pasa igual. Cerrarlo de verdad pide una cámara con infrarrojo o profundidad, o un modelo de anti-suplantación entrenado.
+*   **Nadie probó la carga.** El perfil de uso de un control de asistencia concentra todo el tráfico del día en dos ventanas de quince minutos, y no hay ninguna prueba de doscientas personas marcando en el mismo minuto.
+*   **Multi-sede sin husos propios.** La sucursal es hoy un campo del turno: alcanza para horarios por sede, no para sedes en husos horarios distintos.
+*   **El cambio de horario rige hacia adelante y no versiona el pasado.** Si se edita un turno y después se corrige una marca vieja, la corrección usa el horario nuevo.
+*   **Facturación**, fuera de alcance a propósito: el cupo por empresa existe para hacer cumplible un plan, no para cobrarlo.
 
 ---
-*Desarrollado bajo estrictos estándares normativos paraguayos. Los datos sensibles de empleados están protegidos; el archivo `.env` y los reportes generados están explícitamente ignorados en el control de versiones `.gitignore`.*
+
+## Documentación
+
+La bóveda vive en [`Sistema de Marcacion/`](Sistema%20de%20Marcacion/) (Obsidian). La **Bitácora de Implementación** resume las fases construidas con sus commits; la **Auditoría Técnica** lista los defectos encontrados, cómo se cerró cada uno y qué sigue abierto; y las notas temáticas profundizan cada módulo: motor de horas extra, turnos y rotación, reglamento, multiempresa, seguridad y despliegue.
+
+---
+*Desarrollado bajo normativa laboral paraguaya. Los datos sensibles de empleados están protegidos: el archivo `.env` y los reportes generados están ignorados en el control de versiones.*
