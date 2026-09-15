@@ -9,7 +9,7 @@ Sistema integral y resiliente para el control de asistencia laboral adaptado al 
 
 ---
 
-## ⚖️ Cumplimiento Normativo Integrado
+## Cumplimiento Normativo Integrado
 
 El núcleo de cálculo del sistema (`clock_engine.py`) procesa las marcas abstrayendo la complejidad de la legislación laboral de Paraguay:
 
@@ -24,7 +24,7 @@ La hora contra la que se mide cada llegada sale del **turno** del empleado: cada
 
 ---
 
-## 🛠️ Stack Tecnológico y Módulos Core
+## Stack Tecnológico y Módulos Core
 
 ### Frontend & Interfaces
 Ambas interfaces comparten un lenguaje visual llamado **Planilla**, tomado del objeto que este software reemplaza: la hoja rayada de asistencia. La jerarquía la dan filetes tipográficos y espacio en blanco —ni una esquina redondeada ni una sombra proyectada en toda la hoja de estilos—, toda cifra va monoespaciada y tabular, y el color aparece sólo cuando significa algo. Se define una sola vez por tema y `tests/test_paleta.py` lo verifica en tres frentes: contraste WCAG AA, paridad entre web y escritorio, y deriva del lenguaje.
@@ -45,7 +45,7 @@ Ambas interfaces comparten un lenguaje visual llamado **Planilla**, tomado del o
 
 ---
 
-## 📂 Estructura del Proyecto
+## Estructura del Proyecto
 
 ```text
 src/
@@ -73,7 +73,7 @@ data/                 # Modelos Haar Cascade para detección facial
 
 ---
 
-## 🚀 Instalación y Ejecución Local
+## Instalación y Ejecución Local
 
 ### Requisitos Previos
 *   Python 3.11+
@@ -186,7 +186,7 @@ python src/web_server.py
 
 ---
 
-## 🧪 Pruebas Automatizadas (CI)
+## Pruebas Automatizadas (CI)
 
 La suite de pruebas incluye tests de humo de regresión funcional y simulación de interfaces gráficas sin entorno de visualización real (*headless*):
 
@@ -220,7 +220,7 @@ python tests/smoke_web_panel.py      # Web: kiosco de navegador + panel RRHH
 
 ---
 
-## 🐳 Despliegue y Pipeline DevOps
+## Despliegue y Pipeline DevOps
 
 El repositorio cuenta con automatización total a través de **GitHub Actions** (`.github/workflows/deploy.yml`). Con cada `push` a la rama `main`, el pipeline ejecuta de forma asíncrona:
 
@@ -237,7 +237,7 @@ docker run -p 8000:8000 --env-file .env marcacion
 
 ---
 
-## 📚 Documentación
+## Documentación
 
 La bóveda de documentación vive en [`Sistema de Marcacion/`](Sistema%20de%20Marcacion/) (Obsidian): la **Bitácora de Implementación** resume las fases construidas con sus commits, y las notas temáticas profundizan cada módulo (motor de horas extra, reglamento, despliegue, seguridad, etc.).
 
