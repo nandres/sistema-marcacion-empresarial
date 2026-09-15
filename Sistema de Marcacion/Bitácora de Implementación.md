@@ -255,6 +255,47 @@ Se verificó resolviendo el archivo contra el objetivo del runner (`--python-ver
 
 La consecuencia práctica es que, de acá en adelante, el rojo de Actions vuelve a significar algo.
 
+### Fase 22 · De "funciona" a "se puede entregar" (2026-09-15)
+
+Con la auditoría sin hallazgos abiertos, lo que faltaba ya no era código sino
+poder poner el sistema en manos de alguien. Cuatro cosas, y ninguna estaba en
+ninguna lista.
+
+**No había instalador.** Para poner el kiosco en la PC de un mostrador había
+que instalarle Python, clonar el repositorio y correr un script. Ahora se
+empaqueta en una carpeta que se copia y se ejecuta. Empaquetarlo destapó dos
+defectos que solo existen congelado: `load_dotenv` buscaba el `.env` relativo
+al código —que en un ejecutable apunta a la carpeta temporal de extracción, así
+que el kiosco nunca habría encontrado la configuración del cliente— y
+`offline_queue` derivaba su ruta de la misma aritmética. Esa segunda es peor:
+en empaquetado de carpeta cae al lado del ejecutable **por casualidad**, y en
+archivo único iría al temporal que se borra al cerrar, con las marcas que
+todavía no se repusieron adentro.
+
+**No había procedimiento de respaldo**, para un sistema que produce prueba
+legal de sueldos. Y un `pg_dump` a secas no alcanzaba: restaurar con otra
+`BIOMETRIA_CLAVE` deja las fotos ilegibles y eso no se nota al restaurar sino
+semanas después. Cada respaldo guarda la huella de la clave con que se hizo y
+la restauración compara antes de tocar nada.
+
+**El pico de la mañana rechazaba tres de cada cuatro marcas.** Lo encontró la
+prueba de carga, escrita para responder una incógnita y no para buscar un
+defecto. Con cuarenta personas marcando a la vez, treinta recibían 500 —
+exactamente las que excedían `DB_POOL_MAX`, porque `getconn` no espera. Estaba
+así desde que se agregó el pool, con la suite entera en verde, porque ninguna
+prueba hacía dos cosas al mismo tiempo.
+
+**Una marcación no registraba su origen.** El fraude central de un control de
+asistencia es marcar desde otro lado, y era una afirmación contra otra. Cada
+puesto se identifica ahora con un token propio, guardado hasheado, y el puesto
+se resuelve antes que la persona: de él sale la empresa, con más certeza que
+el nombre del host.
+
+**Lo que esto corrige de la documentación.** La guía de puesta en marcha tenía
+una tabla de *qué NO está incluido* que listaba una sola cosa y afirmaba que
+nada bloqueaba una venta. Era falsa en cuatro puntos, y es la tabla que alguien
+lee antes de prometerle algo a un cliente.
+
 ## Cómo ejecutar
 
 | Componente | Comando |
@@ -353,6 +394,15 @@ El motor horario era la brecha de mayor valor —lógica pura, sin dependencias,
 - **Una condición no puede leer un secreto.** Es una restricción de diseño razonable —el resultado de la condición se ve en los logs—, pero falla de la forma más cara posible: en vez de ignorar la línea, tumba el archivo entero.
 - **Un secreto sin respaldo falla fuerte, y eso es lo que se quiere.** La clave biométrica ausente rompió dos suites en el primer cifrado. Si hubiera tenido un valor por defecto, CI habría pasado en verde cifrando con una clave conocida, que es exactamente el escenario contra el que se diseñó.
 - **`pipefail` no es cosmético.** Sin él, cualquier comprobación escrita como `comando | grep` aprueba mientras el `grep` encuentre lo que busca, aunque el comando de la izquierda haya fallado.
+
+### Agregadas por el paso a producto (2026-09-15)
+
+- **Una suite verde no dice nada sobre concurrencia.** Ninguna prueba hacía dos cosas al mismo tiempo, así que el pool agotándose no aparecía. Una prueba de carga no mide velocidad: mide una propiedad distinta —que nada se pierda ni se duplique con todo pasando a la vez— que no se deduce de las demás.
+- **Empaquetar es una prueba de integración que ninguna otra hace.** Dos defectos latentes salieron a la luz solo al congelar la aplicación, y los dos eran de la misma familia: rutas derivadas de `__file__`, que en un ejecutable apunta a otro lado.
+- **Que funcione por casualidad no es que funcione.** La cola sin conexión caía en el lugar correcto por una propiedad del modo de empaquetado elegido. Nadie lo había decidido, así que nadie lo habría defendido al cambiarlo.
+- **Una bandera que hace dos cosas termina desactivando la que importa.** `--forzar` saltaba la confirmación por teclado y, de paso, la comprobación de la clave biométrica. Quien automatizara una restauración habría perdido la protección sin enterarse.
+- **La tabla de lo que falta se corrige al agregar, no al vender.** La de puesta en marcha decía que nada bloqueaba una venta mientras faltaban el instalador, el respaldo, el origen de las marcas y el pico de la mañana.
+- **Contar filas con el mismo código que crea el esquema no cuenta nada.** La verificación de una restauración usaba `initialize()`, que crea y siembra la base al conectarse: una restauración fallida terminaba describiendo un esquema recién hecho como si fuera un respaldo a medias.
 
 ## Enlaces
 

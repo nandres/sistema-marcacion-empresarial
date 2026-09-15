@@ -43,6 +43,11 @@ datos de las capturas son inventados.*
   subdominio, cada uno con su cupo de empleados.
 - **Sin conexión.** El kiosco sigue registrando y repone al volver, sin
   duplicar y sin perder la hora original.
+- **Origen de cada marca.** Cada puesto se identifica con un token propio, así
+  que una marcación registra desde dónde se hizo y *"marqué desde casa"* pasa
+  a ser comprobable.
+- **Respaldo verificable.** El volcado se compara contra su manifiesto al
+  restaurar, y avisa si la clave biométrica no es la que cifró esas fotos.
 
 ### Cómo se ve
 
@@ -267,7 +272,7 @@ python tests/test_multiempresa.py  # dos clientes alojados, ningún dato cruzado
 python tests/guardia_arrendamiento.py  # ninguna consulta de cliente sin acotar
 ```
 
-Son veinticinco conjuntos en total; el pipeline los corre todos. La lista
+Son veintiocho conjuntos en total; el pipeline los corre todos. La lista
 completa está en `.github/workflows/deploy.yml`, que es el único lugar donde
 conviene mantenerla.
 
@@ -346,19 +351,18 @@ comentarios de código y los mensajes de commit también.
 
 ## Estado
 
-Las veinticinco suites pasan en integración continua, sobre un PostgreSQL
-transitorio, un esquema creado desde cero y una pantalla virtual para las dos
-interfaces de escritorio. El pipeline construye la imagen y la publica en el
-registro de contenedores.
+Las suites pasan en integración continua, sobre un PostgreSQL transitorio, un
+esquema creado desde cero y una pantalla virtual para las dos interfaces de
+escritorio. El pipeline construye la imagen y la publica en el registro de
+contenedores, y etiquetar una versión arma el instalador del kiosco.
+
+El pico de marcación está medido: **150 personas marcando en el mismo instante
+entran todas, en menos de cinco segundos**, sin perder ni duplicar ninguna, en
+un solo proceso. El techo de unas 32 por segundo es `bcrypt` verificando
+contraseñas, caro por diseño, así que escala con procesos y CPU.
 
 Lo que falta, dicho de frente:
 
-- **El kiosco no tiene identidad propia.** Una marca no registra desde dónde
-  se hizo, así que *"marqué desde casa"* no es hoy un hecho detectable.
-  Cerrarlo pide un certificado o token por dispositivo.
-- **Nadie probó la carga.** Un control de asistencia concentra todo el tráfico
-  del día en dos ventanas de quince minutos, y no hay ninguna prueba de
-  doscientas personas marcando en el mismo minuto.
 - **Multi-sede sin husos propios.** La sucursal es hoy un campo del turno:
   alcanza para horarios por sede, no para sedes en husos distintos.
 - **El cambio de horario rige hacia adelante y no versiona el pasado.** Si se

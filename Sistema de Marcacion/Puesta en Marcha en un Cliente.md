@@ -115,8 +115,22 @@ Decirlo por adelantado evita una venta mal hecha.
 | Falta | Consecuencia | Detalle |
 | --- | --- | --- |
 | **Prueba de vida a prueba de video** | El gesto que pide el kiosco deja afuera una foto quieta, pero no a quien mueva el teléfono siguiendo la consigna. Lo cierra una cámara con infrarrojo o un modelo anti-suplantación | P1-2b |
+| **Sedes en husos horarios distintos** | La sucursal es un campo del turno: alcanza para horarios por sede, no para sedes en husos distintos. Con todas las sucursales en Paraguay no se nota | — |
+| **Versionado del horario** | Si se edita un turno y después se corrige una marca vieja, la corrección usa el horario nuevo. Los marcajes ya liquidados conservan lo suyo | [[Turnos y Rotación de Horarios]] |
 
-Lo que queda en esa lista es de fondo y no bloquea ninguna venta: la prueba de vida disuade pero no prueba, y el subdominio por cliente es comodidad, no aislamiento.
+Ninguna de las tres bloquea una venta en Paraguay, pero conviene decirlas
+antes y no después.
+
+> [!warning] Esta tabla se quedó corta una vez
+> Hasta el 2026-09-15 listaba solo la prueba de vida y afirmaba que nada de lo
+> que faltaba bloqueaba una venta. Era falso: no había instalador —para poner
+> el kiosco en una PC había que instalarle Python y clonar el repositorio—, no
+> había procedimiento de respaldo, una marcación no registraba su origen, y el
+> pico de la mañana rechazaba tres de cada cuatro marcas. Cuatro cosas que sí
+> bloqueaban, en la tabla que existe justamente para no vender de más.
+>
+> La lección no es la lista sino el hábito: una tabla de *lo que falta* se
+> corrige cuando se agrega algo, no cuando alguien la lee antes de una venta.
 
 ## Verificación post-instalación
 

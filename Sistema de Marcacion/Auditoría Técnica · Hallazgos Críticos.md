@@ -453,6 +453,52 @@ Al arrancar por primera vez aparecieron dos defectos que el workflow había esta
 
 ---
 
+### P0-6 · El pico de la mañana rechazaba tres de cada cuatro marcas ✅ corregido
+
+> Cerrado el 2026-09-15. La petición espera un lugar en el pool en vez de recibir un error.
+
+Con cuarenta personas marcando a la vez, treinta recibían **500**. El número no era casual: pasaban exactamente `DB_POOL_MAX`. `psycopg2.pool.getconn` no espera —cuando el pool llega a su tope lanza excepción en el acto—, así que las primeras diez marcas entraban y el resto se perdía.
+
+Es la peor forma posible de quedarse corto. Una petición dura milisegundos y la conexión se libera enseguida, de modo que la espera habría sido imperceptible; pero una marca rechazada no se recupera sola, y quien la intentó ya se fue a trabajar. El pico de un control de asistencia concentra todo el tráfico del día en dos ventanas de quince minutos: era el único momento que importaba y el único que nunca se había probado.
+
+Ahora la petición espera hasta `DB_POOL_ESPERA` segundos antes de rendirse. El tope sigue existiendo para que una base caída se note como una caída y no como un servidor colgado.
+
+Se resuelve por sondeo y no con un semáforo a propósito: un semáforo que se desincronice del pool —una devolución que no ocurre por una excepción en el camino— deja el proceso bloqueado para siempre, que es peor que el problema que viene a resolver.
+
+**Medido después del arreglo**, en un solo proceso: 150 personas marcando en el mismo instante entran todas, en 4,7 s, sin perder ni duplicar ninguna. El techo de unas 32 por segundo es `bcrypt` verificando contraseñas, caro por diseño, así que escala con procesos y CPU y no con el tamaño del pool.
+
+**Lección de método.** El defecto estaba desde que se agregó el pool y la suite entera pasaba en verde, porque ninguna prueba hacía dos cosas al mismo tiempo. Una prueba de carga no mide velocidad: mide corrección bajo concurrencia, que es una propiedad distinta y no se deduce de las otras.
+
+---
+
+### P2-7 · Una marcación no registraba desde dónde se hizo ✅ corregido
+
+> Cerrado el 2026-09-15. Cada kiosco se identifica con un token propio.
+
+*"Marqué desde casa"* quedaba en una afirmación contra otra. Para un producto cuyo trabajo es certificar presencia, el origen de la marca no es un dato accesorio: es el fraude central.
+
+Cada puesto se da de alta y recibe un token, que se entrega una sola vez; en la base queda su SHA-256, por el mismo motivo que una contraseña. El puesto se identifica **antes** que la persona, y de él sale la empresa: un token dice de qué cliente es el kiosco con más certeza que el nombre del host, que cualquiera puede fijar.
+
+Eso obligó a una segunda lectura que cruza empresas, por el mismo motivo que el login, y vive donde la primera: en una función con los privilegios de su dueño, para que la excepción quede escrita en el esquema y no repartida por el código.
+
+Revocar no borra. Un puesto dado de baja deja de servir pero conserva el origen de las marcas que ya registró, que es justamente el dato que el módulo existe para guardar.
+
+`DISPOSITIVO_OBLIGATORIO` exige que toda marca venga de un puesto habilitado. Viene apagada: una instalación existente no tiene puestos cargados, y encenderla de golpe dejaría a todos sin poder marcar.
+
+---
+
+### P3-13 · No había procedimiento de respaldo ✅ corregido
+
+> Cerrado el 2026-09-15. `src/respaldo.py`, con el viaje redondo probado en CI.
+
+El sistema produce prueba legal de sueldos y no tenía forma documentada de respaldarse ni de restaurarse. Un `pg_dump` a secas tampoco alcanzaba: las plantillas faciales se cifran con `BIOMETRIA_CLAVE`, que vive fuera de la base a propósito, así que **restaurar con otra clave deja las fotos ilegibles** — y eso no se descubre al restaurar sino semanas después, cuando alguien no puede marcar.
+
+Cada respaldo guarda al lado la huella de la clave con que se hizo y los recuentos de siete tablas testigo. La restauración compara la huella antes de tocar nada y después contrasta lo que quedó contra el manifiesto, en vez de confiar en el código de salida de `pg_restore`, que devuelve distinto de cero por avisos que no son fallas.
+
+Escribir la prueba encontró que `--forzar` hacía dos cosas a la vez: saltear la confirmación por teclado y saltear la comprobación de la clave. Quien automatizara una restauración para no quedarse esperando un `input` desactivaba sin querer la única protección que justifica todo el diseño. Van separadas.
+
+---
+
 ## Prioridad de remediación sugerida
 
 | Orden | Trabajo | Cierra | Estado |
@@ -470,6 +516,8 @@ Al arrancar por primera vez aparecieron dos defectos que el workflow había esta
 | 10 | Aislamiento multiempresa: `empresa_id`, fallo cerrado, guardia estática y RLS en PostgreSQL | — | ✅ hecho |
 | 11 | Cookie `HttpOnly` y bus de alertas fuera del proceso | P3-2, P3-4 | ✅ hecho |
 | 12 | Pipeline que arranca: contexto válido en el `if`, clave biométrica en CI y cabeceras medidas sobre un GET | P3-12 | ✅ hecho |
+| 13 | Entregable: instalador del kiosco, despliegue en servidor propio y respaldo verificable | P3-13 | ✅ hecho |
+| 14 | El pico de marcación y el origen de cada marca | P0-6, P2-7 | ✅ hecho |
 
 El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].
 
