@@ -36,3 +36,7 @@ desktop.ini
 # Editor
 .idea/
 .vscode/
+
+# Empaquetado del kiosco
+build/
+dist/

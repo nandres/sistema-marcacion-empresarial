@@ -1,0 +1,5 @@
+# Herramientas de desarrollo y empaquetado. No hacen falta para correr el
+# sistema: el instalador del kiosco se arma con estas, el servicio no.
+-r requirements.txt
+
+pyinstaller>=6.10

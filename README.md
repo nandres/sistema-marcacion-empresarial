@@ -208,6 +208,55 @@ Usuarios de demostración: `admin` / `admin123` y `juan` / `clave123`.
 > bloquean entre sí. El contenedor lo respeta: migra una vez y recién después
 > arranca gunicorn.
 
+## Instalador del kiosco
+
+El kiosco de escritorio se entrega empaquetado: el cliente no instala Python
+ni clona nada.
+
+```bash
+pip install -r requirements-dev.txt
+pyinstaller empaquetado/kiosco.spec --noconfirm
+```
+
+Queda una carpeta en `dist/Sistema de Marcacion/`. Se copia a la PC del
+mostrador y se crea un `.env` **junto al ejecutable** con los datos de
+conexión. El programa lo busca ahí primero, antes que en cualquier otro lado.
+
+Es una carpeta y no un archivo único a propósito. Un ejecutable único
+descomprime OpenCV y matplotlib en un temporal en cada arranque —se nota en
+una PC de mostrador— y, peor, deja la cola sin conexión en ese temporal: al
+cerrar el programa se borraría junto con las marcas que todavía no se
+repusieron, que es exactamente lo que la cola existe para evitar.
+
+Etiquetar una versión (`git tag v1.2.0 && git push --tags`) construye el
+ejecutable en Windows, comprueba que el modelo de detección facial haya
+viajado adentro, y publica un release en borrador con el zip y su `sha256`.
+
+> **Si el kiosco no abre al hacer doble clic**, dejó el motivo en
+> `error-al-arrancar.txt`, junto al ejecutable. Una aplicación de ventana sin
+> consola que falla al arrancar no muestra nada, y "no pasa nada" no se puede
+> diagnosticar por teléfono.
+
+## Respaldo
+
+```bash
+python src/respaldo.py crear
+python src/respaldo.py verificar respaldos/marcacion-AAAAMMDD-HHMMSS.dump
+python src/respaldo.py restaurar respaldos/marcacion-AAAAMMDD-HHMMSS.dump
+```
+
+Cada respaldo guarda al lado un manifiesto con la fecha, los recuentos de las
+tablas que importan y la **huella** de `BIOMETRIA_CLAVE` —su SHA-256 truncado,
+no la clave—. Al restaurar se compara: si la clave no es la del respaldo, se
+detiene antes de tocar nada en lugar de dejar fotos que nadie va a poder
+descifrar. Después contrasta lo que quedó contra el manifiesto, porque
+`pg_restore` devuelve código distinto de cero por avisos que no son fallas.
+
+> **Un respaldo de la base no alcanza para volver a arrancar.** Falta
+> `BIOMETRIA_CLAVE`, que vive fuera de la base justamente para que un volcado
+> robado no sirva. Guardala en otro lugar que el respaldo: juntos entregan los
+> rostros de toda la plantilla; separados, ninguno sirve solo.
+
 ## Comandos
 
 ```bash

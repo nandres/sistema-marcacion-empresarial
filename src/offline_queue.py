@@ -20,16 +20,30 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import sys
 import sqlite3
 import threading
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-RUTA_POR_DEFECTO: str = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "marcaciones_offline.db",
-)
+
+def _carpeta_de_datos() -> str:
+    """Dónde vive la cola: junto al programa, no junto al código.
+
+    Empaquetado, ``__file__`` apunta a la carpeta donde el ejecutable
+    descomprime sus módulos. Derivar la ruta de ahí funciona por casualidad
+    mientras el empaquetado sea de carpeta, y deja de funcionar en silencio si
+    alguna vez pasa a archivo único: esa carpeta se borra al cerrar, y con ella
+    las marcas que todavía no se repusieron. Que es exactamente lo que esta
+    cola existe para que no pase.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+RUTA_POR_DEFECTO: str = os.path.join(_carpeta_de_datos(), "marcaciones_offline.db")
 
 VARIABLE_CLAVE: str = "COMPROBANTE_CLAVE"
 """Secreto con el que se firma la cola. Es el mismo con el que se firman los

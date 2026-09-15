@@ -13,6 +13,7 @@ Responsabilidades:
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from datetime import datetime, time, timedelta
 from pathlib import Path
@@ -117,6 +118,22 @@ class SinEmpresa(RuntimeError):
 
 
 
+def _raices_de_configuracion() -> List[Path]:
+    """Dónde buscar el ``.env``, en orden de preferencia.
+
+    Empaquetado, ``__file__`` apunta a la carpeta temporal donde el ejecutable
+    se descomprime, que se borra al salir: buscar ahí no encuentra nunca la
+    configuración del cliente y, si la encontrara, sería una copia que viajó
+    dentro del instalador. Por eso lo primero en ese caso es el directorio del
+    ejecutable, que es donde el instalador deja el archivo para que se edite.
+    """
+    raices: List[Path] = []
+    if getattr(sys, "frozen", False):
+        raices.append(Path(sys.executable).resolve().parent)
+    raices.append(Path(__file__).resolve().parent.parent)
+    return raices
+
+
 def load_dotenv(path: str = ".env") -> None:
     """Carga las variables ``KEY=VALUE`` del archivo indicado al entorno.
 
@@ -124,12 +141,18 @@ def load_dotenv(path: str = ".env") -> None:
     y descarta comentarios y líneas vacías. Si la ruta relativa no existe
     en el directorio actual, cae a la raíz del proyecto: el archivo vive
     junto a ``src/`` y el directorio de trabajo cambia según cómo se
-    invoque la aplicación (``python src/app.py`` o el ``WORKDIR`` del
-    contenedor).
+    invoque la aplicación (``python src/app.py``, el ``WORKDIR`` del
+    contenedor, o un acceso directo al kiosco empaquetado).
     """
     env_path = Path(path)
     if not env_path.is_absolute() and not env_path.exists():
-        env_path = Path(__file__).resolve().parent.parent / path
+        for raiz in _raices_de_configuracion():
+            candidato = raiz / path
+            if candidato.exists():
+                env_path = candidato
+                break
+        else:
+            return
     if not env_path.exists():
         return
     for line in env_path.read_text(encoding="utf-8").splitlines():

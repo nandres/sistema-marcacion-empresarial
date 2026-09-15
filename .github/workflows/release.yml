@@ -1,0 +1,79 @@
+name: Instalador del kiosco
+
+# Solo por etiqueta. Construir el ejecutable en cada push costaría un runner de
+# Windows por commit para un artefacto que nadie descarga entre versiones.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Kiosco de escritorio (Windows)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+
+      - name: Construir el ejecutable
+        run: pyinstaller empaquetado/kiosco.spec --noconfirm
+
+      - name: Comprobar que el paquete quedó completo
+        shell: pwsh
+        run: |
+          $carpeta = "dist/Sistema de Marcacion"
+          $exe = Join-Path $carpeta "Sistema de Marcacion.exe"
+          if (-not (Test-Path $exe)) { throw "No se generó el ejecutable" }
+          # El modelo de detección facial se lee en tiempo de ejecución: si no
+          # viajó, el kiosco compila igual y falla recién frente a la cámara.
+          $cascada = Join-Path $carpeta "_internal/data/haarcascade_frontalface_default.xml"
+          if (-not (Test-Path $cascada)) { throw "Falta el modelo Haar en el paquete" }
+          $mb = [math]::Round((Get-ChildItem $carpeta -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
+          Write-Output "Paquete de $mb MB"
+
+      - name: Comprimir
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          Compress-Archive -Path "dist/Sistema de Marcacion/*" `
+            -DestinationPath "sistema-marcacion-kiosco-$version.zip"
+          $hash = (Get-FileHash "sistema-marcacion-kiosco-$version.zip" -Algorithm SHA256).Hash.ToLower()
+          Write-Output "sha256: $hash"
+          Write-Output "SHA256=$hash" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiosco-windows
+          path: sistema-marcacion-kiosco-*.zip
+
+      - name: Publicar el borrador del release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Las notas se arman línea por línea y no con un here-string de
+        # PowerShell: ese exige su delimitador de cierre en la columna 0, y ahí
+        # el bloque de YAML se da por terminado.
+        run: |
+          $version = "${{ github.ref_name }}"
+          $lineas = @(
+            "Kiosco de escritorio para Windows.",
+            "",
+            "**SHA-256 del zip:** ``$env:SHA256``",
+            "",
+            "Descomprimir en la PC del kiosco y crear un archivo ``.env`` junto",
+            "a ``Sistema de Marcacion.exe`` con los datos de conexion. Sin ese",
+            "archivo el programa no arranca, y deja el motivo en",
+            "``error-al-arrancar.txt``."
+          )
+          $notas = $lineas -join "`n"
+          gh release create $version "sistema-marcacion-kiosco-$version.zip" --draft --title $version --notes $notas
