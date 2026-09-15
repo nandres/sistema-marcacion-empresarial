@@ -434,6 +434,23 @@ El `Dockerfile` no crea usuario sin privilegios. Cualquier ejecución de código
 
 ---
 
+### P3-12 · El pipeline de CI nunca llegó a ejecutarse ✅ corregido
+
+> Cerrado el 2026-09-15. El hook de despliegue pasa por `env`, que sí se puede leer desde una condición.
+
+El paso final del despliegue se salteaba con `if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}`. `secrets` no es un contexto válido dentro de un `if`: nombrarlo ahí no deja el paso en gris, **invalida el workflow completo al validarlo**. Todos los runs del repositorio, desde el commit que trajo el archivo, figuraban en rojo con cero jobs y cero anotaciones — un estado que desde la lista de Actions se parece bastante a un test que falla.
+
+La consecuencia real no es el despliegue caído sino la red de seguridad ausente: veintitantos pasos de prueba declarados, ninguno ejecutado nunca. Todo lo verde que se reportó en este proyecto salió de correr las suites a mano en una máquina de desarrollo, con su `.env` cargado.
+
+Al arrancar por primera vez aparecieron dos defectos que el workflow había estado escondiendo:
+
+- **Faltaba `BIOMETRIA_CLAVE` en el entorno del job.** No tiene valor de respaldo a propósito —una clave conocida abriría las plantillas faciales de un backup robado—, así que su ausencia no degradaba nada en silencio: rompía `test_seguridad_datos` y `smoke_facial` en el primer cifrado.
+- **La comprobación de cabeceras de seguridad medía un error.** Usaba `curl -I`, que manda `HEAD` sobre una ruta que solo sirve `GET`, y leía las cabeceras de un 405. Aprobaba igual porque el estado de un pipe es el del último comando: el `grep` encontraba la cabecera y tapaba al `curl` caído. Ahora va con `-D -` sobre un `GET` real, y el paso corre con `pipefail` para que eso no pueda repetirse.
+
+**Lección de método.** Un pipeline en rojo permanente enseña a ignorar el rojo. Conviene distinguir dos preguntas que la pantalla de Actions mezcla: *¿falló una prueba?* y *¿llegó a correr alguna?* La segunda se responde mirando cuántos jobs produjo el run — cero jobs no es una prueba que falla, es un archivo que no compila.
+
+---
+
 ## Prioridad de remediación sugerida
 
 | Orden | Trabajo | Cierra | Estado |
@@ -449,7 +466,8 @@ El `Dockerfile` no crea usuario sin privilegios. Cualquier ejecución de código
 | 8 | Biometría cifrada, freno de intentos y contenedor sin privilegios | P3-1, P3-3, P3-11 | ✅ hecho |
 | 9 | Entidad `turnos` (multi-turno, jornada partida, rotación) | P2-4, P2-5 | ✅ hecho |
 | 10 | Aislamiento multiempresa: `empresa_id`, fallo cerrado, guardia estática y RLS en PostgreSQL | — | ✅ hecho |
-| 11 | Cookie `HttpOnly` y bus de alertas fuera del proceso | P3-2, P3-4 | pendiente |
+| 11 | Cookie `HttpOnly` y bus de alertas fuera del proceso | P3-2, P3-4 | ✅ hecho |
+| 12 | Pipeline que arranca: contexto válido en el `if`, clave biométrica en CI y cabeceras medidas sobre un GET | P3-12 | ✅ hecho |
 
 El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].
 

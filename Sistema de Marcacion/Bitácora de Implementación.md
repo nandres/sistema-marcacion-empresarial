@@ -232,6 +232,21 @@ Se verificó con el rol restringido y consultas **deliberadamente sin acotar** �
 
 **Cobertura nueva**: `test_cola_firmada`, `test_sesion_cookie`, `test_bus_alertas`, `test_rotacion`. La suite pasó de 20 a 25 conjuntos, y la auditoría quedó sin un solo hallazgo abierto.
 
+### Fase 21 · El pipeline que nunca había corrido (2026-09-15)
+
+Al subir el trabajo acumulado a GitHub, la lista de Actions mostraba el run en rojo. También los dos anteriores. El detalle era que ninguno tenía **jobs**: cero jobs, cero anotaciones, cero logs. Eso no es una prueba que falla, es un archivo que el validador rechaza antes de empezar.
+
+La causa era una línea sola: `if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}`. El contexto `secrets` no existe dentro de una condición `if`, y nombrarlo ahí no deshabilita el paso — invalida el workflow completo. Estaba desde `cbe0a08`, el commit que trajo el archivo. **El pipeline de este repositorio nunca se ejecutó ni una vez.** Todo lo verde que figura arriba salió de correr las suites a mano, con un `.env` cargado en una máquina de desarrollo.
+
+**Lo que el workflow roto estaba escondiendo.** Antes de subir el arreglo se reprodujo el entorno del runner en local: las variables que el workflow no declara, exportadas vacías —`load_dotenv` usa `setdefault`, así que una clave presente pero vacía impide que el `.env` la reponga— y las suites corridas contra eso. Aparecieron dos defectos:
+
+- **Faltaba `BIOMETRIA_CLAVE`.** No tiene respaldo a propósito, así que no degradaba nada en silencio: rompía `test_seguridad_datos` y `smoke_facial` en el primer cifrado.
+- **La comprobación de CSP medía un 405.** `curl -I` manda `HEAD` y la portada solo sirve `GET`. Aprobaba igual porque el estado de un pipe es el del `grep`, no el del `curl` caído. Ahora usa `-D -` sobre un `GET` real, y el paso corre con `pipefail`.
+
+**Lo que esto corrige de la tabla de arriba.** En *Lo que la suite no cubre* figuraba "esquema que no se crea desde cero — falta CI sobre base virgen". Se daba por cubierto porque el workflow declaraba el paso; el paso no corría. Recién ahora está cubierto de verdad.
+
+El job `deploy` sigue sin haberse ejecutado nunca: depende de `test`, y hasta ahora `test` no existía.
+
 ## Cómo ejecutar
 
 | Componente | Comando |
@@ -320,6 +335,14 @@ Las dos primeras filas son la brecha de mayor valor: el motor horario es lógica
 - **Un heurístico sobre datos del mundo real se prueba con datos del mundo real.** Contar etiquetas del host parecía razonable hasta que apareció `.com.py`, que es el dominio del país donde se vende esto.
 - **Lo que se borra sin dejar constancia es lo que nadie puede reclamar.** Una marcación descartada en silencio es una hora de trabajo perdida, así que se aparta con su motivo en lugar de desaparecer.
 - **Reintentar para siempre es una decisión, aunque nadie la haya tomado.** Sin un techo, una marca que nunca va a entrar consume el ciclo del sincronizador cada quince segundos hasta que alguien mire los logs.
+
+### Agregadas por el pipeline muerto (2026-09-15)
+
+- **Un rojo permanente enseña a ignorar el rojo.** La pantalla de Actions mezcla dos preguntas muy distintas: *¿falló una prueba?* y *¿llegó a correr alguna?* La segunda se responde mirando cuántos jobs produjo el run. Cero jobs no es un test roto: es un archivo que no compila, y se ve igual desde la lista.
+- **Declarar un paso no es ejecutarlo.** La tabla de cobertura daba por cerrada una brecha porque el workflow nombraba el paso que la cubría. Nombrarlo y correrlo son cosas distintas, y solo una de las dos deja evidencia.
+- **Una condición no puede leer un secreto.** Es una restricción de diseño razonable —el resultado de la condición se ve en los logs—, pero falla de la forma más cara posible: en vez de ignorar la línea, tumba el archivo entero.
+- **Un secreto sin respaldo falla fuerte, y eso es lo que se quiere.** La clave biométrica ausente rompió dos suites en el primer cifrado. Si hubiera tenido un valor por defecto, CI habría pasado en verde cifrando con una clave conocida, que es exactamente el escenario contra el que se diseñó.
+- **`pipefail` no es cosmético.** Sin él, cualquier comprobación escrita como `comando | grep` aprueba mientras el `grep` encuentre lo que busca, aunque el comando de la izquierda haya fallado.
 
 ## Enlaces
 
