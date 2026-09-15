@@ -37,9 +37,9 @@ jobs:
       COMPROBANTE_CLAVE: clave-de-comprobantes-de-ci-no-usar-en-produccion
       BIOMETRIA_CLAVE: clave-biometrica-de-ci-no-usar-en-produccion
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -155,6 +155,13 @@ jobs:
       - name: GUI justificaciones / dashboard (pantalla virtual)
         run: xvfb-run -a python tests/smoke_reglamento_gui.py
 
+      # Al final de todo: la restauracion reemplaza el contenido de la base,
+      # asi que ningun paso posterior puede depender de lo que quede despues.
+      - name: Respaldo y restauracion (viaje redondo)
+        run: |
+          sudo apt-get install -y postgresql-client
+          python tests/test_respaldo.py
+
   deploy:
     name: Construir imagen y desplegar
     needs: test
@@ -164,7 +171,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Construir imagen Docker
         run: docker build -t marcacion:latest .
