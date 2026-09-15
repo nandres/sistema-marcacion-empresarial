@@ -1071,9 +1071,17 @@
       if (!t.activo) marcas.push('<span class="sello t-ausente">Retirado</span>');
       var dotacion = Math.max(t.dotacion || 0, t.asignados || 0);
 
+      var versiones = t.versiones || 1;
+      /* La vigencia solo se muestra cuando el turno tuvo más de una definición:
+         con una sola, "vigente desde" es ruido que no distingue nada. */
+      var vigencia = versiones > 1
+        ? '<br><span class="apunte">Vigente desde ' + esc(t.vigente_desde) +
+          " · " + esc(versiones) + " versiones</span>"
+        : "";
+
       return '<tr' + (t.activo ? "" : ' class="futuro"') + "><td><b>" + esc(t.nombre) + "</b>" +
           (marcas.length ? "<br>" + marcas.join(" ") : "") +
-          '<br><span class="apunte">' + esc(t.sucursal) + "</span></td>" +
+          '<br><span class="apunte">' + esc(t.sucursal) + "</span>" + vigencia + "</td>" +
         '<td class="num mono">' + esc(t.horario) + "</td>" +
         "<td>" + esc(t.dias_texto) + "</td>" +
         '<td class="num">' + esc(t.horas_previstas) + " h</td>" +
@@ -1085,6 +1093,10 @@
             : '<button class="btn-suave btn-chico" data-turno-predeterminado="' + esc(t.id) +
               '">Hacer predeterminado</button>') +
           '<button class="btn-suave btn-chico" data-turno-editar="' + esc(t.id) + '">Editar</button>' +
+          (versiones > 1
+            ? '<button class="btn-suave btn-chico" data-turno-historial="' + esc(t.id) +
+              '">Historial</button>'
+            : "") +
           (t.predeterminado ? ""
             : '<button class="btn-riesgo btn-chico" data-turno-retirar="' + esc(t.id) +
               '">Retirar</button>') +
@@ -1323,11 +1335,14 @@
     var segundo = turno.tramos[1] || { entrada: "14:00", salida: "18:00" };
     abrirModal(
       "<h3>" + esc(turno.nombre) + "</h3>" +
-      '<p class="apunte">El cambio rige hacia adelante: los días ya liquidados ' +
-        "conservan la incidencia que se calculó con el horario de entonces.</p>" +
+      '<p class="apunte">El horario nuevo rige desde la fecha que indiques. Lo ' +
+        "anterior a esa fecha se sigue midiendo con el horario que regía " +
+        "entonces, incluso si después hay que corregir una marca vieja.</p>" +
       '<div class="rejilla-campos">' +
         '<div><label for="m-nombre">Nombre</label><input id="m-nombre" value="' + esc(turno.nombre) + '"></div>' +
         '<div><label for="m-sucursal">Sucursal</label><input id="m-sucursal" value="' + esc(turno.sucursal) + '"></div>' +
+        '<div><label for="m-vigente">El horario rige desde</label>' +
+          '<input id="m-vigente" type="date" value="' + iso(new Date()) + '"></div>' +
         '<div><label for="m-entrada">Entrada</label><input id="m-entrada" type="time" value="' +
           esc(turno.tramos[0].entrada) + '"></div>' +
         '<div><label for="m-salida">Salida</label><input id="m-salida" type="time" value="' +
@@ -1371,7 +1386,8 @@
         dias: mascara,
         sucursal: $("m-sucursal").value.trim() || "Casa Central",
         tolerancia_min: tolerancia === "" ? null : Number(tolerancia),
-        borrar_tolerancia: tolerancia === ""
+        borrar_tolerancia: tolerancia === "",
+        vigente_desde: $("m-vigente").value || null
       }
     }).then(function (t) {
       cerrarModal();
@@ -1379,6 +1395,37 @@
       cargarTurnos();
     }).catch(function (error) {
       if (error.message !== "sesion") avisar("m-aviso", error.message);
+    });
+  }
+
+  /* Contesta "¿contra qué horario se midió esta marca de marzo?", que es la
+     pregunta que aparece cuando alguien reclama una tardanza de hace meses. */
+  function verHistorialTurno(id) {
+    pedir("/api/panel/turnos/" + id + "/historial").then(function (h) {
+      var filas = h.versiones.map(function (v, i) {
+        return "<tr" + (i === 0 ? "" : ' class="futuro"') + ">" +
+          '<td class="num mono">' + esc(v.vigente_desde) + "</td>" +
+          '<td class="num mono">' + esc(v.horario) + "</td>" +
+          "<td>" + esc(v.dias_texto) + "</td>" +
+          '<td class="num">' + (v.tolerancia_min === null ? "según vínculo"
+                                                          : esc(v.tolerancia_min) + " min") + "</td>" +
+          "<td>" + esc(v.definido_por || "—") + "</td></tr>";
+      }).join("");
+
+      abrirModal(
+        "<h3>Historial de " + esc(h.nombre) + "</h3>" +
+        '<p class="apunte">Cada fila rigió desde su fecha hasta la de arriba. ' +
+          "Una marca se mide siempre contra la definición vigente ese día.</p>" +
+        '<table class="tabla"><thead><tr><th>Rige desde</th><th>Horario</th>' +
+          "<th>Días</th><th>Tolerancia</th><th>Lo definió</th></tr></thead>" +
+          "<tbody>" + filas + "</tbody></table>" +
+        '<div class="acciones fin" style="margin-top:16px">' +
+          '<button class="btn-suave" data-cerrar="1">Cerrar</button></div>'
+      );
+    }).catch(function (error) {
+      if (error.message !== "sesion") {
+        notificar("No se pudo leer el historial", error.message, "media");
+      }
     });
   }
 
@@ -1897,6 +1944,7 @@
       "[data-editar],[data-guardar],[data-borrar],[data-cancelar],[data-confirmar-borrado]," +
       "[data-permiso-ok],[data-permiso-no],[data-revocar],[data-extras]," +
       "[data-baja],[data-reincorporar],[data-turno-editar],[data-turno-guardar]," +
+      "[data-turno-historial]," +
       "[data-turno-retirar],[data-turno-predeterminado],[data-turno-asignar]," +
       "[data-turno-base],[data-turno-rotar],[data-rotacion-guardar]," +
       "[data-rotacion-revocar],[data-ciclo-borrar],[data-ciclo-asignar]," +
@@ -1908,6 +1956,7 @@
     if (d.cicloAsignar) { abrirCicloDeEmpleado(parseInt(d.cicloAsignar, 10)); return; }
     if (d.cicloGuardar) { guardarCicloDeEmpleado(d.cicloGuardar); return; }
     if (d.turnoEditar) { editarTurno(parseInt(d.turnoEditar, 10)); return; }
+    if (d.turnoHistorial) { verHistorialTurno(parseInt(d.turnoHistorial, 10)); return; }
     if (d.turnoGuardar) { guardarTurno(d.turnoGuardar); return; }
     if (d.turnoRetirar) { retirarTurno(d.turnoRetirar); return; }
     if (d.turnoPredeterminado) { hacerPredeterminado(d.turnoPredeterminado); return; }

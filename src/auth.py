@@ -1011,6 +1011,7 @@ def _turno_como_dict(fila: Dict[str, Any]) -> Dict[str, Any]:
     proyectado = turnos.desde_fila(fila).como_dict()
     proyectado["dotacion"] = int(fila.get("dotacion") or 0)
     proyectado["asignados"] = int(fila.get("asignados") or 0)
+    proyectado["versiones"] = int(fila.get("versiones") or 1)
     return proyectado
 
 
@@ -1047,6 +1048,7 @@ def crear_turno(
         mascara,
         (sucursal or turnos.SUCURSAL_PREDETERMINADA).strip(),
         tolerancia,
+        creado_por=actor["id"],
     )
     db.registrar_auditoria(
         actor["id"],
@@ -1173,13 +1175,21 @@ def actualizar_turno(
     dias: Any = None,
     sucursal: Optional[str] = None,
     tolerancia_min: Any = SIN_CAMBIO,
+    vigente_desde: Any = None,
 ) -> Dict[str, Any]:
-    """Modifica un turno vigente.
+    """Modifica un turno declarando desde cuándo rige el horario nuevo.
 
-    El cambio rige hacia adelante: los marcajes ya liquidados conservan la
-    incidencia que se les calculó con el horario vigente ese día.
+    El nombre y la sucursal se corrigen en el acto porque son identidad. El
+    horario abre una versión a partir de ``vigente_desde`` —hoy, si no se dice
+    otra cosa—, y las anteriores siguen rigiendo su propio pasado: corregir
+    hoy una marca de marzo la mide contra el horario de marzo.
+
+    Se admite una fecha pasada para el caso real de haber cargado mal un
+    horario que ya estaba en uso. No es un atajo: reescribe la liquidación de
+    ese período, y queda anotado en la auditoría con quién y cuándo lo hizo.
     """
-    actual = db.get_turno(turno_id)
+    desde = _como_fecha(vigente_desde, "vigente_desde") if vigente_desde else None
+    actual = db.get_turno(turno_id, desde)
     if not actual:
         raise ValueError("El turno no existe.")
     anterior = _turno_como_dict(actual)
@@ -1208,8 +1218,10 @@ def actualizar_turno(
         sucursal=sucursal.strip() if sucursal is not None else None,
         tolerancia_min=tolerancia,
         limpiar_tolerancia=limpiar,
+        vigente_desde=desde,
+        creado_por=actor["id"],
     )
-    actualizado = _turno_como_dict(db.get_turno(turno_id))
+    actualizado = _turno_como_dict(db.get_turno(turno_id, desde))
     db.registrar_auditoria(
         actor["id"],
         "ACTUALIZAR",
@@ -1219,6 +1231,40 @@ def actualizar_turno(
         nuevos=actualizado,
     )
     return actualizado
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def historial_turno(
+    db: Database, actor: Dict, turno_id: int
+) -> Dict[str, Any]:
+    """Las definiciones que tuvo un turno, con desde cuándo rigió cada una.
+
+    Contesta *"¿contra qué horario se midió esta marca de marzo?"* sin pedirle
+    a nadie que se acuerde, que es la pregunta que aparece cuando un empleado
+    reclama una tardanza de hace dos meses.
+    """
+    turno = db.get_turno(turno_id)
+    if not turno:
+        raise ValueError("El turno no existe.")
+    versiones = []
+    for version in db.historial_turno(turno_id):
+        definidos = turnos.construir_tramos(
+            [(x["hora_entrada"], x["hora_salida"]) for x in version["tramos"]]
+        )
+        versiones.append({
+            "vigente_desde": version["vigente_desde"].isoformat(),
+            "dias": version["dias"],
+            "dias_texto": turnos.describir_dias(version["dias"]),
+            "tolerancia_min": version["tolerancia_min"],
+            "horario": " · ".join(x.etiqueta() for x in definidos),
+            "definido_por": version.get("creado_por_nombre") or "",
+            "definido_en": version["creado_en"].isoformat(),
+        })
+    return {
+        "id": turno["id"],
+        "nombre": turno["nombre"],
+        "versiones": versiones,
+    }
 
 
 @autorizado(ROLE_ADMIN, ROLE_RRHH)

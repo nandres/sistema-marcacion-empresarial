@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from time import monotonic, sleep
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -48,7 +48,7 @@ ROLES_INICIALES: Tuple[str, ...] = ("Administrador", "Recursos Humanos", "Emplea
 LOCK_TIMEOUT_DDL: str = "10s"
 """Espera máxima de las migraciones por un lock de tabla antes de abortar."""
 
-ESQUEMA_VERSION: int = 1
+ESQUEMA_VERSION: int = 2
 """Versión del esquema base.
 
 Subirla obliga a volver a migrar antes de que el servidor acepte tráfico. Se
@@ -58,7 +58,28 @@ tabla, una columna, un índice sin el cual una consulta se cae.
 
 TABLA_MIGRACIONES: str = "esquema_migraciones"
 
-PASOS_UNICOS: Tuple[Tuple[str, str], ...] = ()
+PASOS_UNICOS: Tuple[Tuple[str, str], ...] = (
+    (
+        "2026-09-versiones-de-turno",
+        """
+        INSERT INTO turno_versiones
+            (turno_id, vigente_desde, dias, tolerancia_min, empresa_id)
+        SELECT t.id, t.creado_en::date, t.dias, t.tolerancia_min, t.empresa_id
+          FROM turnos t
+         WHERE NOT EXISTS (
+               SELECT 1 FROM turno_versiones v WHERE v.turno_id = t.id);
+
+        UPDATE turno_tramos tr
+           SET version_id = v.id
+          FROM turno_versiones v
+         WHERE v.turno_id = tr.turno_id
+           AND tr.version_id IS NULL
+           AND v.vigente_desde = (SELECT MIN(x.vigente_desde)
+                                    FROM turno_versiones x
+                                   WHERE x.turno_id = tr.turno_id);
+        """,
+    ),
+)
 """Pasos que corren exactamente una vez, en orden, después del esquema base.
 
 El DDL base es idempotente y se repite sin consecuencias: agregar una tabla o
@@ -83,6 +104,7 @@ TABLAS_DE_EMPRESA: Tuple[str, ...] = (
     "condiciones_dia",
     "solicitudes_permiso",
     "turnos",
+    "turno_versiones",
     "turno_tramos",
     "asignaciones_turno",
     "logs_auditoria",
@@ -132,6 +154,14 @@ def _pool_de(config: Dict[str, str]) -> Any:
 
 class PoolAgotado(RuntimeError):
     """Todas las conexiones están ocupadas y la espera se agotó."""
+
+
+def _como_hora(valor: Any) -> Any:
+    """Normaliza a ``time`` lo que puede llegar como texto desde una API."""
+    if isinstance(valor, str):
+        partes = valor.strip().split(":")
+        return time(int(partes[0]), int(partes[1]) if len(partes) > 1 else 0)
+    return valor
 
 
 def _tomar_del_pool(config: Dict[str, str]) -> Any:
@@ -568,6 +598,25 @@ class Database:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_turno_predeterminado "
             "ON turnos (predeterminado) WHERE predeterminado"
         )
+        # Lo que un turno **es** —su nombre, su sucursal, si está activo— vive
+        # en `turnos` y no cambia de significado con el tiempo. Lo que un turno
+        # **dice** —qué días cubre, a qué hora, con cuánta tolerancia— vive
+        # acá, fechado. Editar un horario ya no pisa el anterior: abre una
+        # versión nueva y la anterior queda rigiendo su propio pasado.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS turno_versiones (
+                id SERIAL PRIMARY KEY,
+                turno_id INTEGER NOT NULL REFERENCES turnos (id) ON DELETE CASCADE,
+                vigente_desde DATE NOT NULL,
+                dias CHAR(7) NOT NULL DEFAULT '1111100',
+                tolerancia_min INTEGER,
+                creado_por INTEGER REFERENCES users (id),
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (turno_id, vigente_desde)
+            )
+            """
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS turno_tramos (
@@ -579,6 +628,21 @@ class Database:
                 UNIQUE (turno_id, orden)
             )
             """
+        )
+        cursor.execute(
+            "ALTER TABLE turno_tramos ADD COLUMN IF NOT EXISTS version_id INTEGER "
+            "REFERENCES turno_versiones (id) ON DELETE CASCADE"
+        )
+        # Los tramos pasan a ser únicos por versión y no por turno: la
+        # restricción vieja permitía un solo tramo 1 por turno, que es
+        # exactamente lo que impide tener dos versiones del mismo horario.
+        cursor.execute(
+            "ALTER TABLE turno_tramos "
+            "DROP CONSTRAINT IF EXISTS turno_tramos_turno_id_orden_key"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_tramos_version_orden "
+            "ON turno_tramos (version_id, orden)"
         )
         cursor.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS turno_id INTEGER "
@@ -1092,11 +1156,21 @@ class Database:
         turno_id = cursor.fetchone()[0]
         cursor.execute(
             """
-            INSERT INTO turno_tramos
-                (turno_id, orden, hora_entrada, hora_salida, empresa_id)
-            VALUES (%s, 1, %s, %s, %s)
+            INSERT INTO turno_versiones
+                (turno_id, vigente_desde, dias, tolerancia_min, empresa_id)
+            VALUES (%s, CURRENT_DATE, %s, NULL, %s)
+            RETURNING id
             """,
-            (turno_id, tramo.entrada, tramo.salida, empresa_id),
+            (turno_id, respaldo.dias, empresa_id),
+        )
+        version_id = cursor.fetchone()[0]
+        cursor.execute(
+            """
+            INSERT INTO turno_tramos
+                (turno_id, version_id, orden, hora_entrada, hora_salida, empresa_id)
+            VALUES (%s, %s, 1, %s, %s, %s)
+            """,
+            (turno_id, version_id, tramo.entrada, tramo.salida, empresa_id),
         )
 
     def _aplicar_politicas_rls(self, cursor: Any) -> None:
@@ -1350,13 +1424,23 @@ class Database:
             """,
             (respaldo.nombre, respaldo.dias, empresa["id"]),
         )
+        turno_id = cursor.fetchone()["id"]
+        version = self._execute(
+            """
+            INSERT INTO turno_versiones
+                (turno_id, vigente_desde, dias, tolerancia_min, empresa_id)
+            VALUES (%s, CURRENT_DATE, %s, NULL, %s)
+            RETURNING id
+            """,
+            (turno_id, respaldo.dias, empresa["id"]),
+        ).fetchone()["id"]
         self._execute(
             """
             INSERT INTO turno_tramos
-                (turno_id, orden, hora_entrada, hora_salida, empresa_id)
-            VALUES (%s, 1, %s, %s, %s)
+                (turno_id, version_id, orden, hora_entrada, hora_salida, empresa_id)
+            VALUES (%s, %s, 1, %s, %s, %s)
             """,
-            (cursor.fetchone()["id"], tramo.entrada, tramo.salida, empresa["id"]),
+            (turno_id, version, tramo.entrada, tramo.salida, empresa["id"]),
         )
         self.connection.commit()
         return empresa
@@ -1781,7 +1865,11 @@ class Database:
         filtro = "" if incluir_inactivos else "AND t.activo"
         turnos = self._execute(
             f"""
-            SELECT t.*,
+            SELECT t.id, t.nombre, t.sucursal, t.activo, t.predeterminado,
+                   t.creado_en, t.empresa_id,
+                   v.id AS version_id, v.vigente_desde, v.dias, v.tolerancia_min,
+                   (SELECT COUNT(*) FROM turno_versiones x
+                     WHERE x.turno_id = t.id) AS versiones,
                    (SELECT COUNT(*) FROM users u
                      WHERE u.turno_id = t.id AND u.activo) AS dotacion,
                    (SELECT COUNT(*) FROM asignaciones_turno a
@@ -1789,6 +1877,14 @@ class Database:
                        AND (a.hasta IS NULL OR a.hasta >= CURRENT_DATE)
                        AND a.desde <= CURRENT_DATE) AS asignados
             FROM turnos t
+            LEFT JOIN LATERAL (
+                SELECT vv.id, vv.vigente_desde, vv.dias, vv.tolerancia_min
+                FROM turno_versiones vv
+                WHERE vv.turno_id = t.id AND vv.empresa_id = t.empresa_id
+                ORDER BY (vv.vigente_desde <= CURRENT_DATE) DESC,
+                         ABS(CURRENT_DATE - vv.vigente_desde) ASC
+                LIMIT 1
+            ) v ON TRUE
             WHERE t.empresa_id = %s {filtro}
             ORDER BY t.predeterminado DESC, t.nombre
             """,
@@ -1799,23 +1895,70 @@ class Database:
             return []
         tramos = self._execute(
             """
-            SELECT turno_id, orden, hora_entrada, hora_salida
+            SELECT version_id, orden, hora_entrada, hora_salida
             FROM turno_tramos
-            WHERE empresa_id = %s AND turno_id = ANY(%s)
-            ORDER BY turno_id, orden
+            WHERE empresa_id = %s AND version_id = ANY(%s)
+            ORDER BY version_id, orden
             """,
-            (self.empresa, [t["id"] for t in turnos]),
+            (self.empresa, [t["version_id"] for t in turnos if t["version_id"]]),
             fetch="all",
         )
-        por_turno: Dict[int, List[Dict[str, Any]]] = {}
+        por_version: Dict[int, List[Dict[str, Any]]] = {}
         for tramo in tramos:
-            por_turno.setdefault(tramo["turno_id"], []).append(tramo)
+            por_version.setdefault(tramo["version_id"], []).append(tramo)
         for turno in turnos:
-            turno["tramos"] = por_turno.get(turno["id"], [])
+            turno["tramos"] = por_version.get(turno["version_id"], [])
         return turnos
 
-    def get_turno(self, turno_id: int) -> Optional[Dict[str, Any]]:
-        """Retorna un turno con sus tramos ordenados, o ``None``."""
+    def version_de_turno(
+        self, turno_id: int, dia: Any = None
+    ) -> Optional[Dict[str, Any]]:
+        """Definición del turno que regía en esa fecha (hoy por omisión).
+
+        Una fecha anterior a la primera versión conocida devuelve esa primera
+        versión. Es deliberado: la alternativa —no resolver ningún horario—
+        deja la marca sin poder liquidarse, y medir contra la definición más
+        vieja que existe es la aproximación menos mala a un horario que nadie
+        llegó a anotar.
+
+        El orden hace las dos cosas de una vez: primero las versiones que ya
+        estaban vigentes, y entre ellas la más cercana; si no hay ninguna, la
+        más cercana hacia adelante.
+        """
+        dia = dia or date.today()
+        return self._execute(
+            """
+            SELECT id, turno_id, vigente_desde, dias, tolerancia_min,
+                   creado_por, creado_en
+            FROM turno_versiones
+            WHERE empresa_id = %s AND turno_id = %s
+            ORDER BY (vigente_desde <= %s::date) DESC,
+                     ABS(%s::date - vigente_desde) ASC
+            LIMIT 1
+            """,
+            (self.empresa, turno_id, dia, dia),
+            fetch="one",
+        )
+
+    def _tramos_de_version(self, version_id: int) -> List[Dict[str, Any]]:
+        """Tramos de una versión concreta, en orden."""
+        return self._execute(
+            """
+            SELECT orden, hora_entrada, hora_salida
+            FROM turno_tramos
+            WHERE empresa_id = %s AND version_id = %s ORDER BY orden
+            """,
+            (self.empresa, version_id),
+            fetch="all",
+        ) or []
+
+    def get_turno(self, turno_id: int, dia: Any = None) -> Optional[Dict[str, Any]]:
+        """Turno con la definición que regía en ``dia`` (hoy por omisión).
+
+        El nombre y la sucursal salen de ``turnos`` porque son identidad y no
+        cambian de sentido con el tiempo; los días, la tolerancia y los tramos
+        salen de la versión, porque son exactamente lo que sí cambia.
+        """
         turno = self._execute(
             "SELECT * FROM turnos WHERE empresa_id = %s AND id = %s",
             (self.empresa, turno_id),
@@ -1823,16 +1966,38 @@ class Database:
         )
         if not turno:
             return None
-        turno["tramos"] = self._execute(
+        version = self.version_de_turno(turno_id, dia)
+        turno["version_id"] = version["id"] if version else None
+        turno["vigente_desde"] = version["vigente_desde"] if version else None
+        if version:
+            turno["dias"] = version["dias"]
+            turno["tolerancia_min"] = version["tolerancia_min"]
+        turno["tramos"] = (
+            self._tramos_de_version(version["id"]) if version else []
+        )
+        return turno
+
+    def historial_turno(self, turno_id: int) -> List[Dict[str, Any]]:
+        """Todas las versiones del turno, de la más reciente a la más vieja.
+
+        Es lo que contesta *"¿contra qué horario se midió esta marca de
+        marzo?"* sin tener que reconstruirlo de memoria.
+        """
+        versiones = self._execute(
             """
-            SELECT orden, hora_entrada, hora_salida
-            FROM turno_tramos
-            WHERE empresa_id = %s AND turno_id = %s ORDER BY orden
+            SELECT v.id, v.vigente_desde, v.dias, v.tolerancia_min,
+                   v.creado_en, u.full_name AS creado_por_nombre
+            FROM turno_versiones v
+            LEFT JOIN users u ON u.id = v.creado_por
+            WHERE v.empresa_id = %s AND v.turno_id = %s
+            ORDER BY v.vigente_desde DESC
             """,
             (self.empresa, turno_id),
             fetch="all",
-        )
-        return turno
+        ) or []
+        for version in versiones:
+            version["tramos"] = self._tramos_de_version(version["id"])
+        return [dict(v) for v in versiones]
 
     def get_turno_por_nombre(self, nombre: str) -> Optional[Dict[str, Any]]:
         """Busca un turno por su nombre, que es único."""
@@ -1851,8 +2016,10 @@ class Database:
         dias: str,
         sucursal: str,
         tolerancia_min: Optional[int] = None,
+        vigente_desde: Any = None,
+        creado_por: Optional[int] = None,
     ) -> int:
-        """Inserta un turno con sus tramos en una sola transacción."""
+        """Inserta un turno con su primera versión, en una sola transacción."""
         cursor = self._execute(
             """
             INSERT INTO turnos (nombre, sucursal, dias, tolerancia_min, empresa_id)
@@ -1862,8 +2029,10 @@ class Database:
             (nombre, sucursal, dias, tolerancia_min, self.empresa),
         )
         turno_id = cursor.fetchone()["id"]
-        self._reemplazar_tramos(turno_id, tramos)
-        self.connection.commit()
+        self.fijar_version_turno(
+            turno_id, vigente_desde or date.today(), dias, tolerancia_min,
+            tramos, creado_por,
+        )
         return turno_id
 
     # ------------------------------------------------ Dispositivos de marcación
@@ -1956,53 +2125,168 @@ class Database:
         sucursal: Optional[str] = None,
         tolerancia_min: Optional[int] = None,
         limpiar_tolerancia: bool = False,
+        vigente_desde: Any = None,
+        creado_por: Optional[int] = None,
     ) -> bool:
-        """Actualiza los campos provistos de un turno y, si llegan, sus tramos."""
-        updates: List[str] = []
+        """Cambia un turno: la identidad en el acto, el horario desde una fecha.
+
+        El nombre y la sucursal se corrigen en el lugar porque no cambian de
+        significado con el tiempo: un turno renombrado sigue siendo el mismo
+        turno, y forkear su historia por un typo la volvería ilegible.
+
+        Los días, la tolerancia y los tramos abren una versión con vigencia
+        desde ``vigente_desde`` —hoy, si no se dice otra cosa—. Lo que ya se
+        liquidó se sigue midiendo contra el horario que regía entonces.
+        """
+        vigente_desde = vigente_desde or date.today()
+        identidad: List[str] = []
         params: List[Any] = []
         if nombre is not None:
-            updates.append("nombre = %s")
+            identidad.append("nombre = %s")
             params.append(nombre)
-        if dias is not None:
-            updates.append("dias = %s")
-            params.append(dias)
         if sucursal is not None:
-            updates.append("sucursal = %s")
+            identidad.append("sucursal = %s")
             params.append(sucursal)
-        if limpiar_tolerancia:
-            updates.append("tolerancia_min = NULL")
-        elif tolerancia_min is not None:
-            updates.append("tolerancia_min = %s")
-            params.append(tolerancia_min)
-        if updates:
-            params.extend([self.empresa, turno_id])
+        if identidad:
             self._execute(
-                f"UPDATE turnos SET {', '.join(updates)} "
+                f"UPDATE turnos SET {', '.join(identidad)} "
                 f"WHERE empresa_id = %s AND id = %s",
-                tuple(params),
+                tuple(params + [self.empresa, turno_id]),
             )
-        if tramos is not None:
-            self._reemplazar_tramos(turno_id, tramos)
-        if not updates and tramos is None:
-            return False
-        self.connection.commit()
+
+        base = self.get_turno(turno_id, vigente_desde)
+        if base is None:
+            if identidad:
+                self.connection.commit()
+            return bool(identidad)
+
+        nuevos_dias = dias if dias is not None else base["dias"]
+        if limpiar_tolerancia:
+            nueva_tolerancia = None
+        elif tolerancia_min is not None:
+            nueva_tolerancia = tolerancia_min
+        else:
+            nueva_tolerancia = base["tolerancia_min"]
+        nuevos_tramos = (
+            list(tramos) if tramos is not None
+            else [(x["hora_entrada"], x["hora_salida"]) for x in base["tramos"]]
+        )
+
+        if self._misma_definicion(base, nuevos_dias, nueva_tolerancia, nuevos_tramos):
+            if identidad:
+                self.connection.commit()
+            return bool(identidad)
+
+        self.fijar_version_turno(
+            turno_id, vigente_desde, nuevos_dias, nueva_tolerancia,
+            nuevos_tramos, creado_por,
+        )
         return True
 
-    def _reemplazar_tramos(self, turno_id: int, tramos: List[Tuple[Any, Any]]) -> None:
-        """Deja los tramos del turno exactamente como los describe la lista."""
+    @staticmethod
+    def _misma_definicion(
+        base: Dict[str, Any],
+        dias: Optional[str],
+        tolerancia_min: Optional[int],
+        tramos: List[Tuple[Any, Any]],
+    ) -> bool:
+        """Dice si lo que se quiere guardar es lo que ya está guardado.
+
+        El panel manda el formulario entero en cada guardado, así que renombrar
+        un turno llega hasta acá con el horario repetido. Sin esta comparación,
+        corregir un typo abriría una versión idéntica a la anterior y el
+        historial dejaría de contar una historia.
+        """
+        if (base["dias"] or "") != (dias or ""):
+            return False
+        if base["tolerancia_min"] != tolerancia_min:
+            return False
+        actuales = [(x["hora_entrada"], x["hora_salida"]) for x in base["tramos"]]
+        propuestos = [(_como_hora(e), _como_hora(s)) for e, s in tramos]
+        return actuales == propuestos
+
+    def fijar_version_turno(
+        self,
+        turno_id: int,
+        vigente_desde: Any,
+        dias: Optional[str],
+        tolerancia_min: Optional[int],
+        tramos: List[Tuple[Any, Any]],
+        creado_por: Optional[int] = None,
+    ) -> int:
+        """Deja la definición del turno vigente a partir de esa fecha.
+
+        Si ya hay una versión con esa misma fecha se reescribe en lugar de
+        agregar otra: dos correcciones el mismo día son una sola decisión, y
+        una versión que duró cero días no es historia, es ruido.
+        """
+        existente = self._execute(
+            "SELECT id FROM turno_versiones "
+            "WHERE empresa_id = %s AND turno_id = %s AND vigente_desde = %s",
+            (self.empresa, turno_id, vigente_desde),
+            fetch="one",
+        )
+        if existente:
+            version_id = int(existente["id"])
+            self._execute(
+                "UPDATE turno_versiones "
+                "SET dias = %s, tolerancia_min = %s, creado_por = %s, creado_en = NOW() "
+                "WHERE empresa_id = %s AND id = %s",
+                (dias, tolerancia_min, creado_por, self.empresa, version_id),
+            )
+        else:
+            cursor = self._execute(
+                """
+                INSERT INTO turno_versiones
+                    (turno_id, vigente_desde, dias, tolerancia_min,
+                     creado_por, empresa_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (turno_id, vigente_desde, dias, tolerancia_min,
+                 creado_por, self.empresa),
+            )
+            version_id = int(cursor.fetchone()["id"])
+
+        self._reemplazar_tramos(turno_id, version_id, tramos)
+        self._refrescar_definicion_actual(turno_id)
+        self.connection.commit()
+        return version_id
+
+    def _reemplazar_tramos(
+        self, turno_id: int, version_id: int, tramos: List[Tuple[Any, Any]]
+    ) -> None:
+        """Deja los tramos de **esa versión** como los describe la lista."""
         self._execute(
-            "DELETE FROM turno_tramos WHERE empresa_id = %s AND turno_id = %s",
-            (self.empresa, turno_id),
+            "DELETE FROM turno_tramos WHERE empresa_id = %s AND version_id = %s",
+            (self.empresa, version_id),
         )
         for orden, (entrada, salida) in enumerate(tramos, start=1):
             self._execute(
                 """
                 INSERT INTO turno_tramos
-                    (turno_id, orden, hora_entrada, hora_salida, empresa_id)
-                VALUES (%s, %s, %s, %s, %s)
+                    (turno_id, version_id, orden, hora_entrada, hora_salida,
+                     empresa_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (turno_id, orden, entrada, salida, self.empresa),
+                (turno_id, version_id, orden, entrada, salida, self.empresa),
             )
+
+    def _refrescar_definicion_actual(self, turno_id: int) -> None:
+        """Copia la versión vigente hoy a las columnas de ``turnos``.
+
+        Son una caché, no la fuente: quedan ahí para que una consulta suelta
+        contra ``turnos`` —un informe a mano, una revisión en psql— lea el
+        horario de hoy y no uno de hace tres versiones.
+        """
+        version = self.version_de_turno(turno_id)
+        if not version:
+            return
+        self._execute(
+            "UPDATE turnos SET dias = %s, tolerancia_min = %s "
+            "WHERE empresa_id = %s AND id = %s",
+            (version["dias"], version["tolerancia_min"], self.empresa, turno_id),
+        )
 
     def cambiar_estado_turno(self, turno_id: int, activo: bool) -> bool:
         """Activa o retira de circulación un turno sin borrar su historia."""
@@ -2186,7 +2470,9 @@ class Database:
         )
         if not fila:
             return None
-        turno = self.get_turno(fila["turno_id"])
+        # Con la fecha, no sin ella: acá es donde una corrección de marzo
+        # dejaba de medirse contra el horario de marzo.
+        turno = self.get_turno(fila["turno_id"], dia)
         if turno:
             turno["origen"] = fila["origen"]
         return turno

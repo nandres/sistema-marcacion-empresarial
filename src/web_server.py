@@ -1479,12 +1479,19 @@ class TurnoNuevo(BaseModel):
 
 
 class TurnoEditar(BaseModel):
+    """Cambio de turno; ``vigente_desde`` decide a partir de cuándo rige.
+
+    Vacío significa hoy. Una fecha pasada reescribe la liquidación de ese
+    período, así que se pide explícita y nunca se asume.
+    """
+
     nombre: Optional[str] = None
     tramos: Optional[List[TramoHorario]] = None
     dias: Optional[str] = None
     sucursal: Optional[str] = None
     tolerancia_min: Optional[int] = None
     borrar_tolerancia: bool = False
+    vigente_desde: Optional[str] = None
 
 
 class TurnoBase(BaseModel):
@@ -1520,6 +1527,23 @@ def api_panel_turnos(
     db = _cliente_de(usuario)
     try:
         return auth.listar_turnos(db, usuario, incluir_inactivos)
+    finally:
+        db.cerrar()
+
+
+@app.get("/api/panel/turnos/{turno_id}/historial")
+def api_panel_turno_historial(
+    turno_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Las definiciones que tuvo el turno y desde cuándo rigió cada una."""
+    _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
+    try:
+        try:
+            return auth.historial_turno(db, usuario, turno_id)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error))
     finally:
         db.cerrar()
 
@@ -1578,6 +1602,7 @@ def api_panel_turnos_editar(
                           if payload.tolerancia_min is not None
                           else auth.SIN_CAMBIO)
                 ),
+                vigente_desde=payload.vigente_desde,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error))

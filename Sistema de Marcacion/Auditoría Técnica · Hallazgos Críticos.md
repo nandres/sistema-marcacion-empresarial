@@ -537,6 +537,28 @@ De arrastre apareció una asimetría en los permisos del rol de servicio: se oto
 
 ---
 
+### P1-7 · El horario del pasado se medía con el horario de hoy ✅ corregido
+
+> Cerrado el 2026-09-15. `turno_versiones` separa la definición fechada de la identidad del turno. Cubierto por `tests/test_turnos_historicos.py` (28 comprobaciones) y por un paso propio de CI.
+
+Editar un turno pisaba su definición anterior. Como los marcajes ya liquidados guardan sus propios números, de lejos parecía inofensivo — y estuvo documentado como deuda menor desde que existe la entidad `turnos`.
+
+No lo era. Lo que se **vuelve a calcular** cambiaba de resultado sin que nadie tocara esos datos:
+
+- **Una corrección aprobada.** `_corregir_entrada` llama a `evaluar_asistencia` con la fecha reclamada, que resolvía el turno y se quedaba con la definición de hoy: corregir en septiembre una marca de marzo la medía contra el horario de septiembre. Convertir en tardanza una llegada que fue puntual —o al revés— es una liquidación mal hecha sobre un empleado que además viene reclamando.
+- **El informe del mes pasado.** `es_dia_laboral` resuelve el turno por fecha para saber si un día era laborable. Cambiar la máscara de días de un turno reescribía las faltas de todos los meses anteriores.
+- **Las horas que reconoce una justificación vieja.** `horas_previstas_legales` mide contra lo que el turno rendía ese día; con la definición nueva reconocía las horas nuevas.
+
+El modelo separa ahora las dos cosas que estaban juntas: `turnos` guarda lo que un turno **es** —nombre, sucursal, si está activo—, que no cambia de sentido con el tiempo, y `turno_versiones` guarda lo que **dice** —días, tolerancia, tramos—, fechado. Resolver pide una fecha y esa fecha elige la versión. `resolver_turno` ya recibía el día y lo descartaba al ir a buscar la definición: la corrección cabía en un argumento, pero no había dónde guardar la respuesta.
+
+Renombrar no abre versión, y guardar el mismo horario tampoco: el panel manda el formulario entero en cada guardado, así que sin esa comparación corregir un typo dejaría una versión idéntica a la anterior. Dos cambios el mismo día son uno solo — una versión que duró cero días no es historia, es ruido.
+
+Corregir el pasado sigue siendo posible, con `vigente_desde` hacia atrás, para el caso real de haber cargado mal un horario que ya estaba en uso. Reescribe la liquidación de ese período, así que se pide explícito y queda en `logs_auditoria` con quién y cuándo.
+
+**Lección de método.** El hallazgo estaba escrito en tres lugares —el README, la nota de turnos, la tabla de *qué NO está incluido*— como deuda conocida y menor. Lo que lo mantenía menor era una media verdad que nadie volvió a mirar: *"los marcajes ya liquidados conservan lo suyo"*. Es cierto y no alcanza. Un dato guardado no está a salvo si alguien lo recalcula, y en este sistema hay tres caminos que lo recalculan.
+
+---
+
 ## Prioridad de remediación sugerida
 
 | Orden | Trabajo | Cierra | Estado |
@@ -558,6 +580,7 @@ De arrastre apareció una asimetría en los permisos del rol de servicio: se oto
 | 14 | El pico de marcación y el origen de cada marca | P0-6, P2-7 | ✅ hecho |
 | 15 | Arranque verificado del servidor en cada paso de CI | P3-14 | ✅ hecho |
 | 16 | Registro operativo, chequeo de salud contra la base y versión de esquema | P3-15 | ✅ hecho |
+| 17 | Versionado histórico de la definición de los turnos | P1-7 | ✅ hecho |
 
 El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].
 

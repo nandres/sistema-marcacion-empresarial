@@ -80,6 +80,28 @@ vencer la persona vuelve sola a donde estaba. Nadie tiene que acordarse de
 deshacer el cambio, que es donde estos sistemas acumulan gente en el turno
 equivocado.
 
+Editar un turno **no reescribe el pasado.** Lo que el turno es —su nombre,
+su sucursal— se corrige en el lugar; lo que dice —qué días cubre, a qué hora,
+con cuánta tolerancia— abre una versión con fecha de vigencia, y las
+anteriores siguen rigiendo la suya. Corregir hoy una marca de marzo la
+mide contra el horario de marzo.
+
+```bash
+GET /api/panel/turnos/{id}/historial
+```
+
+> **No alcanzaba con que los marcajes guardaran sus números.** Lo que se
+> vuelve a calcular era lo que cambiaba: una corrección aprobada, el informe
+> del mes pasado, las horas que reconoce una justificación vieja. Los tres
+> pasaban a medirse contra el horario de hoy en cuanto RRHH tocaba un turno,
+> sin que nadie hubiera tocado esos datos.
+
+Guardar el mismo horario no abre una versión, y dos cambios el mismo día son
+uno solo: una versión que duró cero días no es historia, es ruido. Un
+horario cargado mal se corrige pasando `vigente_desde` hacia atrás — eso
+reescribe la liquidación de ese período, así que se pide explícito y queda
+anotado en la auditoría.
+
 > **Dónde empieza una jornada lo decide el descanso, no el calendario.** El
 > turno nocturno reparte una jornada entre dos días, así que la fecha no
 > sirve; y una ventana fija hacia atrás tampoco, porque la entrada de anoche a
@@ -338,10 +360,11 @@ python tests/test_turnos.py        # jornada partida, francos, rotación
 python tests/test_multiempresa.py  # dos clientes alojados, ningún dato cruzado
 python tests/guardia_arrendamiento.py  # ninguna consulta de cliente sin acotar
 python tests/test_operacion.py     # registro, salud y versión del esquema
+python tests/test_turnos_historicos.py # el pasado se mide con el horario del pasado
 python src/migrate.py estado       # en qué versión está esta base
 ```
 
-Son veintinueve conjuntos en total; el pipeline los corre todos. La lista
+Son treinta conjuntos en total; el pipeline los corre todos. La lista
 completa está en `.github/workflows/deploy.yml`, que es el único lugar donde
 conviene mantenerla.
 
@@ -435,9 +458,6 @@ Lo que falta, dicho de frente:
 
 - **Multi-sede sin husos propios.** La sucursal es hoy un campo del turno:
   alcanza para horarios por sede, no para sedes en husos distintos.
-- **El cambio de horario rige hacia adelante y no versiona el pasado.** Si se
-  edita un turno y después se corrige una marca vieja, la corrección usa el
-  horario nuevo.
 - **Facturación**, fuera de alcance a propósito: el cupo por empresa existe
   para hacer cumplible un plan, no para cobrarlo.
 

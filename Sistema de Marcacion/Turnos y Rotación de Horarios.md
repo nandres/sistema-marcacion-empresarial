@@ -15,11 +15,14 @@ La hora de entrada era una constante del proceso: `INICIO_JORNADA`, leída de `J
 Un turno es una lista ordenada de **tramos**, una máscara de días y, si hace falta, una tolerancia propia.
 
 ```
-turnos             nombre · sucursal · dias (7 caracteres 0/1) · tolerancia_min · predeterminado
-turno_tramos       orden · hora_entrada · hora_salida
+turnos             nombre · sucursal · activo · predeterminado
+turno_versiones    turno · vigente_desde · dias (7 caracteres 0/1) · tolerancia_min
+turno_tramos       version · orden · hora_entrada · hora_salida
 asignaciones_turno usuario · turno · desde · hasta · motivo · asignado_por
 users.turno_id     el turno de contrato del legajo
 ```
+
+La separación entre las dos primeras tablas es la que importa: **`turnos` guarda lo que un turno es y `turno_versiones` lo que dice.** El nombre y la sucursal son identidad y no cambian de sentido con el tiempo —un turno renombrado sigue siendo el mismo turno—; los días, la tolerancia y los tramos son exactamente lo que cambia, así que van fechados. `turnos.dias` y `turnos.tolerancia_min` siguen existiendo como caché de la versión vigente hoy, para que una consulta suelta en psql no lea un horario de hace tres versiones.
 
 La máscara empieza el lunes, como `date.weekday()`. `1111100` es Lun a Vie; `0111110`, Mar a Sáb.
 
@@ -132,9 +135,23 @@ No se retira un turno con gente adentro: el horario de esa gente pasaría en sil
 
 El empleado ve su horario en el portal, debajo del parte del día, con la marca **Rotación vigente** cuando corresponde. Una rotación que la persona no puede ver es una regla que no se le comunicó.
 
+## El pasado se mide con el horario del pasado
+
+Resolver un turno pide una fecha, y esa fecha elige la versión. `db.get_turno(turno_id, dia)` devuelve la definición que regía ese día, y `resolver_turno` le pasa la fecha que ya recibía y antes descartaba — la corrección cabía en una línea, pero no había dónde guardar la respuesta.
+
+Una fecha anterior a la primera versión conocida devuelve esa primera versión. Es deliberado: la alternativa —no resolver ningún horario— deja la marca sin poder liquidarse, y medir contra la definición más vieja que existe es la aproximación menos mala a un horario que nadie llegó a anotar.
+
+**Qué versiona y qué no.** Renombrar no abre versión. Guardar el mismo horario tampoco: el panel manda el formulario entero en cada guardado, así que sin esa comparación corregir un typo dejaría una versión idéntica a la anterior y el historial dejaría de contar una historia. Dos cambios el mismo día son uno solo, porque una versión que duró cero días no es historia sino ruido.
+
+**Corregir el pasado sigue siendo posible**, con `vigente_desde` hacia atrás, para el caso real de haber cargado mal un horario que ya estaba en uso. No es un atajo: reescribe la liquidación de ese período. Por eso se pide explícito, nunca se asume, y queda en `logs_auditoria` con quién y cuándo.
+
+> [!note] Lo que se recalculaba
+> Que los marcajes guardaran sus números no alcanzaba, aunque de lejos lo pareciera. Lo que se **vuelve a calcular** era lo que cambiaba: una corrección aprobada, el informe del mes pasado, las horas que reconoce una justificación vieja. Los tres pasaban a medirse contra el horario de hoy en cuanto RRHH tocaba un turno, sin que nadie hubiera tocado esos datos.
+
+La migración `2026-09-versiones-de-turno` es el primer paso de una sola vez del registro de migraciones: le da a cada turno existente una versión con la fecha en que se creó, y ata sus tramos a ella.
+
 ## Lo que sigue faltando
 
-- **El cambio de horario rige hacia adelante y no versiona el pasado.** Los marcajes ya liquidados conservan la incidencia calculada con el horario de entonces, que es lo correcto; pero si se edita un turno y después se corrige una marca vieja, la corrección usa el horario **nuevo**.
 - **La línea de tiempo del mes resuelve el turno una vez**, no día por día: una rotación a mitad de mes desplaza los francos del tramo anterior. Es un detalle de presentación frente a treinta consultas por pantalla.
 
 ## Enlaces

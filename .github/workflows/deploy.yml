@@ -89,6 +89,15 @@ jobs:
       - name: Turnos, rotación y jornada partida (P2-4, P2-5)
         run: python tests/test_turnos.py
 
+      - name: Turnos con historia · el pasado usa el horario del pasado
+        shell: bash
+        run: |
+          set -o pipefail
+          source tests/servidor.sh
+          arrancar
+          WEB_BASE=$SERVIDOR python tests/test_turnos_historicos.py
+          detener
+
       - name: Ciclos de rotación automática
         run: python tests/test_rotacion.py
 

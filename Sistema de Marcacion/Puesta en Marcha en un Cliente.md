@@ -97,6 +97,7 @@ Encenderla con la plantilla a medio cargar deja gente sin poder marcar.
 | --- | --- | --- |
 | Alojar un cliente nuevo en la misma instalación | Quien instala | `python src/app.py alta-empresa` |
 | Alguien cambia de horario por un tiempo | RRHH programa una rotación con vigencia | *Gestión → Turnos* |
+| Cambia el horario de un turno entero | RRHH lo edita; el cambio rige desde la fecha que indique y el pasado conserva el suyo | *Gestión → Turnos* |
 | La empresa rota turnos cada semana | RRHH define un ciclo y asigna posiciones; el resto se calcula | *Gestión → Turnos → Rotación automática* |
 | Alguien olvidó marcar la salida | Se libera solo a las 18 h y avisa a RRHH | *Gestión → Pendientes* |
 | Lluvia, paro de transporte, corte de rutas | RRHH declara la condición del día | *Gestión → Condiciones del día* |
@@ -133,7 +134,6 @@ Decirlo por adelantado evita una venta mal hecha.
 | --- | --- | --- |
 | **Prueba de vida a prueba de video** | El gesto que pide el kiosco deja afuera una foto quieta, pero no a quien mueva el teléfono siguiendo la consigna. Lo cierra una cámara con infrarrojo o un modelo anti-suplantación | P1-2b |
 | **Sedes en husos horarios distintos** | La sucursal es un campo del turno: alcanza para horarios por sede, no para sedes en husos distintos. Con todas las sucursales en Paraguay no se nota | — |
-| **Versionado del horario** | Si se edita un turno y después se corrige una marca vieja, la corrección usa el horario nuevo. Los marcajes ya liquidados conservan lo suyo | [[Turnos y Rotación de Horarios]] |
 
 Ninguna de las tres bloquea una venta en Paraguay, pero conviene decirlas
 antes y no después.

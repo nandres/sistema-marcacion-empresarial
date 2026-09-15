@@ -167,6 +167,14 @@ class Turno:
     origen: str = "predeterminado"
     """Cómo llegó el turno al empleado: asignación, legajo o predeterminado."""
 
+    vigente_desde: Optional[date] = None
+    """Desde cuándo rige **esta** definición del horario.
+
+    Un turno editado conserva sus definiciones anteriores, así que el mismo
+    turno resuelto en dos fechas distintas puede traer horarios distintos.
+    Saber cuál se usó es lo que hace auditable una liquidación vieja.
+    """
+
     def trabaja(self, dia: date) -> bool:
         """Indica si el turno cubre ese día de la semana."""
         return self.dias[dia.weekday()] == "1"
@@ -232,6 +240,9 @@ class Turno:
             "activo": self.activo,
             "predeterminado": self.predeterminado,
             "origen": self.origen,
+            "vigente_desde": (
+                self.vigente_desde.isoformat() if self.vigente_desde else None
+            ),
             "partida": len(self.tramos) > 1,
             "nocturno": self.nocturno,
             "horario": self.etiqueta(),
@@ -317,6 +328,7 @@ def desde_fila(fila: Dict[str, Any], origen: Optional[str] = None) -> Turno:
         activo=bool(fila.get("activo", True)),
         predeterminado=bool(fila.get("predeterminado", False)),
         origen=origen or fila.get("origen") or "predeterminado",
+        vigente_desde=fila.get("vigente_desde"),
     )
 
 
