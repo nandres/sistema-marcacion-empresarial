@@ -873,9 +873,22 @@ def api_marcar(payload: MarcarRequest, request: Request) -> Dict[str, Any]:
     _frenar(request, cedula)
     db = _cliente()
     try:
+        # El puesto se identifica antes que la persona, y de él sale la
+        # empresa: un token de dispositivo dice de qué cliente es el kiosco
+        # con más certeza que el nombre del host, que cualquiera puede fijar.
+        dispositivo = auth.resolver_dispositivo(db, request.headers.get("X-Dispositivo", ""))
+        if dispositivo is None and auth.dispositivo_obligatorio():
+            raise HTTPException(
+                status_code=403,
+                detail="Este puesto no está habilitado para marcar. "
+                       "Pedile a Recursos Humanos que lo dé de alta.",
+            )
+        empresa_pedida = payload.empresa or _empresa_del_host(request)
+        if dispositivo is not None:
+            db.empresa_id = dispositivo["empresa_id"]
+            empresa_pedida = ""
         usuario = auth.authenticate(
-            db, cedula, payload.password,
-            payload.empresa or _empresa_del_host(request),
+            db, cedula, payload.password, empresa_pedida,
         )
         if not usuario:
             _registrar_fallo(request, cedula)
@@ -899,6 +912,9 @@ def api_marcar(payload: MarcarRequest, request: Request) -> Dict[str, Any]:
             registro_id, momento, tipo = engine.registrar_asistencia(decision.marca)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error))
+        if dispositivo is not None:
+            db.asignar_dispositivo_a_marcaje(registro_id, dispositivo["id"])
+            db.marcar_dispositivo_visto(dispositivo["id"])
         if tipo == "ENTRADA":
             notifications.registrar_alerta(
                 db,
@@ -1646,6 +1662,66 @@ def api_panel_ciclos_eliminar(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error))
         return {"mensaje": "Ciclo eliminado."}
+    finally:
+        db.cerrar()
+
+
+class DispositivoNuevo(BaseModel):
+    nombre: str
+    ubicacion: str = ""
+
+
+@app.get("/api/panel/dispositivos")
+def api_panel_dispositivos(
+    incluir_inactivos: bool = False,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> List[Dict[str, Any]]:
+    """Puestos de marcación dados de alta, con su actividad."""
+    _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
+    try:
+        return auth.listar_dispositivos(db, usuario, incluir_inactivos)
+    finally:
+        db.cerrar()
+
+
+@app.post("/api/panel/dispositivos")
+def api_panel_dispositivos_crear(
+    payload: DispositivoNuevo,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, Any]:
+    """Da de alta un puesto y devuelve su token una sola vez.
+
+    El token viaja en esta respuesta y no vuelve a poder leerse: en la base
+    queda solo su hash. Si se pierde se revoca el puesto y se crea otro.
+    """
+    _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
+    try:
+        try:
+            return auth.registrar_dispositivo(
+                db, usuario, payload.nombre, payload.ubicacion
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+    finally:
+        db.cerrar()
+
+
+@app.delete("/api/panel/dispositivos/{dispositivo_id}")
+def api_panel_dispositivos_revocar(
+    dispositivo_id: int,
+    usuario: Dict[str, Any] = Depends(_usuario_autenticado),
+) -> Dict[str, str]:
+    """Deja un puesto fuera de servicio sin borrar el origen de sus marcas."""
+    _exigir_rrhh(usuario)
+    db = _cliente_de(usuario)
+    try:
+        try:
+            auth.revocar_dispositivo(db, usuario, dispositivo_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"mensaje": "Puesto de marcación revocado."}
     finally:
         db.cerrar()
 

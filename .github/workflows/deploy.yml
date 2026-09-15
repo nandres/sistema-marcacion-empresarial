@@ -148,6 +148,7 @@ jobs:
           sleep 6
           WEB_BASE=http://127.0.0.1:8000 python tests/smoke_web_panel.py
           WEB_BASE=http://127.0.0.1:8000 python tests/test_sesion_cookie.py
+          WEB_BASE=http://127.0.0.1:8000 python tests/test_dispositivos.py
 
       - name: Pico de marcacion · todos a la vez
         shell: bash

@@ -60,6 +60,7 @@ TABLAS_DE_EMPRESA: Tuple[str, ...] = (
     "logs_auditoria",
     "ciclos_rotacion",
     "ciclo_turnos",
+    "dispositivos",
 )
 """Tablas cuyas filas pertenecen a un cliente.
 
@@ -846,6 +847,34 @@ class Database:
             ON solicitudes_permiso (usuario_id, creado_en DESC)
             """
         )
+        # Identidad del puesto donde se marca. Sin esto una marcación no tiene
+        # origen, y "marqué desde casa" no es un hecho que se pueda comprobar
+        # ni desmentir. El token no se guarda: se guarda su hash, por el mismo
+        # motivo que una contraseña.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dispositivos (
+                id SERIAL PRIMARY KEY,
+                nombre VARCHAR(80) NOT NULL,
+                ubicacion VARCHAR(120) NOT NULL DEFAULT '',
+                token_hash VARCHAR(64) NOT NULL UNIQUE,
+                activo BOOLEAN NOT NULL DEFAULT TRUE,
+                creado_por INTEGER REFERENCES users (id),
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                ultimo_visto TIMESTAMPTZ
+            )
+            """
+        )
+        cursor.execute(
+            "ALTER TABLE marcajes ADD COLUMN IF NOT EXISTS dispositivo_id "
+            "INTEGER REFERENCES dispositivos (id) ON DELETE SET NULL"
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_marcajes_dispositivo
+            ON marcajes (dispositivo_id, hora_entrada DESC)
+            """
+        )
         for nombre in ROLES_INICIALES:
             cursor.execute(
                 "INSERT INTO roles (nombre) VALUES (%s) ON CONFLICT (nombre) DO NOTHING",
@@ -1048,6 +1077,34 @@ class Database:
                 JOIN empresas e ON e.id = u.empresa_id
                 WHERE lower(u.username) = lower(p_username)
                 ORDER BY u.id
+            $fn$
+            """
+        )
+
+        # El token del kiosco es la segunda —y última— lectura que cruza
+        # empresas a propósito, por el mismo motivo que el login: el puesto se
+        # identifica antes de que nadie sepa de qué cliente es. Devuelve lo
+        # mínimo para resolverlo y nada más.
+        cursor.execute(
+            """
+            CREATE OR REPLACE FUNCTION dispositivo_por_token(p_hash text)
+            RETURNS TABLE (
+                id integer,
+                empresa_id integer,
+                nombre text,
+                ubicacion text,
+                activo boolean
+            )
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path = public
+            AS $fn$
+                SELECT d.id, d.empresa_id, d.nombre::text, d.ubicacion::text,
+                       (d.activo AND e.activa) AS activo
+                FROM dispositivos d
+                JOIN empresas e ON e.id = d.empresa_id
+                WHERE d.token_hash = p_hash
             $fn$
             """
         )
@@ -1667,6 +1724,87 @@ class Database:
         self._reemplazar_tramos(turno_id, tramos)
         self.connection.commit()
         return turno_id
+
+    # ------------------------------------------------ Dispositivos de marcación
+
+    def crear_dispositivo(
+        self, nombre: str, ubicacion: str, token_hash: str, creado_por: int
+    ) -> int:
+        """Da de alta un puesto de marcación guardando solo el hash del token."""
+        cursor = self._execute(
+            """
+            INSERT INTO dispositivos
+                (nombre, ubicacion, token_hash, creado_por, empresa_id)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (nombre, ubicacion, token_hash, creado_por, self.empresa),
+        )
+        self.connection.commit()
+        return cursor.fetchone()["id"]
+
+    def listar_dispositivos(self, incluir_inactivos: bool = False) -> List[Dict[str, Any]]:
+        """Puestos de marcación de la empresa, con cuántas marcas lleva cada uno."""
+        condicion = "" if incluir_inactivos else "AND d.activo = TRUE"
+        cursor = self._execute(
+            f"""
+            SELECT d.id, d.nombre, d.ubicacion, d.activo, d.creado_en,
+                   d.ultimo_visto, COUNT(m.id) AS marcas
+            FROM dispositivos d
+            LEFT JOIN marcajes m
+                   ON m.dispositivo_id = d.id AND m.empresa_id = d.empresa_id
+            WHERE d.empresa_id = %s {condicion}
+            GROUP BY d.id
+            ORDER BY d.activo DESC, d.nombre
+            """,
+            (self.empresa,),
+            fetch="all",
+        )
+        return [dict(fila) for fila in cursor or []]
+
+    def dispositivo_por_token(self, token_hash: str) -> Optional[Dict[str, Any]]:
+        """Resuelve un token a su puesto, sin exigir empresa en la sesión.
+
+        El kiosco se identifica antes de que nadie sepa de qué cliente es: el
+        token es justamente lo que lo dice. Por eso la búsqueda es global y la
+        empresa sale del dispositivo, no al revés.
+        """
+        filas = self._execute(
+            "SELECT * FROM dispositivo_por_token(%s)",
+            (token_hash,),
+            fetch="all",
+        )
+        return dict(filas[0]) if filas else None
+
+    def marcar_dispositivo_visto(self, dispositivo_id: int) -> None:
+        """Deja constancia de que el puesto sigue en pie."""
+        self._execute(
+            "UPDATE dispositivos SET ultimo_visto = NOW() "
+            "WHERE empresa_id = %s AND id = %s",
+            (self.empresa, dispositivo_id),
+        )
+        self.connection.commit()
+
+    def revocar_dispositivo(self, dispositivo_id: int) -> None:
+        """Desactiva un puesto sin borrarlo.
+
+        Borrarlo dejaría sin origen a las marcas que ya registró, que es
+        justamente el dato que este módulo existe para conservar.
+        """
+        self._execute(
+            "UPDATE dispositivos SET activo = FALSE "
+            "WHERE empresa_id = %s AND id = %s",
+            (self.empresa, dispositivo_id),
+        )
+        self.connection.commit()
+
+    def asignar_dispositivo_a_marcaje(self, marcaje_id: int, dispositivo_id: int) -> None:
+        """Ata una marcación al puesto donde se hizo."""
+        self._execute(
+            "UPDATE marcajes SET dispositivo_id = %s WHERE empresa_id = %s AND id = %s",
+            (dispositivo_id, self.empresa, marcaje_id),
+        )
+        self.connection.commit()
 
     def actualizar_turno(
         self,

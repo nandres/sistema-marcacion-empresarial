@@ -1064,6 +1064,105 @@ def crear_turno(
     return _turno_como_dict(db.get_turno(turno_id))
 
 
+# --------------------------------------------- Dispositivos de marcación
+
+
+VARIABLE_DISPOSITIVO_OBLIGATORIO: str = "DISPOSITIVO_OBLIGATORIO"
+
+
+def dispositivo_obligatorio() -> bool:
+    """Si una marca sin puesto identificado se rechaza.
+
+    Viene apagado: una instalación existente no tiene puestos dados de alta, y
+    encenderlo de golpe dejaría a todo el mundo sin poder marcar.
+    """
+    return (os.getenv(VARIABLE_DISPOSITIVO_OBLIGATORIO, "") or "").strip().lower() in (
+        "1", "true", "si", "sí", "yes",
+    )
+
+
+def huella_de_token(token: str) -> str:
+    """Hash con el que se guarda y se busca un token de dispositivo.
+
+    El token es una credencial: guardarlo en claro convierte una lectura de la
+    tabla en la capacidad de fabricar marcas desde cualquier lado. Se guarda
+    el hash, igual que una contraseña, y se compara por hash.
+    """
+    import hashlib
+
+    return hashlib.sha256((token or "").strip().encode("utf-8")).hexdigest()
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def registrar_dispositivo(
+    db: Database, actor: Dict, nombre: str, ubicacion: str = ""
+) -> Dict[str, Any]:
+    """Da de alta un puesto de marcación y devuelve su token una sola vez.
+
+    El token se muestra acá y no se vuelve a poder leer: en la base queda su
+    hash. Si se pierde, se revoca el puesto y se da de alta otro, que es más
+    seguro que poder recuperarlo.
+    """
+    import secrets
+
+    nombre = (nombre or "").strip()
+    if len(nombre) < 3:
+        raise ValueError("El puesto necesita un nombre de al menos 3 caracteres.")
+
+    token = secrets.token_urlsafe(32)
+    dispositivo_id = db.crear_dispositivo(
+        nombre, (ubicacion or "").strip(), huella_de_token(token), actor["id"]
+    )
+    db.registrar_auditoria(
+        actor["id"], "CREAR", "dispositivos", dispositivo_id,
+        nuevos={"nombre": nombre, "ubicacion": ubicacion},
+    )
+    return {
+        "id": dispositivo_id,
+        "nombre": nombre,
+        "ubicacion": ubicacion,
+        "token": token,
+        "aviso": "Guardá este token ahora: no se vuelve a mostrar.",
+    }
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def listar_dispositivos(
+    db: Database, actor: Dict, incluir_inactivos: bool = False
+) -> List[Dict[str, Any]]:
+    """Puestos de marcación con su actividad."""
+    return db.listar_dispositivos(incluir_inactivos)
+
+
+@autorizado(ROLE_ADMIN, ROLE_RRHH)
+def revocar_dispositivo(db: Database, actor: Dict, dispositivo_id: int) -> bool:
+    """Deja fuera de servicio un puesto sin borrar el origen de sus marcas."""
+    existentes = {d["id"]: d for d in db.listar_dispositivos(incluir_inactivos=True)}
+    if dispositivo_id not in existentes:
+        raise ValueError("Ese puesto de marcación no existe.")
+    db.revocar_dispositivo(dispositivo_id)
+    db.registrar_auditoria(
+        actor["id"], "ACTUALIZAR", "dispositivos", dispositivo_id,
+        anterior={"activo": True}, nuevos={"activo": False},
+    )
+    return True
+
+
+def resolver_dispositivo(db: Database, token: str) -> Optional[Dict[str, Any]]:
+    """Identifica el puesto que presenta ese token, si sigue habilitado.
+
+    Devuelve ``None`` tanto para un token desconocido como para uno revocado:
+    desde afuera no hay forma de distinguir un puesto dado de baja de uno que
+    nunca existió, que es lo que corresponde para una credencial.
+    """
+    if not (token or "").strip():
+        return None
+    dispositivo = db.dispositivo_por_token(huella_de_token(token))
+    if not dispositivo or not dispositivo.get("activo"):
+        return None
+    return dispositivo
+
+
 @autorizado(ROLE_ADMIN, ROLE_RRHH)
 def actualizar_turno(
     db: Database,
