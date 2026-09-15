@@ -15,7 +15,11 @@ venv/
 .env.local
 .env.production
 .env.*
-!.env.example
+# La plantilla sí va al repositorio: no tiene secretos, y sin ella quien
+# clona de cero no tiene de dónde copiar el .env. La negación decía
+# `.env.example`, en inglés, y el archivo se llama `.env.ejemplo`: no
+# coincidía con nada y la plantilla nunca se subió.
+!.env.ejemplo
 
 # Reportes generados (datos de empleados)
 reportes/

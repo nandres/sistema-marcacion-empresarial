@@ -56,7 +56,11 @@ jobs:
         run: python -m py_compile src/*.py
 
       - name: Aplicar el esquema (base limpia)
-        run: python src/migrate.py
+        run: |
+          python src/migrate.py
+          # Sobre una base recién migrada tiene que decir que está al día; si
+          # devuelve distinto de cero, el sello no quedó donde debía.
+          python src/migrate.py estado
 
       - name: Script del portal parsea (node --check)
         run: python tests/smoke_portal_js.py
@@ -152,6 +156,17 @@ jobs:
           WEB_BASE=$SERVIDOR python tests/smoke_web_panel.py
           WEB_BASE=$SERVIDOR python tests/test_sesion_cookie.py
           WEB_BASE=$SERVIDOR python tests/test_dispositivos.py
+          detener
+
+      - name: Operacion · registro, salud y version del esquema
+        shell: bash
+        run: |
+          set -o pipefail
+          source tests/servidor.sh
+          arrancar
+          WEB_BASE=$SERVIDOR python tests/test_operacion.py
+          # La salud tiene que poder consultarse sin credenciales y decir 200.
+          curl -fsS "$SERVIDOR/salud" | grep -q '"estado":"ok"'
           detener
 
       - name: Pico de marcacion · todos a la vez

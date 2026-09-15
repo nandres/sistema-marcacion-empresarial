@@ -141,7 +141,11 @@ pip install -r requirements.txt
 
 ### Configuración
 
-Crear un `.env` en la raíz:
+```bash
+cp .env.ejemplo .env
+```
+
+La plantilla lista todas las variables con sus por qué. Lo mínimo:
 
 ```ini
 DB_HOST=localhost
@@ -262,6 +266,69 @@ descifrar. Después contrasta lo que quedó contra el manifiesto, porque
 > robado no sirva. Guardala en otro lugar que el respaldo: juntos entregan los
 > rostros de toda la plantilla; separados, ninguno sirve solo.
 
+## Operación
+
+Tres cosas que no cambian nada de lo que ve un empleado y deciden si esto se
+puede sostener una vez instalado.
+
+**El registro sale por la salida estándar**, que es donde lo busca cualquier
+orquestador. Una línea por petición, con un identificador que además viaja
+de vuelta en la cabecera `X-Peticion`: quien reporta *"me dio error a las
+7:42"* trae ese código y el registro se busca por ahí.
+
+```
+2026-09-15 07:42:11 INFO    web          [3f9c1a44] POST /api/marcar -> 200 en 41 ms
+2026-09-15 07:42:13 WARNING web          [7b02e5d1] credenciales rechazadas para '4512883' desde 10.0.0.23
+2026-09-15 07:42:19 WARNING database     [c1d4f8a0] el pool de 10 conexiones se agotó; la petición esperó 380 ms
+```
+
+Nunca entran ahí contraseñas, tokens de sesión, tokens de kiosco ni
+plantillas faciales: un registro operativo se le pasa a un tercero el día que
+pedir ayuda, y ese día tiene que poder copiarse entero. `LOG_NIVEL` ajusta el
+detalle; en `DEBUG` también hablan las bibliotecas, que el resto del tiempo
+están calladas para que el registro lo escriba el sistema y no `httpx`.
+
+**La salud se mide contra la base**, en `GET /salud`, sin credenciales:
+
+```bash
+curl -fsS http://127.0.0.1:8000/salud
+# {"estado":"ok"}  ·  503 si la base no contesta
+```
+
+El chequeo anterior pedía la portada, que arma el portal entero sin tocar
+PostgreSQL: con la base caída el contenedor se reportaba sano y nadie lo
+reiniciaba. La respuesta no dice versiones ni nombres de host, porque la
+consulta cualquiera.
+
+**La base declara su versión de esquema**, y el servidor se niega a arrancar
+si el código es más nuevo que ella:
+
+```bash
+python src/migrate.py estado
+```
+
+```
+Esquema de la base: versión 1
+Esperado por este código: versión 1
+
+Aplicado:
+  2026-09-15 13:26  base:1
+
+Al día: esta base puede atender tráfico con este código.
+```
+
+> **Antes se contaban tablas contra una lista escrita a mano, y la lista
+> envejeció.** Cuando el esquema sumó `dispositivos`, una base migrada antes
+> seguía dando el recuento por bueno: el servidor arrancaba sin la tabla que
+> `/api/marcar` necesita y el fallo aparecía en la primera marcación, no al
+> arrancar, que es cuando todavía se puede corregir.
+
+El DDL base es idempotente y se repite sin consecuencias, así que agregar una
+tabla o una columna no necesita nada más que subir `ESQUEMA_VERSION`. Lo que
+**no** se puede repetir —rellenar una columna nueva desde las viejas, corregir
+filas cargadas mal, cambiar un tipo— va en `PASOS_UNICOS`, y cada paso queda
+anotado en la base con su nombre para que la migración siguiente lo saltee.
+
 ## Comandos
 
 ```bash
@@ -270,9 +337,11 @@ python tests/test_motor_horario.py # turnos frontera: jornadas, recargos, feriad
 python tests/test_turnos.py        # jornada partida, francos, rotación
 python tests/test_multiempresa.py  # dos clientes alojados, ningún dato cruzado
 python tests/guardia_arrendamiento.py  # ninguna consulta de cliente sin acotar
+python tests/test_operacion.py     # registro, salud y versión del esquema
+python src/migrate.py estado       # en qué versión está esta base
 ```
 
-Son veintiocho conjuntos en total; el pipeline los corre todos. La lista
+Son veintinueve conjuntos en total; el pipeline los corre todos. La lista
 completa está en `.github/workflows/deploy.yml`, que es el único lugar donde
 conviene mantenerla.
 
@@ -292,6 +361,7 @@ src/
 ├── turnos.py       tramos, días, rotación y ciclos
 ├── reglamento.py   catálogo de permisos, cuotas y días hábiles
 ├── database.py     esquema, aislamiento por empresa y auditoría JSONB
+├── registro.py     registro operativo con identificador por petición
 ├── auth.py         autenticación, roles y JWT
 ├── biometria.py    cifrado en reposo de las plantillas faciales
 ├── facial.py       veredictos del reconocimiento y prueba de vida

@@ -8,6 +8,7 @@ de levantar los procesos que atienden tráfico.
 
 Uso:
     python migrate.py            # aplica el esquema y sale
+    python migrate.py estado     # dice en qué versión está esta base
     python migrate.py rol-app    # crea el rol restringido del servicio
 """
 
@@ -21,6 +22,8 @@ import psycopg2
 
 import auth
 import biometria
+import database
+import registro
 from database import Database
 
 ROL_APLICACION: str = "marcacion_app"
@@ -43,6 +46,44 @@ def aplicar() -> int:
         return 0
     finally:
         db.cerrar()
+
+
+def informar_estado() -> int:
+    """Dice qué versión tiene esta base y qué le falta, sin tocar nada.
+
+    Con un solo cliente la pregunta no existe. Con varios, instalados en
+    momentos distintos y actualizados cuando cada uno pudo, *¿qué versión
+    corre acá?* es la primera pregunta de cualquier incidente, y hasta ahora
+    solo se podía contestar mirando el código que uno cree haberle instalado.
+    """
+    db = Database()
+    try:
+        db.connect()
+        version = db.version_esquema()
+        pendientes = db.migraciones_pendientes()
+        historial = db.historial_esquema()
+    finally:
+        db.cerrar()
+
+    print(f"Esquema de la base: versión {version}"
+          if version is not None else
+          "Esquema de la base: sin migrar (no hay registro de migraciones)")
+    print(f"Esperado por este código: versión {database.ESQUEMA_VERSION}")
+
+    if historial:
+        print("\nAplicado:")
+        for paso in historial:
+            print(f"  {paso['aplicada_en']:%Y-%m-%d %H:%M}  {paso['nombre']}")
+
+    if pendientes:
+        print("\nPendiente:")
+        for nombre in pendientes:
+            print(f"  {nombre}")
+        print("\nEl servidor no va a arrancar hasta correr 'python migrate.py'.")
+        return 1
+
+    print("\nAl día: esta base puede atender tráfico con este código.")
+    return 0
 
 
 def informar_aislamiento() -> None:
@@ -111,6 +152,13 @@ def crear_rol_app() -> int:
 
 
 def main() -> int:
+    registro.configurar()
+    if len(sys.argv) > 1 and sys.argv[1] == "estado":
+        try:
+            return informar_estado()
+        except Exception as error:
+            print(f"No se pudo leer el estado del esquema: {error}", file=sys.stderr)
+            return 1
     if len(sys.argv) > 1 and sys.argv[1] == "rol-app":
         try:
             return crear_rol_app()
@@ -133,7 +181,7 @@ def main() -> int:
     except Exception as error:
         print(f"Migración fallida: {error}", file=sys.stderr)
         return 1
-    print("Esquema aplicado correctamente.")
+    print(f"Esquema aplicado correctamente (versión {database.ESQUEMA_VERSION}).")
     informar_aislamiento()
     if cifradas:
         print(f"Plantillas faciales cifradas en reposo: {cifradas}.")

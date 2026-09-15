@@ -515,6 +515,28 @@ Ahora el arranque es explícito: se libera el puerto —el PID va a un archivo, 
 
 ---
 
+### P3-15 · Sin registro operativo, sin chequeo real de salud y sin versión de esquema ✅ corregido
+
+> Cerrado el 2026-09-15. `src/registro.py`, `GET /salud` y un sello de versión en la propia base. Cubierto por `tests/test_operacion.py` (23 comprobaciones) y por un paso propio de CI.
+
+Tres huecos que no cambiaban nada de lo que ve un empleado y decidían si el sistema se podía sostener una vez instalado. Ninguno venía de la auditoría original: aparecieron al revisar qué faltaba para darlo por terminado.
+
+**No había registro operativo.** Cero uso de `logging` en `src/`. Un 500 en producción dejaba el *traceback* de uvicorn en la salida estándar y nada más: sin identificador de petición, sin empresa, sin usuario, sin duración. `logs_auditoria` existía y existe, pero es otra cosa —quién aprobó qué permiso, para mostrárselo a una inspección— y vive en la base junto a los datos del cliente. Ahora cada petición lleva un identificador que también vuelve en la cabecera `X-Peticion`, de modo que *"me dio error a las 7:42"* deja de ser una pista y pasa a ser una clave de búsqueda. Lo que nunca entra: contraseñas, tokens de sesión, tokens de kiosco y plantillas faciales — un registro operativo se le pasa a un tercero el día que hay que pedir ayuda, y ese día tiene que poder copiarse entero.
+
+Dos eventos entraron al registro por mérito propio: el freno de intentos y la **espera del pool**. Una espera que termina bien no rompe nada, pero es el aviso de que el pool quedó chico; era exactamente lo que faltaba para ver venir [[#P0-6 · El pico de la mañana rechazaba tres de cada cuatro marcas ✅ corregido|P0-6]] antes de que se convirtiera en marcas rechazadas.
+
+**El chequeo de salud no tocaba la base.** `docker-compose` y el `HEALTHCHECK` del Dockerfile pedían la portada, que arma el portal entero sin consultar PostgreSQL: con la base caída el contenedor se reportaba sano y nadie lo reiniciaba. `GET /salud` abre conexión y pregunta, porque tenerla abierta no prueba nada —el pool puede estar entregando un socket que la base cerró del otro lado hace horas—. Responde sin credenciales y no dice versiones ni nombres de host, porque lo consulta cualquiera.
+
+**El esquema no tenía versión.** Se crea con DDL idempotente y `esquema_listo()` contaba tablas contra una lista escrita a mano. La lista envejeció: cuando el esquema sumó `dispositivos`, una base migrada de antes seguía dando el recuento por bueno, el servidor arrancaba sin la tabla que `/api/marcar` necesita, y el fallo aparecía en la primera marcación en lugar de al arrancar, que es cuando todavía se puede corregir. Ahora la base lleva un sello propio: `python src/migrate.py estado` contesta *¿en qué versión está este cliente?* sin depender de mirar el código que uno cree haberle instalado, y el servidor se niega a arrancar cuando el código es más nuevo que la base, diciendo qué falta y no solo que algo falta.
+
+El DDL base sigue siendo idempotente y se repite sin consecuencias. Lo que **no** se puede repetir —rellenar una columna nueva desde las viejas, corregir filas cargadas mal, cambiar un tipo— va en `PASOS_UNICOS`, dentro de la misma transacción que el resto del DDL: si algo falla, la base no puede quedar declarando una versión que en realidad no terminó de aplicarse.
+
+De arrastre apareció una asimetría en los permisos del rol de servicio: se otorgaba `EXECUTE` sobre `credenciales_por_usuario` pero no sobre `dispositivo_por_token`, las dos únicas lecturas que cruzan empresas a propósito. Funcionaba porque PostgreSQL concede ejecución a `PUBLIC` por defecto; el día que alguien la revoque, el login seguiría en pie y la marcación caída, que es la peor mitad para descubrir en producción.
+
+**Lección de método.** Con un cliente los tres huecos son invisibles: el desarrollador tiene la consola delante, sabe qué versión instaló y se entera de que la base está caída porque se lo dicen por teléfono. Los tres aparecen al segundo cliente, y para entonces ya no hay a quién preguntarle qué pasó.
+
+---
+
 ## Prioridad de remediación sugerida
 
 | Orden | Trabajo | Cierra | Estado |
@@ -535,6 +557,7 @@ Ahora el arranque es explícito: se libera el puerto —el PID va a un archivo, 
 | 13 | Entregable: instalador del kiosco, despliegue en servidor propio y respaldo verificable | P3-13 | ✅ hecho |
 | 14 | El pico de marcación y el origen de cada marca | P0-6, P2-7 | ✅ hecho |
 | 15 | Arranque verificado del servidor en cada paso de CI | P3-14 | ✅ hecho |
+| 16 | Registro operativo, chequeo de salud contra la base y versión de esquema | P3-15 | ✅ hecho |
 
 El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].
 

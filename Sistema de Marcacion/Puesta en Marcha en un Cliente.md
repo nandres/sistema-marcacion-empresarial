@@ -108,6 +108,23 @@ Encenderla con la plantilla a medio cargar deja gente sin poder marcar.
 
 La diferencia entre **dar de baja** y **eliminar** es la que más hay que explicar: la baja conserva marcajes y comprobantes para el archivo laboral; eliminar los destruye y solo debería usarse para corregir un alta equivocada.
 
+### Cuando el cliente llama diciendo que algo falló
+
+Tres preguntas, en este orden, y cada una tiene un comando que la contesta.
+
+**¿Está vivo?** `curl -fsS http://<servidor>:8000/salud`. Responde `{"estado":"ok"}` solo si además la base contesta: no alcanza con que el proceso esté levantado, porque una conexión abierta contra un PostgreSQL que dejó de responder se ve igual de sana desde afuera. Un `503` dice que el servicio está en pie pero la base no.
+
+**¿Qué versión tiene esta instalación?** `python src/migrate.py estado`. Contesta con el sello que lleva la propia base, no con el que uno cree haberle instalado, y dice qué le falta aplicar. Es la primera pregunta de cualquier incidente en cuanto hay más de un cliente instalado en momentos distintos.
+
+**¿Qué pasó exactamente?** El registro sale por la salida estándar (`docker compose logs web`, o el journal del servicio). Pedile al que reporta la hora exacta; si el error se vio en el navegador, la respuesta trae una cabecera `X-Peticion` con un código que aparece entre corchetes en todas las líneas de esa misma petición.
+
+```
+2026-09-15 07:42:19 WARNING database     [c1d4f8a0] el pool de 10 conexiones se agotó; la petición esperó 380 ms
+2026-09-15 07:42:19 ERROR   web          [c1d4f8a0] POST /api/marcar -> 500 en 10041 ms
+```
+
+Esa primera línea es un aviso, no una falla: la marca entró. Pero dice que el pool quedó chico para el pico de esta empresa, y que conviene subir `DB_POOL_MAX` antes de que el pico siguiente lo convierta en marcas rechazadas.
+
 ## Qué NO está incluido
 
 Decirlo por adelantado evita una venta mal hecha.
@@ -150,7 +167,17 @@ python tests/test_planilla_extras.py
 python tests/smoke_permisos_autoservicio.py
 ```
 
+Con el servidor levantado, además:
+
+```bash
+python src/migrate.py estado                 # tiene que terminar en "Al día"
+curl -fsS http://127.0.0.1:8000/salud        # {"estado":"ok"}
+WEB_BASE=http://127.0.0.1:8000 python tests/test_operacion.py
+```
+
 Si `test_seguridad_datos` falla en la primera comprobación, falta `BIOMETRIA_CLAVE`.
+
+Si `migrate.py estado` dice que falta aplicar algo, el servidor no va a arrancar: es deliberado. Correr `python src/migrate.py` y volver a preguntar.
 
 ## Enlaces
 

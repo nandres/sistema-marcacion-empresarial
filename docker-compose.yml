@@ -60,8 +60,11 @@ services:
       migracion:
         condition: service_completed_successfully
     healthcheck:
+      # Contra /salud y no contra la portada: la portada arma el portal
+      # entero sin tocar PostgreSQL, así que con la base caída el contenedor
+      # se reportaba sano y nadie lo reiniciaba.
       test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/')"]
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/salud')"]
       interval: 30s
       timeout: 5s
       retries: 3

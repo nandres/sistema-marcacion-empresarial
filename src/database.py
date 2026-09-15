@@ -27,7 +27,10 @@ from psycopg2.extras import Json, RealDictCursor
 
 import biometria
 import reglamento
+import registro
 import turnos as turnos_dominio
+
+_log = registro.obtener("database")
 
 # Lista SQL de tipos de permiso válidos (catálogo reglamentario + histórico)
 _TIPOS_SQL: str = ", ".join("'%s'" % t for t in reglamento.TIPOS_PERMISO_CHECK)
@@ -44,6 +47,31 @@ ROLES_INICIALES: Tuple[str, ...] = ("Administrador", "Recursos Humanos", "Emplea
 
 LOCK_TIMEOUT_DDL: str = "10s"
 """Espera máxima de las migraciones por un lock de tabla antes de abortar."""
+
+ESQUEMA_VERSION: int = 1
+"""Versión del esquema base.
+
+Subirla obliga a volver a migrar antes de que el servidor acepte tráfico. Se
+sube cuando el DDL base agrega algo que el código nuevo da por existente: una
+tabla, una columna, un índice sin el cual una consulta se cae.
+"""
+
+TABLA_MIGRACIONES: str = "esquema_migraciones"
+
+PASOS_UNICOS: Tuple[Tuple[str, str], ...] = ()
+"""Pasos que corren exactamente una vez, en orden, después del esquema base.
+
+El DDL base es idempotente y se repite sin consecuencias: agregar una tabla o
+una columna no necesita nada de esto. Acá van los que **no** se pueden repetir
+—rellenar una columna nueva a partir de las viejas, corregir filas cargadas
+mal, cambiar un tipo—, cada uno con un nombre que queda anotado en la base
+para que la migración siguiente sepa que ya pasó.
+
+    PASOS_UNICOS = (
+        ("2026-10-normalizar-cedulas",
+         "UPDATE users SET username = lower(trim(username))"),
+    )
+"""
 
 TABLAS_DE_EMPRESA: Tuple[str, ...] = (
     "users",
@@ -125,13 +153,29 @@ def _tomar_del_pool(config: Dict[str, str]) -> Any:
     problema que viene a resolver.
     """
     pool = _pool_de(config)
-    limite = monotonic() + POOL_ESPERA
+    arranque = monotonic()
+    limite = arranque + POOL_ESPERA
     pausa = 0.005
+    hubo_espera = False
     while True:
         try:
-            return pool.getconn()
+            conexion = pool.getconn()
+            # Una espera que termina bien no rompe nada, pero es el aviso de
+            # que el pool quedó chico: conviene verla en el registro antes de
+            # que el pico siguiente la convierta en marcas rechazadas.
+            if hubo_espera:
+                _log.warning(
+                    "el pool de %s conexiones se agotó; la petición esperó %.0f ms",
+                    POOL_MAXIMO, (monotonic() - arranque) * 1000,
+                )
+            return conexion
         except psycopg2.pool.PoolError:
+            hubo_espera = True
             if monotonic() >= limite:
+                _log.error(
+                    "pool agotado: %s conexiones ocupadas durante %.0f s seguidos",
+                    POOL_MAXIMO, POOL_ESPERA,
+                )
                 raise PoolAgotado(
                     f"Las {POOL_MAXIMO} conexiones siguen ocupadas después de "
                     f"{POOL_ESPERA:g} s. Subí DB_POOL_MAX, o revisá si algo "
@@ -883,8 +927,45 @@ class Database:
         empresa_base = self._aplicar_arrendamiento(cursor)
         self._sembrar_turno_predeterminado(cursor, empresa_base)
         self._aplicar_politicas_rls(cursor)
+        self._anotar_migraciones(cursor)
         self.connection.commit()
         self._adoptar_empresa_base()
+
+    def _anotar_migraciones(self, cursor: Any) -> List[str]:
+        """Corre los pasos de una sola vez y deja sellada la versión aplicada.
+
+        Va dentro de la misma transacción que el resto del DDL a propósito: si
+        algo falla, la base no puede quedar declarando una versión que en
+        realidad no terminó de aplicarse.
+        """
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {TABLA_MIGRACIONES} (
+                nombre VARCHAR(80) PRIMARY KEY,
+                aplicada_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cursor.execute(f"SELECT nombre FROM {TABLA_MIGRACIONES}")
+        hechos = {fila[0] for fila in cursor.fetchall()}
+
+        corridos: List[str] = []
+        for nombre, sentencia in PASOS_UNICOS:
+            if nombre in hechos:
+                continue
+            cursor.execute(sentencia)
+            cursor.execute(
+                f"INSERT INTO {TABLA_MIGRACIONES} (nombre) VALUES (%s)", (nombre,)
+            )
+            corridos.append(nombre)
+            _log.info("paso de migración aplicado: %s", nombre)
+
+        cursor.execute(
+            f"INSERT INTO {TABLA_MIGRACIONES} (nombre) VALUES (%s) "
+            f"ON CONFLICT (nombre) DO NOTHING",
+            (f"base:{ESQUEMA_VERSION}",),
+        )
+        return corridos
 
     def _aplicar_arrendamiento(self, cursor: Any) -> int:
         """Ata cada tabla de datos de cliente a una empresa.
@@ -1174,8 +1255,14 @@ class Database:
         cursor.execute(
             f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "{nombre}"'
         )
+        # Las dos lecturas que cruzan empresas, no una: sin la del kiosco,
+        # revocar el EXECUTE de PUBLIC dejaría el login en pie y la marcación
+        # caída, que es la peor mitad para descubrir en producción.
         cursor.execute(
             f'GRANT EXECUTE ON FUNCTION credenciales_por_usuario(text) TO "{nombre}"'
+        )
+        cursor.execute(
+            f'GRANT EXECUTE ON FUNCTION dispositivo_por_token(text) TO "{nombre}"'
         )
         # Las tablas que se creen después también quedan alcanzadas, para que
         # agregar una no obligue a acordarse de repetir los permisos.
@@ -1340,28 +1427,82 @@ class Database:
             self.empresa_id = fila["id"]
         return fila is not None
 
-    def esquema_listo(self) -> bool:
-        """Indica si las tablas base ya existen sobre la conexión activa.
-
-        Permite que los procesos de larga vida (servidor web) verifiquen el
-        estado del esquema al arrancar en lugar de aplicar el DDL completo,
-        que toma locks exclusivos y no puede correr dentro de una petición.
-        """
+    def _existe_tabla(self, nombre: str) -> bool:
+        """``to_regclass`` devuelve NULL en vez de fallar si la tabla no está."""
         fila = self._execute(
-            """
-            SELECT COUNT(*) AS presentes
-            FROM information_schema.tables
-            WHERE table_schema = 'public'
-              AND table_name IN ('empresas', 'roles', 'users', 'marcajes',
-                                 'logs_auditoria',
-                                 'justificaciones', 'solicitudes_correccion', 'alertas',
-                                 'condiciones_dia', 'solicitudes_permiso',
-                                 'turnos', 'turno_tramos', 'asignaciones_turno',
-                                 'ciclos_rotacion', 'ciclo_turnos')
-            """,
-            fetch="one",
+            "SELECT to_regclass(%s) AS referencia", (f"public.{nombre}",), fetch="one"
         )
-        return int(fila["presentes"]) == 15
+        return bool(fila and fila["referencia"])
+
+    def version_esquema(self) -> Optional[int]:
+        """Versión del esquema de esta base, o ``None`` si nunca se migró.
+
+        Es la respuesta a *¿en qué versión está el cliente que acaba de
+        llamar?*, que sin un sello en la propia base solo se podía contestar
+        mirando el código que alguien cree que le instaló.
+        """
+        if not self._existe_tabla(TABLA_MIGRACIONES):
+            return None
+        filas = self._execute(
+            f"SELECT nombre FROM {TABLA_MIGRACIONES} WHERE nombre LIKE 'base:%%'",
+            fetch="all",
+        ) or []
+        versiones = [
+            int(fila["nombre"].split(":", 1)[-1])
+            for fila in filas
+            if fila["nombre"].split(":", 1)[-1].isdigit()
+        ]
+        return max(versiones) if versiones else None
+
+    def migraciones_pendientes(self) -> List[str]:
+        """Lo que le falta a esta base para atender tráfico con este código.
+
+        Devuelve los nombres y no un booleano a propósito: el mensaje que lee
+        quien despliega dice **qué** falta, no solo que algo falta.
+        """
+        sello = f"base:{ESQUEMA_VERSION}"
+        if not self._existe_tabla(TABLA_MIGRACIONES):
+            return [sello] + [nombre for nombre, _ in PASOS_UNICOS]
+        filas = self._execute(
+            f"SELECT nombre FROM {TABLA_MIGRACIONES}", fetch="all"
+        ) or []
+        hechos = {fila["nombre"] for fila in filas}
+        pendientes = [n for n, _ in PASOS_UNICOS if n not in hechos]
+        if sello not in hechos:
+            pendientes.insert(0, sello)
+        return pendientes
+
+    def historial_esquema(self) -> List[Dict[str, Any]]:
+        """Qué se aplicó sobre esta base y cuándo, en orden."""
+        if not self._existe_tabla(TABLA_MIGRACIONES):
+            return []
+        return self._execute(
+            f"SELECT nombre, aplicada_en FROM {TABLA_MIGRACIONES} "
+            f"ORDER BY aplicada_en, nombre",
+            fetch="all",
+        ) or []
+
+    def esquema_listo(self) -> bool:
+        """Indica si esta base puede atender tráfico con el código actual.
+
+        Antes se contaban tablas contra una lista escrita a mano, y la lista
+        envejeció: cuando el esquema sumó ``dispositivos``, una base migrada de
+        antes seguía dando el recuento por bueno y el servidor arrancaba sin la
+        tabla que ``/api/marcar`` necesita. El fallo no aparecía al arrancar,
+        que es cuando se puede corregir, sino en la primera marcación.
+
+        El sello dice lo mismo sin depender de que alguien se acuerde de
+        actualizar una lista cada vez que agrega una tabla.
+        """
+        return not self.migraciones_pendientes()
+
+    def latido(self) -> None:
+        """Consulta mínima para confirmar que la conexión sirve de verdad.
+
+        Tenerla abierta no prueba nada: el pool puede estar entregando un
+        socket que la base cerró del otro lado hace horas.
+        """
+        self._execute("SELECT 1 AS vivo", fetch="one")
 
     def _execute(
         self, query: str, params: Optional[Tuple[Any, ...]] = None, fetch: str = "none"

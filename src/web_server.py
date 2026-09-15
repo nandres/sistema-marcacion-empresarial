@@ -21,6 +21,7 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import perf_counter
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import jwt
@@ -36,8 +37,15 @@ import database
 import facial
 import notifications
 import rate_limit
+import registro
 import reglamento
 import reports
+
+# Al importar y no al arrancar: gunicorn levanta este módulo en cada worker y
+# las pruebas lo importan sin pasar por el ciclo de vida. Repetirlo no duplica
+# manejadores.
+registro.configurar()
+_log = registro.obtener("web")
 
 ESTATICOS: Path = Path(__file__).resolve().parent / "static"
 
@@ -69,11 +77,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     db = database.Database()
     try:
         db.connect()
-        if not db.esquema_listo():
+        pendientes = db.migraciones_pendientes()
+        if pendientes:
             raise RuntimeError(
-                "El esquema de la base no está completo. "
-                "Ejecutá 'python migrate.py' antes de iniciar el servidor."
+                "El esquema de la base no está al día; falta aplicar: "
+                + ", ".join(pendientes)
+                + ". Ejecutá 'python migrate.py' antes de iniciar el servidor."
             )
+        _log.info(
+            "esquema en versión %s · escuchando en el puerto %s",
+            db.version_esquema(), os.getenv("PORT", "8000"),
+        )
     finally:
         db.cerrar()
     # El bus de alertas vive en la memoria de un worker y el servidor corre
@@ -113,7 +127,73 @@ async def aplicar_cabeceras_seguridad(request: Request, siguiente):
     return respuesta
 
 
+RUTAS_CALLADAS: frozenset = frozenset({"/salud"})
+"""Rutas que no se registran cuando salen bien.
+
+El chequeo de salud corre cada treinta segundos para siempre y los estáticos
+son varios por carga de página: registrarlos en verde enterraría todo lo demás.
+Cuando fallan se registran igual, que es cuando importan.
+"""
+
+
+# Declarado después del de cabeceras para que quede por fuera: así alcanza
+# también a lo que revienta ahí adentro.
+@app.middleware("http")
+async def registrar_peticion(request: Request, siguiente):
+    """Una línea por petición, con un identificador que hilvana las suyas.
+
+    Va en un middleware y no en cada endpoint porque tiene que alcanzar a lo
+    que nunca llega a un endpoint: un 404, un cuerpo que no valida, una
+    excepción levantada antes de entrar.
+    """
+    identificador = registro.abrir_peticion()
+    inicio = perf_counter()
+    try:
+        respuesta = await siguiente(request)
+    except Exception:
+        _log.exception(
+            "%s %s cortó sin llegar a responder", request.method, request.url.path
+        )
+        raise
+    linea = (request.method, request.url.path, respuesta.status_code,
+             (perf_counter() - inicio) * 1000)
+    if respuesta.status_code >= 500:
+        _log.error("%s %s -> %s en %.0f ms", *linea)
+    elif respuesta.status_code >= 400:
+        _log.warning("%s %s -> %s en %.0f ms", *linea)
+    elif not (request.url.path in RUTAS_CALLADAS
+              or request.url.path.startswith("/static/")):
+        _log.info("%s %s -> %s en %.0f ms", *linea)
+    # Devolverlo al cliente cierra el circuito: quien reporta "me dio error a
+    # las 7:42" trae el identificador y el registro se busca por ahí.
+    respuesta.headers["X-Peticion"] = identificador
+    return respuesta
+
+
 app.mount("/static", StaticFiles(directory=ESTATICOS), name="static")
+
+
+@app.get("/salud")
+def api_salud(respuesta: Response) -> Dict[str, str]:
+    """Si el proceso atiende **y** la base contesta.
+
+    El chequeo anterior pedía la portada, que arma el portal entero y no toca
+    PostgreSQL: con la base caída el contenedor se seguía reportando sano y
+    nadie lo reiniciaba. No devuelve versiones ni nombres de host porque lo
+    consulta cualquiera, sin credenciales.
+    """
+    db = database.Database()
+    try:
+        db.connect()
+        db.latido()
+    except Exception as error:
+        _log.error("la base no responde al chequeo de salud (%s)",
+                   type(error).__name__)
+        respuesta.status_code = 503
+        return {"estado": "degradado"}
+    finally:
+        db.cerrar()
+    return {"estado": "ok"}
 
 class LoginRequest(BaseModel):
     """Credenciales del empleado para emitir el token de acceso.
@@ -437,15 +517,22 @@ def _frenar(request: Request, cedula: str) -> str:
         try:
             rate_limit.ACCESO.verificar(clave)
         except rate_limit.LimiteExcedido as limite:
+            _log.warning("freno de intentos activo sobre %s desde %s", clave, origen)
             raise HTTPException(status_code=429, detail=str(limite))
     return f"u:{cedula.lower()}"
 
 
 def _registrar_fallo(request: Request, cedula: str) -> None:
-    """Contabiliza el intento fallido en las dos dimensiones."""
+    """Contabiliza el intento fallido en las dos dimensiones y lo deja anotado.
+
+    La cédula entra al registro y la contraseña no, ni siquiera su longitud:
+    sin saber contra qué identidad se probó, una racha de intentos fallidos no
+    se distingue de un empleado que olvidó su clave.
+    """
     origen = request.client.host if request.client else "desconocido"
     rate_limit.ACCESO.fallo(f"u:{cedula.lower()}")
     rate_limit.ACCESO.fallo(f"ip:{origen}")
+    _log.warning("credenciales rechazadas para %r desde %s", cedula, origen)
 
 
 def _limpiar_freno(request: Request, cedula: str) -> None:
@@ -878,6 +965,10 @@ def api_marcar(payload: MarcarRequest, request: Request) -> Dict[str, Any]:
         # con más certeza que el nombre del host, que cualquiera puede fijar.
         dispositivo = auth.resolver_dispositivo(db, request.headers.get("X-Dispositivo", ""))
         if dispositivo is None and auth.dispositivo_obligatorio():
+            _log.warning(
+                "marca rechazada: puesto no habilitado desde %s",
+                request.client.host if request.client else "desconocido",
+            )
             raise HTTPException(
                 status_code=403,
                 detail="Este puesto no está habilitado para marcar. "
