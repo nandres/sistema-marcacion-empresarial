@@ -1,0 +1,71 @@
+# Instalación completa en un servidor propio: base y aplicación.
+#
+#     cp .env.ejemplo .env     # y completar los secretos
+#     docker compose up -d
+#
+# Pensado para el cliente que aloja el sistema en su propia máquina, que es el
+# caso normal acá: una empresa con un servidor en la oficina, sin nube.
+
+services:
+  base:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-marcacion}
+      POSTGRES_USER: ${DB_USER:-marcacion}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Falta DB_PASSWORD en el .env}
+      # Sin esto los mensajes de error de PostgreSQL vienen en la
+      # codificación del sistema y llegan ilegibles a los registros.
+      LANG: es_ES.utf8
+    volumes:
+      - datos:/var/lib/postgresql/data
+      # Los respaldos salen a una carpeta del host: dentro del volumen se
+      # perderían junto con la base que vienen a proteger.
+      - ./respaldos:/respaldos
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-marcacion} -d ${DB_NAME:-marcacion}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  migracion:
+    build: .
+    # Un paso aparte y no parte del arranque de la web: el DDL toma locks
+    # exclusivos de tabla y cuatro workers aplicándolo a la vez se bloquean
+    # entre sí. Corre, termina, y recién entonces arranca la aplicación.
+    command: python migrate.py
+    env_file: .env
+    environment:
+      DB_HOST: base
+      DB_PORT: 5432
+    depends_on:
+      base:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build: .
+    restart: unless-stopped
+    command: >-
+      gunicorn -k uvicorn.workers.UvicornWorker -w 4
+      -b 0.0.0.0:8000 web_server:app
+    env_file: .env
+    environment:
+      DB_HOST: base
+      DB_PORT: 5432
+    ports:
+      - "${PORT:-8000}:8000"
+    depends_on:
+      migracion:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  datos:

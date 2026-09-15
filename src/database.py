@@ -16,6 +16,7 @@ import os
 import sys
 import threading
 from datetime import datetime, time, timedelta
+from time import monotonic, sleep
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
@@ -72,6 +73,8 @@ RAZON_SOCIAL_BASE: str = "Empresa"
 
 POOL_MINIMO: int = int(os.getenv("DB_POOL_MIN", "1"))
 POOL_MAXIMO: int = int(os.getenv("DB_POOL_MAX", "10"))
+POOL_ESPERA: float = float(os.getenv("DB_POOL_ESPERA", "10"))
+"""Segundos que una petición espera un lugar en el pool antes de rendirse."""
 
 _POOLS: Dict[Tuple, Any] = {}
 _POOL_BLOQUEO = threading.Lock()
@@ -96,6 +99,45 @@ def _pool_de(config: Dict[str, str]) -> Any:
                 POOL_MINIMO, POOL_MAXIMO, client_encoding="UTF8", **config
             )
         return _POOLS[clave]
+
+
+class PoolAgotado(RuntimeError):
+    """Todas las conexiones están ocupadas y la espera se agotó."""
+
+
+def _tomar_del_pool(config: Dict[str, str]) -> Any:
+    """Saca una conexión del pool, esperando si están todas ocupadas.
+
+    ``getconn`` no espera: cuando el pool llega a su tope lanza excepción en
+    el acto. Con el pico de las ocho de la mañana eso significa que las
+    primeras ``DB_POOL_MAX`` personas marcan y el resto recibe un error, que
+    es la peor forma posible de quedarse corto: una marca que no entró no se
+    recupera sola, y quien la intentó ya se fue a trabajar.
+
+    Una petición dura milisegundos, así que esperar un turno breve entrega la
+    marca en lugar de rechazarla. El tope existe para que una base caída se
+    note como una caída y no como un servidor colgado.
+
+    Se consulta por sondeo y no con un semáforo a propósito: un semáforo que
+    se desincronice del pool —una devolución que no ocurre por una excepción
+    en el camino— deja el proceso bloqueado para siempre, que es peor que el
+    problema que viene a resolver.
+    """
+    pool = _pool_de(config)
+    limite = monotonic() + POOL_ESPERA
+    pausa = 0.005
+    while True:
+        try:
+            return pool.getconn()
+        except psycopg2.pool.PoolError:
+            if monotonic() >= limite:
+                raise PoolAgotado(
+                    f"Las {POOL_MAXIMO} conexiones siguen ocupadas después de "
+                    f"{POOL_ESPERA:g} s. Subí DB_POOL_MAX, o revisá si algo "
+                    f"está reteniendo conexiones sin devolverlas."
+                )
+            sleep(pausa)
+            pausa = min(pausa * 2, 0.05)
 
 
 def cerrar_pools() -> None:
@@ -258,7 +300,7 @@ class Database:
     def connect(self) -> psycopg2.connection:
         """Toma una conexión —del pool o propia— con la empresa ya publicada."""
         if self.agrupada:
-            self.connection = _pool_de(self.config).getconn()
+            self.connection = _tomar_del_pool(self.config)
         else:
             self.connection = psycopg2.connect(
                 client_encoding="UTF8", **self.config
