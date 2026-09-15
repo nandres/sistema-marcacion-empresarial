@@ -243,9 +243,17 @@ La causa era una línea sola: `if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}`. El 
 - **Faltaba `BIOMETRIA_CLAVE`.** No tiene respaldo a propósito, así que no degradaba nada en silencio: rompía `test_seguridad_datos` y `smoke_facial` en el primer cifrado.
 - **La comprobación de CSP medía un 405.** `curl -I` manda `HEAD` y la portada solo sirve `GET`. Aprobaba igual porque el estado de un pipe es el del `grep`, no el del `curl` caído. Ahora usa `-D -` sobre un `GET` real, y el paso corre con `pipefail`.
 
-**Lo que esto corrige de la tabla de arriba.** En *Lo que la suite no cubre* figuraba "esquema que no se crea desde cero — falta CI sobre base virgen". Se daba por cubierto porque el workflow declaraba el paso; el paso no corría. Recién ahora está cubierto de verdad.
+**Y el tercero, que solo podía aparecer en un runner.** Con el workflow ya arrancando, el primer paso que llegó a ejecutarse falló: `pip install -r requirements.txt`. La última línea del archivo era `websockets>=12.0cryptography>=43.0.0` — dos dependencias pegadas por un append sin salto de línea en `1ec79a9`, el commit que sumó `cryptography` para cifrar las plantillas biométricas. Pip no puede parsear eso.
 
-El job `deploy` sigue sin haberse ejecutado nunca: depende de `test`, y hasta ahora `test` no existía.
+La consecuencia es que **un clon nuevo de este repositorio nunca se pudo instalar**, y el `docker build` tampoco, porque hace exactamente lo mismo. En desarrollo era invisible: las dos bibliotecas ya estaban en el entorno, así que el archivo roto nunca se volvía a leer. Es el caso puro de un defecto que solo existe para quien llega de cero, que es precisamente para quien sirve un CI.
+
+Se verificó resolviendo el archivo contra el objetivo del runner (`--python-version 3.11 --platform manylinux2014_x86_64`), sin instalar nada en la máquina local. `.gitignore` y `.dockerignore` terminaban igual, sin salto final; se corrigieron por el mismo motivo, que en un archivo de ignorados significa un patrón que deja de ignorar lo que decía.
+
+**Lo que esto corrige de la tabla de arriba.** En *Lo que la suite no cubre* figuraba "esquema que no se crea desde cero — falta CI sobre base virgen". Se daba por cubierto porque el workflow declaraba el paso; el paso no corría. Para no descubrir el resto de a un push por vez, se creó una base descartable y se corrió la suite completa contra ella con el entorno del runner: **22 conjuntos y las 6 comprobaciones del servidor web, todas en verde sobre un esquema recién creado**. Recién ahora la brecha está cerrada, y con evidencia propia en lugar de un paso declarado.
+
+**El desenlace.** Con los tres defectos corregidos, el pipeline cerró en verde entero: los 35 pasos del job de pruebas y los dos del despliegue. La imagen Docker se construyó y se publicó en el registro de contenedores por primera vez desde que el archivo existe. El paso de Render quedó en `skipped` por no haber hook configurado, que es exactamente lo que la línea rota nunca pudo hacer: evaluar la condición y saltear el paso, en lugar de invalidar el workflow completo.
+
+La consecuencia práctica es que, de acá en adelante, el rojo de Actions vuelve a significar algo.
 
 ## Cómo ejecutar
 

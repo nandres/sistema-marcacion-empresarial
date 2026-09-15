@@ -436,7 +436,7 @@ El `Dockerfile` no crea usuario sin privilegios. Cualquier ejecución de código
 
 ### P3-12 · El pipeline de CI nunca llegó a ejecutarse ✅ corregido
 
-> Cerrado el 2026-09-15. El hook de despliegue pasa por `env`, que sí se puede leer desde una condición.
+> Cerrado el 2026-09-15. El hook de despliegue pasa por `env`, que sí se puede leer desde una condición. Verificado por el propio pipeline: primer run completo en verde —35 pasos de pruebas y 2 de despliegue— con la imagen publicada en el registro de contenedores.
 
 El paso final del despliegue se salteaba con `if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}`. `secrets` no es un contexto válido dentro de un `if`: nombrarlo ahí no deja el paso en gris, **invalida el workflow completo al validarlo**. Todos los runs del repositorio, desde el commit que trajo el archivo, figuraban en rojo con cero jobs y cero anotaciones — un estado que desde la lista de Actions se parece bastante a un test que falla.
 
@@ -446,6 +446,8 @@ Al arrancar por primera vez aparecieron dos defectos que el workflow había esta
 
 - **Faltaba `BIOMETRIA_CLAVE` en el entorno del job.** No tiene valor de respaldo a propósito —una clave conocida abriría las plantillas faciales de un backup robado—, así que su ausencia no degradaba nada en silencio: rompía `test_seguridad_datos` y `smoke_facial` en el primer cifrado.
 - **La comprobación de cabeceras de seguridad medía un error.** Usaba `curl -I`, que manda `HEAD` sobre una ruta que solo sirve `GET`, y leía las cabeceras de un 405. Aprobaba igual porque el estado de un pipe es el del último comando: el `grep` encontraba la cabecera y tapaba al `curl` caído. Ahora va con `-D -` sobre un `GET` real, y el paso corre con `pipefail` para que eso no pueda repetirse.
+
+- **`requirements.txt` tenía dos dependencias en un renglón.** `websockets>=12.0cryptography>=43.0.0`, pegadas por un append sin salto de línea en `1ec79a9`. Pip no parsea eso, así que un clon nuevo del repositorio nunca se pudo instalar — ni el `docker build`, que hace lo mismo. En desarrollo era invisible porque ambas bibliotecas ya estaban en el entorno y el archivo no se volvía a leer. Es el defecto que solo existe para quien llega de cero, que es exactamente para quien sirve un CI.
 
 **Lección de método.** Un pipeline en rojo permanente enseña a ignorar el rojo. Conviene distinguir dos preguntas que la pantalla de Actions mezcla: *¿falló una prueba?* y *¿llegó a correr alguna?* La segunda se responde mirando cuántos jobs produjo el run — cero jobs no es una prueba que falla, es un archivo que no compila.
 
