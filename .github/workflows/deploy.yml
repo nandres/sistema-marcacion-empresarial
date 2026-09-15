@@ -29,10 +29,13 @@ jobs:
       DB_NAME: marcacion_test
       DB_USER: marcacion
       DB_PASSWORD: marcacion
-      # Solo para CI. Ambas son obligatorias y exigen 32+ caracteres:
-      # sin ellas el proceso aborta en lugar de firmar con una clave conocida.
+      # Solo para CI. Las tres son obligatorias y exigen 32+ caracteres: sin
+      # ellas el proceso aborta en lugar de firmar —o cifrar— con una clave
+      # conocida. La biométrica no tiene respaldo a propósito, así que su
+      # ausencia no degrada nada: rompe el registro de fotos.
       JWT_SECRET_KEY: clave-de-ci-no-usar-en-produccion
       COMPROBANTE_CLAVE: clave-de-comprobantes-de-ci-no-usar-en-produccion
+      BIOMETRIA_CLAVE: clave-biometrica-de-ci-no-usar-en-produccion
     steps:
       - uses: actions/checkout@v4
 
@@ -117,7 +120,12 @@ jobs:
         run: python tests/smoke_facial.py
 
       - name: Servidor web (login + página)
+        # pipefail para que el `grep` de cada comprobación no tape un curl que
+        # falló: sin él, el estado del pipe es el del último comando y una
+        # respuesta de error con las cabeceras correctas aprueba el paso.
+        shell: bash
         run: |
+          set -o pipefail
           timeout 25 python src/web_server.py &
           sleep 6
           curl -fsS http://127.0.0.1:8000/ | grep -q "Sistema de Marcación"
@@ -130,8 +138,9 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"tipo":"ci","severidad":"baja","mensaje":"alerta CI","detalle":""}')
           test "$codigo" = "401" || { echo "esperaba 401, recibí $codigo"; exit 1; }
-          # Cabeceras de seguridad presentes en toda respuesta.
-          curl -fsSI http://127.0.0.1:8000/ | grep -qi "content-security-policy"
+          # Cabeceras de seguridad en la respuesta real: -I manda HEAD y la
+          # portada solo sirve GET, así que medía las cabeceras de un 405.
+          curl -fsS -D - -o /dev/null http://127.0.0.1:8000/ | grep -qi "content-security-policy"
 
       - name: Kiosco web + Panel de Gestión (RRHH)
         run: |
@@ -166,6 +175,11 @@ jobs:
           docker tag marcacion:latest ghcr.io/${{ github.repository }}:latest
           docker push ghcr.io/${{ github.repository }}:latest
 
+      # El hook viaja por `env` porque `secrets` no existe en las condiciones
+      # `if`: nombrarlo ahí no deja el paso en gris, invalida el workflow entero
+      # y ninguno de los jobs llega a arrancar.
       - name: Disparar despliegue en Render
-        if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}
-        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        if: env.RENDER_DEPLOY_HOOK != ''
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK"
