@@ -1,13 +1,22 @@
-# Sistema de Marcación · Paraguay 🇵🇾
+# Sistema de Marcación
 
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
-[![PostgreSQL](https://img.shields.io/badge/postgresql-14%2B-blue)](https://www.postgresql.org)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io-2496ED)](https://docs.github.com/es/packages)
-[![CI/CD](https://github.com/nandres/sistema-marcacion-empresarial/actions/workflows/deploy.yml/badge.svg)](https://github.com/nandres/sistema-marcacion-empresarial/actions/workflows/deploy.yml)
+Control de asistencia laboral bajo normativa paraguaya. Multiempresa, y sigue registrando cuando se corta la conexión.
 
-Control de asistencia laboral para Paraguay. Un kiosco de escritorio que sigue funcionando sin conexión, un portal web con kiosco de navegador y panel de Recursos Humanos, lectura biométrica por hardware y un motor que liquida la jornada según la ley paraguaya en lugar de dejarla para la planilla de Excel del cierre de mes.
+[![CI](https://img.shields.io/github/actions/workflow/status/nandres/sistema-marcacion-empresarial/deploy.yml?branch=main&label=CI&style=flat-square)](https://github.com/nandres/sistema-marcacion-empresarial/actions/workflows/deploy.yml)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square)](https://www.python.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14%2B-336791?style=flat-square)](https://www.postgresql.org)
+[![Contenedor](https://img.shields.io/badge/Contenedor-ghcr.io-2496ED?style=flat-square)](https://github.com/nandres/sistema-marcacion-empresarial/pkgs/container/sistema-marcacion-empresarial)
 
-Una misma instalación puede alojar a varias empresas sin que ninguna vea los datos de otra.
+Un kiosco de escritorio, un portal web con kiosco de navegador y panel de Recursos Humanos, lectura biométrica por hardware, y un motor que liquida la jornada —diurna, nocturna, mixta, feriados y horas extraordinarias— según el Código del Trabajo, en lugar de dejarla para la planilla de Excel del cierre de mes.
+
+Una misma instalación puede alojar a varias empresas sin que ninguna vea los datos de otra, y el aislamiento no depende de que nadie se olvide un `WHERE`: lo impone PostgreSQL.
+
+| | |
+| --- | --- |
+| **Normativa** | Ley 213/1993 · Ley 6380/2019 · Ley 6534/2020 · Res. 3028/2024 · Res. 1307/2010 |
+| **Interfaces** | Kiosco de escritorio · Kiosco web · Portal del empleado · Panel de RRHH · CLI |
+| **Resiliencia** | Cola local firmada, reposición idempotente y alertas entre procesos |
+| **Pruebas** | 25 conjuntos en integración continua, sobre base virgen y pantalla virtual |
 
 ---
 
