@@ -1,11 +1,20 @@
+# Lo que no tiene por qué viajar a la imagen: ni secretos, ni artefactos de
+# otra máquina, ni documentación que nadie lee desde un contenedor.
 .git
+.gitattributes
+.gitignore
 .env
+.env.*
 __pycache__
 *.pyc
+*.db
+build/
+dist/
 reportes/
-Sistema de Marcacion/
-.gitignore
+docs/
+empaquetado/
+tests/
 README.md
+LICENSE
 Dockerfile
 .dockerignore
-docs/
