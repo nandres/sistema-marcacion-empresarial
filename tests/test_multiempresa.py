@@ -75,10 +75,10 @@ print("\n2) Una conexión sin empresa no devuelve nada: falla")
 suelta = Database()
 suelta.connect()
 for nombre, operacion in (
-    ("listar personal", lambda: suelta.list_users()),
+    ("listar personal", lambda: suelta.listar_usuarios()),
     ("listar alertas", lambda: suelta.listar_alertas()),
-    ("contar marcajes de hoy", lambda: suelta.count_marcajes_hoy()),
-    ("buscar un legajo por id", lambda: suelta.get_user_by_id(1)),
+    ("contar marcajes de hoy", lambda: suelta.contar_marcajes_hoy()),
+    ("buscar un legajo por id", lambda: suelta.usuario_por_id(1)),
 ):
     try:
         operacion()
@@ -98,7 +98,7 @@ def alojar(slug: str, razon: str) -> dict:
     CASCADE`` de ``empresa_id`` es justamente lo que tiene que arrastrar
     todo, incluida la auditoría, que referencia a los legajos.
     """
-    existente = db.get_empresa_por_slug(slug)
+    existente = db.empresa_por_slug(slug)
     if existente:
         db._execute("DELETE FROM empresas WHERE id = %s", (existente["id"],))
         db.connection.commit()
@@ -117,17 +117,17 @@ def sembrar(empresa: dict, clave: str, nombre: str) -> dict:
     db.empresa_id = empresa["id"]
     db.initialize()
     db.empresa_id = empresa["id"]
-    if not db.list_users(incluir_bajas=True):
+    if not db.listar_usuarios(incluir_bajas=True):
         auth.crear_primer_admin(db, f"admin-{empresa['slug']}", "clave-admin", "Admin")
-    admin = db.get_user_by_username(f"admin-{empresa['slug']}")
-    if not db.get_user_by_username(CEDULA):
-        auth.create_user(db, admin, CEDULA, clave, nombre, "Empleado", 3000000)
-    empleado = db.get_user_by_username(CEDULA)
-    if not db.get_turno_por_nombre(NOMBRE_TURNO):
+    admin = db.usuario_por_cedula(f"admin-{empresa['slug']}")
+    if not db.usuario_por_cedula(CEDULA):
+        auth.crear_usuario(db, admin, CEDULA, clave, nombre, "Empleado", 3000000)
+    empleado = db.usuario_por_cedula(CEDULA)
+    if not db.turno_por_nombre(NOMBRE_TURNO):
         auth.crear_turno(db, admin, NOMBRE_TURNO,
                          [{"entrada": "06:00", "salida": "14:00"}])
     return {"admin": admin, "empleado": empleado,
-            "turno": db.get_turno_por_nombre(NOMBRE_TURNO)}
+            "turno": db.turno_por_nombre(NOMBRE_TURNO)}
 
 
 datos_a = sembrar(empresa_a, "clave-norte", "Ramón Norte")
@@ -145,8 +145,8 @@ for empresa, datos in ((empresa_a, datos_a), (empresa_b, datos_b)):
     db.empresa_id = empresa["id"]
     db.limpiar_marcajes_prueba(datos["empleado"]["id"], DIA, DIA)
     entrada = datetime.combine(DIA, time(6, 0)).astimezone()
-    marcaje = db.open_clock_in(datos["empleado"]["id"], entrada, False, "")
-    db.close_clock_out(marcaje, entrada + timedelta(hours=8), False,
+    marcaje = db.abrir_marcaje(datos["empleado"]["id"], entrada, False, "")
+    db.cerrar_marcaje(marcaje, entrada + timedelta(hours=8), False,
                        timedelta(hours=8), timedelta(0), timedelta(0), "",
                        timedelta(0), "Diurna")
     db.borrar_condicion_dia(DIA)
@@ -157,9 +157,9 @@ for empresa, datos in ((empresa_a, datos_a), (empresa_b, datos_b)):
 print("\n4) Nada de una empresa aparece en la otra")
 
 db.empresa_id = empresa_a["id"]
-personal_a = db.list_users(incluir_bajas=True)
+personal_a = db.listar_usuarios(incluir_bajas=True)
 db.empresa_id = empresa_b["id"]
-personal_b = db.list_users(incluir_bajas=True)
+personal_b = db.listar_usuarios(incluir_bajas=True)
 ids_a = {u["id"] for u in personal_a}
 ids_b = {u["id"] for u in personal_b}
 verificar("los listados de personal no comparten un solo legajo",
@@ -167,14 +167,14 @@ verificar("los listados de personal no comparten un solo legajo",
 
 db.empresa_id = empresa_a["id"]
 verificar("un id de la otra empresa no resuelve a nadie",
-          db.get_user_by_id(datos_b["empleado"]["id"]) is None)
+          db.usuario_por_id(datos_b["empleado"]["id"]) is None)
 verificar("ni siquiera su turno",
-          db.get_turno(datos_b["turno"]["id"]) is None)
+          db.obtener_turno(datos_b["turno"]["id"]) is None)
 verificar("la condición del día es la propia y no la ajena",
-          (db.get_condicion_dia(DIA) or {}).get("condicion") == f"Lluvia en {SLUG_A}",
-          (db.get_condicion_dia(DIA) or {}).get("condicion", "—"))
+          (db.condicion_del_dia(DIA) or {}).get("condicion") == f"Lluvia en {SLUG_A}",
+          (db.condicion_del_dia(DIA) or {}).get("condicion", "—"))
 
-marcas_a = db.get_marcajes_month(DIA.year, DIA.month)
+marcas_a = db.marcajes_del_mes(DIA.year, DIA.month)
 ajenas = [m for m in marcas_a if m["user_id"] in ids_b]
 verificar("el mes no trae marcajes de la otra empresa", not ajenas,
           f"{len(marcas_a)} marcajes propios")
@@ -190,23 +190,23 @@ print("\n5) Escribir sobre la otra empresa no hace nada")
 
 db.empresa_id = empresa_a["id"]
 antes = datos_b["empleado"]["full_name"]
-db.update_user(datos_b["empleado"]["id"], full_name="INTRUSO")
+db.actualizar_usuario(datos_b["empleado"]["id"], full_name="INTRUSO")
 db.empresa_id = empresa_b["id"]
 verificar("una edición dirigida a la otra empresa no toca el legajo",
-          db.get_user_by_id(datos_b["empleado"]["id"])["full_name"] == antes,
-          db.get_user_by_id(datos_b["empleado"]["id"])["full_name"])
+          db.usuario_por_id(datos_b["empleado"]["id"])["full_name"] == antes,
+          db.usuario_por_id(datos_b["empleado"]["id"])["full_name"])
 
 db.empresa_id = empresa_a["id"]
-db.delete_user(datos_b["empleado"]["id"])
+db.eliminar_usuario(datos_b["empleado"]["id"])
 db.empresa_id = empresa_b["id"]
 verificar("un borrado dirigido a la otra empresa no lo elimina",
-          db.get_user_by_id(datos_b["empleado"]["id"]) is not None)
+          db.usuario_por_id(datos_b["empleado"]["id"]) is not None)
 
 db.empresa_id = empresa_a["id"]
 db.cambiar_estado_turno(datos_b["turno"]["id"], False)
 db.empresa_id = empresa_b["id"]
 verificar("ni retira su turno",
-          db.get_turno(datos_b["turno"]["id"])["activo"] is True)
+          db.obtener_turno(datos_b["turno"]["id"])["activo"] is True)
 
 # ----------------------------------------------------------- 6. El acceso
 print("\n6) El login: la contraseña decide de qué empresa es la sesión")
@@ -255,7 +255,7 @@ reclamado = auth.verificar_token_acceso(forjado)
 impostor = Database(empresa_id=reclamado["emp"])
 impostor.connect()
 verificar("un token con el usuario de una y la empresa de otra no resuelve a nadie",
-          impostor.get_user_by_id(int(reclamado["sub"])) is None)
+          impostor.usuario_por_id(int(reclamado["sub"])) is None)
 impostor.cerrar()
 
 # ------------------------------------------------- 8. Las alertas en vivo
@@ -283,14 +283,14 @@ verificar("y tampoco aparece en su bandeja persistida",
 print("\n9) Los informes se arman con una sola empresa")
 
 db.empresa_id = empresa_a["id"]
-resumen = reports.resumen_empleado(db, db.get_user_by_id(datos_a["empleado"]["id"]))
+resumen = reports.resumen_empleado(db, db.usuario_por_id(datos_a["empleado"]["id"]))
 verificar("el tablero personal se compone sin cruzar datos",
           resumen["nombre"] == "Ramón Norte", resumen["nombre"])
 verificar("y su turno es el de su empresa",
           resumen["turno"]["id"] in turnos_a, str(resumen["turno"]["id"]))
 
 db.empresa_id = empresa_a["id"]
-aguinaldos_a = {f["id"] for f in db.get_proyeccion_aguinaldos()}
+aguinaldos_a = {f["id"] for f in db.proyeccion_aguinaldos()}
 verificar("la proyección de aguinaldos no incluye a la otra plantilla",
           not (aguinaldos_a & ids_b), f"{len(aguinaldos_a)} empleados")
 
@@ -379,7 +379,7 @@ print("\n11) Una conexión reutilizada no hereda la empresa anterior")
 primera = Database(agrupada=True)
 primera.connect()
 primera.empresa_id = empresa_a["id"]
-vistos = {u["id"] for u in primera.list_users(incluir_bajas=True)}
+vistos = {u["id"] for u in primera.listar_usuarios(incluir_bajas=True)}
 verificar("la primera petición ve su empresa", vistos and vistos <= ids_a,
           f"{len(vistos)} legajos")
 primera.cerrar()
@@ -392,13 +392,13 @@ heredado = cursor.fetchone()[0]
 verificar("la siguiente no hereda el contexto de la base",
           heredado in ("", None), repr(heredado))
 try:
-    segunda.list_users()
+    segunda.listar_usuarios()
     verificar("ni puede leer sin declarar su empresa", False, "devolvió datos")
 except SinEmpresa:
     verificar("ni puede leer sin declarar su empresa", True)
 
 segunda.empresa_id = empresa_b["id"]
-propios = {u["id"] for u in segunda.list_users(incluir_bajas=True)}
+propios = {u["id"] for u in segunda.listar_usuarios(incluir_bajas=True)}
 verificar("y al declarar la suya ve la suya, no la anterior",
           propios and not (propios & ids_a), f"{len(propios)} legajos")
 segunda.cerrar()
@@ -411,19 +411,19 @@ db.empresa_id = empresa_a["id"]
 antes_del_cupo = db.contar_empleados()
 db.fijar_cupo_empresa(empresa_a["id"], antes_del_cupo)
 try:
-    auth.create_user(db, datos_a["admin"], "cupo_excedido", "clave123",
+    auth.crear_usuario(db, datos_a["admin"], "cupo_excedido", "clave123",
                      "Uno de más", "Empleado", 1000000)
     verificar("llegado al tope del plan no se puede dar de alta", False)
 except ValueError as error:
     verificar("llegado al tope del plan no se puede dar de alta", True, str(error))
 
 db.fijar_cupo_empresa(empresa_a["id"], antes_del_cupo + 1)
-auth.create_user(db, datos_a["admin"], "cupo_ok", "clave123", "Cabe", "Empleado")
+auth.crear_usuario(db, datos_a["admin"], "cupo_ok", "clave123", "Cabe", "Empleado")
 verificar("con lugar en el plan el alta sigue funcionando",
-          db.get_user_by_username("cupo_ok") is not None)
+          db.usuario_por_cedula("cupo_ok") is not None)
 db.fijar_cupo_empresa(empresa_a["id"], None)
 verificar("y sin tope declarado no hay límite",
-          db.get_empresa(empresa_a["id"])["max_empleados"] is None)
+          db.obtener_empresa(empresa_a["id"])["max_empleados"] is None)
 
 # El subdominio identifica al cliente antes de que nadie escriba nada. Es una
 # comodidad: el aislamiento lo siguen sosteniendo el token y las políticas.

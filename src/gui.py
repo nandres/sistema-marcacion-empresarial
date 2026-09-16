@@ -35,7 +35,7 @@ import interfaz
 import notifications
 import reports
 import sync_worker
-from clock_engine import ClockEngine
+from clock_engine import MotorDeJornada
 from database import Database
 from gestion import PanelGestion, descargar_pdf_permiso
 from interfaz import (
@@ -212,7 +212,7 @@ class MarcacionApp(ctk.CTk):
                 text="Ingrese su usuario.", text_color=t("DANGER")
             )
             return
-        user = self.db.get_user_by_username(usuario)
+        user = self.db.usuario_por_cedula(usuario)
         if not user:
             self.lbl_login.configure(
                 text="El usuario no existe. Verifique el nombre.",
@@ -225,7 +225,7 @@ class MarcacionApp(ctk.CTk):
                 text="Contraseña incorrecta.", text_color=t("DANGER")
             )
             return
-        rol = auth.get_role_name(self.db, user)
+        rol = auth.nombre_de_rol(self.db, user)
         for hijo in self.zona_empleado.winfo_children():
             hijo.destroy()
         if rol in auth.ROLES_GESTION_USUARIOS:
@@ -234,7 +234,7 @@ class MarcacionApp(ctk.CTk):
             self.panel_gestion = PanelGestion(self, self.db, user, self._volver_publico)
             self.panel_gestion.grid(row=0, column=0, sticky="nsew")
             return
-        self.dashboard_empleado = EmployeeDashboard(
+        self.dashboard_empleado = TableroEmpleado(
             self.zona_empleado, self.db, user, self._mostrar_portal
         )
         self.dashboard_empleado.grid(row=0, column=0, sticky="nsew")
@@ -287,7 +287,7 @@ class MarcacionApp(ctk.CTk):
                 text="Ingrese su usuario.", text_color=t("DANGER")
             )
             return
-        user = self.db.get_user_by_username(usuario)
+        user = self.db.usuario_por_cedula(usuario)
         if not user:
             self.lbl_cambio.configure(
                 text="El usuario no existe. Verifique el nombre.",
@@ -405,7 +405,7 @@ class MarcacionApp(ctk.CTk):
         if not username:
             self._mostrar_estado("Ingrese su cédula o usuario.", t("DANGER"))
             return
-        user = self.db.get_user_by_username(username)
+        user = self.db.usuario_por_cedula(username)
         if not user:
             self._mostrar_estado("Empleado no encontrado. Verifique su cédula.", t("DANGER"))
             return
@@ -413,7 +413,7 @@ class MarcacionApp(ctk.CTk):
         if not decision.permitir:
             self._mostrar_estado(decision.motivo, t("DANGER"))
             return
-        engine = ClockEngine(self.db, user)
+        engine = MotorDeJornada(self.db, user)
         try:
             entry_id, momento, tipo = engine.registrar_asistencia(decision.marca)
         except ValueError as error:
@@ -625,7 +625,7 @@ class MarcacionApp(ctk.CTk):
         self._mostrar_portal()
 
 
-class EmployeeDashboard(ctk.CTkFrame):
+class TableroEmpleado(ctk.CTkFrame):
     """Tablero personal del empleado con tarjetas y gráfico mensual.
 
     Muestra en un solo vistazo las vacaciones disponibles y usufructuadas

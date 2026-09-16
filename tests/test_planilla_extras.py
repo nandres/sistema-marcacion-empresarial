@@ -25,16 +25,16 @@ from database import Database
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 
 USUARIO = "planilla_extras"
 SALARIO = 3_200_000
-previo = db.get_user_by_username(USUARIO)
+previo = db.usuario_por_cedula(USUARIO)
 if previo:
-    auth.delete_user(db, admin, previo["id"])
-auth.create_user(db, admin, USUARIO, "clave123", "Extra Prueba", "Empleado",
+    auth.eliminar_usuario(db, admin, previo["id"])
+auth.crear_usuario(db, admin, USUARIO, "clave123", "Extra Prueba", "Empleado",
                  SALARIO, "Funcionario")
-empleado = db.get_user_by_username(USUARIO)
+empleado = db.usuario_por_cedula(USUARIO)
 
 fallos = 0
 
@@ -55,7 +55,7 @@ def marcar(dia, entrada_h, salida_h) -> None:
     salida = entrada + timedelta(hours=salida_h - entrada_h)
     if salida_h <= entrada_h:
         salida = salida + timedelta(days=1)
-    entry_id = db.open_clock_in(empleado["id"], entrada, False)
+    entry_id = db.abrir_marcaje(empleado["id"], entrada, False)
     desglose = clock_engine.calcular_horas_paraguay(entrada, salida)
     clock_engine.persistir_desglose(db, entry_id, salida, desglose, "")
 
@@ -132,7 +132,7 @@ except ValueError as error:
     verificar("la constancia rechaza un rango invertido", True, str(error))
 
 db.limpiar_marcajes_prueba(empleado["id"], primero, primero + timedelta(days=20))
-auth.delete_user(db, admin, empleado["id"])
+auth.eliminar_usuario(db, admin, empleado["id"])
 db.cerrar()
 
 print()

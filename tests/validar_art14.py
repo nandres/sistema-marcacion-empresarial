@@ -11,12 +11,12 @@ from database import Database
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
-previo = db.get_user_by_username("p3_2026_pas")
+admin = db.usuario_por_cedula("admin")
+previo = db.usuario_por_cedula("p3_2026_pas")
 if previo:
-    auth.delete_user(db, admin, previo["id"])
-auth.create_user(db, admin, "p3_2026_pas", "clave123", "p3", "Empleado", 2500000, "Pasante")
-user = db.get_user_by_id(db.get_user_by_username("p3_2026_pas")["id"])
+    auth.eliminar_usuario(db, admin, previo["id"])
+auth.crear_usuario(db, admin, "p3_2026_pas", "clave123", "p3", "Empleado", 2500000, "Pasante")
+user = db.usuario_por_id(db.usuario_por_cedula("p3_2026_pas")["id"])
 hoy = date.today()
 
 def estado():
@@ -51,6 +51,6 @@ print("OK 3.er uso bloqueado con mensaje:", mensaje)
 d4 = estado()
 assert d4["Salidas Personales"]["usos"] == 3, "no debe crearse la 4.ta justificacion"
 
-auth.delete_user(db, admin, user["id"])
+auth.eliminar_usuario(db, admin, user["id"])
 print("LIMPIEZA OK")
 print("VALIDACION ART. 14 COMPLETA")

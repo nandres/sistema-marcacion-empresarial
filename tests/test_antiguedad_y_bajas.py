@@ -25,7 +25,7 @@ from database import Database
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 
 fallos = 0
 
@@ -39,12 +39,12 @@ def verificar(descripcion: str, condicion: bool, detalle: str = "") -> None:
 
 
 def alta(usuario: str, ingreso, nombre: str = "Prueba"):
-    previo = db.get_user_by_username(usuario)
+    previo = db.usuario_por_cedula(usuario)
     if previo:
-        auth.delete_user(db, admin, previo["id"])
-    auth.create_user(db, admin, usuario, "clave123", nombre, "Empleado",
+        auth.eliminar_usuario(db, admin, previo["id"])
+    auth.crear_usuario(db, admin, usuario, "clave123", nombre, "Empleado",
                      2400000, "Funcionario", fecha_ingreso=ingreso)
-    return db.get_user_by_username(usuario)
+    return db.usuario_por_cedula(usuario)
 
 
 def vacaciones(user) -> float:
@@ -69,7 +69,7 @@ for usuario, ingreso, esperado, tramo in casos:
               f"ingreso {ingreso} · cuota {obtenido}")
 
 # El caso que motivó el hallazgo: alta de hoy en el sistema, contrato viejo.
-veterano = db.get_user_by_username("ant_veterano")
+veterano = db.usuario_por_cedula("ant_veterano")
 verificar("el alta en el sistema es hoy", veterano["created_at"].date() == hoy)
 verificar("pero la antigüedad sale del contrato",
           reglamento.antiguedad_anios(veterano) > 11,
@@ -99,12 +99,12 @@ verificar("quien ingresó este mes devenga un solo mes",
 baja = auth.dar_de_baja(db, admin, reciente["id"])
 verificar("la baja se registra con su fecha", baja["fecha_baja"] == hoy)
 
-dado_de_baja = db.get_user_by_id(reciente["id"])
+dado_de_baja = db.usuario_por_id(reciente["id"])
 verificar("el legajo sigue existiendo", dado_de_baja is not None)
 verificar("marcado como inactivo", dado_de_baja["activo"] is False)
 
-activos = [u["id"] for u in db.list_users()]
-todos = [u["id"] for u in db.list_users(incluir_bajas=True)]
+activos = [u["id"] for u in db.listar_usuarios()]
+todos = [u["id"] for u in db.listar_usuarios(incluir_bajas=True)]
 verificar("sale de la nómina activa", reciente["id"] not in activos)
 verificar("pero no de la tabla", reciente["id"] in todos)
 
@@ -128,9 +128,9 @@ verificar("la reincorporación devuelve el acceso",
           auth.authenticate(db, "ant_reciente", "clave123") is not None)
 
 for usuario in ("ant_nuevo", "ant_medio", "ant_veterano", "ant_reciente"):
-    fila = db.get_user_by_username(usuario)
+    fila = db.usuario_por_cedula(usuario)
     if fila:
-        auth.delete_user(db, admin, fila["id"])
+        auth.eliminar_usuario(db, admin, fila["id"])
 db.cerrar()
 
 print()

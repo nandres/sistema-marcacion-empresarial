@@ -71,7 +71,7 @@ Sistema completo de control de asistencia para la empresa: **PostgreSQL** como b
 
 - `src/reglamento.py`: catálogo de **15 artículos para funcionarios y 18 para pasantes** (Res. 1307/2010 + 3028/2024) con cuotas por período (horas, días o veces), `usos_max` y `disponibilidad_permisos`.
 - `auth.crear_justificacion` valida artículo por vínculo, fechas ≤ hoy y cuota; las justificaciones admiten `horas_usadas`.
-- GUI: `JustificacionesTab` con artículos según vínculo, panel de disponibilidad y campo de horas; `EmployeeDashboard` con histórico **enero-cualquier-año → hoy**; `reports.py` con `resumen_empleado` y `resumen_historico`.
+- GUI: `JustificacionesTab` con artículos según vínculo, panel de disponibilidad y campo de horas; `TableroEmpleado` con histórico **enero-cualquier-año → hoy**; `reports.py` con `resumen_empleado` y `resumen_historico`.
 - Nota: [[Catálogo de Permisos y Licencias]].
 
 ### 11. Acceso, calendarios y tema (última fase)
@@ -79,7 +79,7 @@ Sistema completo de control de asistencia para la empresa: **PostgreSQL** como b
 
 - **Login unificado** en el escritorio: el kiosco solo marca; Portal y Gestión piden usuario + contraseña (bcrypt) con mensajes **"El usuario no existe."** y **"Contraseña incorrecta."**, y ruteo por rol (Empleado → resumen; RRHH/Admin → Panel de Gestión).
 - **Cambio de contraseña** autoservicio: `auth.cambiar_clave` verifica la clave actual, exige 6+ caracteres y **audita el cambio** sin exponer hashes.
-- **Corrección del tema claro/oscuro**: botones `_rol = "plano"` conservaban el hover del otro tema; el gráfico matplotlib del tablero del empleado no se redibujaba. Ambos resueltos (`_recolorear` + suscripción de `EmployeeDashboard._refrescar` al cambio de tema).
+- **Corrección del tema claro/oscuro**: botones `_rol = "plano"` conservaban el hover del otro tema; el gráfico matplotlib del tablero del empleado no se redibujaba. Ambos resueltos (`_recolorear` + suscripción de `TableroEmpleado._refrescar` al cambio de tema).
 - **Calendario popup** con botón **Hoy** en los 4 campos de fecha (inicio/fin de justificación e histórico del empleado).
 - **Art. 14 · Salidas por motivos personales** para pasantes: 4 h/mes con **máximo 3 usos/mes** (el primer intento de un 4.º uso se bloquea con mensaje de cuota).
 
@@ -98,7 +98,7 @@ Sistema completo de control de asistencia para la empresa: **PostgreSQL** como b
 - **Kiosco web** (`POST /api/marcar`): entrada/salida con cédula + contraseña (evita marcación por terceros), tolerancia de día lluvioso y **ticket oficial** `EMPRESA|3028/2024|...` con hash SHA-256. Vista pública de la página principal (primera pantalla, como el kiosco de escritorio).
 - **Panel de Gestión web** (rol RRHH/Admin; `_exigir_rrhh`): pestañas **Resumen** (empleados, marcas de hoy, justificaciones, correcciones pendientes, alertas sin leer), **Personal** (alta/edición/eliminación con RBAC y salario), **Justificaciones** (catálogo real de permisos del reglamento, validación de cuotas y **PDF oficial**), **Correcciones** (aprobar/rechazar con materialización de la marca), **Alertas** (leer) y **Auditoría** (JSONB de trazabilidad).
 - **Seguridad**: `_personal_publico` filtra credenciales (nunca se expone `password_hash`); un empleado recibe 403 en todo `/api/panel/*`; los PDFs del panel exigen rol RRHH.
-- **Infra**: endpoints con modelos Pydantic, `List[Dict]` donde se devuelven listas (FastAPI valida la respuesta), nuevos métodos `db.list_solicitudes_correccion()` y `db.count_marcajes_hoy()`, `smoke_web_panel.py` en CI (`WEB_BASE` configurable) y README actualizado.
+- **Infra**: endpoints con modelos Pydantic, `List[Dict]` donde se devuelven listas (FastAPI valida la respuesta), nuevos métodos `db.list_solicitudes_correccion()` y `db.contar_marcajes_hoy()`, `smoke_web_panel.py` en CI (`WEB_BASE` configurable) y README actualizado.
 
 ### 13. Auditoría técnica integral
 *Corte: 2026-09-13 · commit `d0559f3` · sin cambios de código*
@@ -172,7 +172,7 @@ El rediseño de la fase 14 arregló la **jerarquía** pero conservó la **forma*
 
 - La **salida anticipada** se medía contra el tope legal de la jornada, así que cerrar el tramo de la mañana de una jornada partida a las cuatro horas —lo pactado— se reprochaba por no llegar a ocho.
 - Los **días de franco** se contaban como ausencia: quien tiene turno de martes a sábado figuraba ausente todos los lunes, y una ausencia injustificada descuenta.
-- La **cola offline** decidía entrada o salida por fecha calendario, así que descartaba el segundo tramo de una jornada partida; y como `get_open_entry` ordenaba por inserción y no por hora, una salida repuesta podía cerrar la entrada equivocada.
+- La **cola offline** decidía entrada o salida por fecha calendario, así que descartaba el segundo tramo de una jornada partida; y como `marcaje_abierto` ordenaba por inserción y no por hora, una salida repuesta podía cerrar la entrada equivocada.
 
 **P2-4 de arrastre.** Con una sola hora de referencia ya no tenía sentido sostener dos definiciones de tardanza: `es_tardanza` (10 min) y `evaluar_asistencia` (15 min para funcionarios) daban veredictos distintos para la misma marca, de modo que corregir una marca **a su hora exacta** podía convertir un día normal en una llegada tardía. `es_tardanza` ahora delega.
 
@@ -314,7 +314,7 @@ Los scripts de humo viven en `tests/` del repositorio (antes en la carpeta tempo
 - `validar_art14.py` — cuota y usos del Art. 14 (pasante) con limpieza. **OK**
 - `smoke_login.py` — login (usuario inexistente/contraseña/roles), cambio de clave (4 validaciones + auditoría) y tema con dashboard abierto (gráfico reconstruido). **OK**
 - `validar_reglamento.py` — catálogo, cuotas por horas, fechas futuras, vínculo, períodos anuales, resúmenes. **OK**
-- `smoke_reglamento_gui.py` — JustificacionesTab + EmployeeDashboard + bloqueo por cuota en la GUI. **OK**
+- `smoke_reglamento_gui.py` — JustificacionesTab + TableroEmpleado + bloqueo por cuota en la GUI. **OK**
 - `smoke_sync.py` — cola offline → PostgreSQL: timestamps preservados, sin duplicados (reinserción descartada), alerta de tardanza con `usuario_id`. **OK**
 - `smoke_alertas.py` — API de alertas (401/200/leídas) + WebSocket con filtro por usuario. **OK**
 - `smoke_facial.py` — sin rostro rechazado, foto registrada, verificación OK (confianza < 80) y bloqueo ante rostro distinto (217). **OK**

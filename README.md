@@ -458,6 +458,16 @@ Las entidades del dominio, los nombres de tabla y los textos de interfaz van en
 **español** (`marcajes`, `turnos`, `justificaciones`, `jornada`, `franco`). Los
 comentarios de código y los mensajes de commit también.
 
+Eso alcanza a los nombres que **operan** sobre el dominio: `crear_usuario`,
+`marcar_entrada`, `listar_turnos`. Quedan en inglés los que nombran un
+mecanismo y no vocabulario del cliente — `web_server`, `rate_limit`,
+`sync_worker`, `offline_queue` —, porque describen la máquina y no el negocio.
+
+> **La regla estaba escrita a medias y el código lo mostraba.** Convivían
+> `db.listar_turnos()` y `db.list_users()` en la misma clase, porque lo que
+> estaba dicho era que el dominio va en español, no que eso incluye a los
+> métodos que lo manipulan.
+
 ## Estado
 
 Las suites pasan en integración continua, sobre un PostgreSQL transitorio, un

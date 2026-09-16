@@ -113,7 +113,7 @@ La regla que quedó mira el **descanso**: se camina hacia atrás desde la marca 
 
 La reposición sin conexión decidía por fecha, así que descartaba el segundo tramo de una jornada partida y podía cerrar la entrada equivocada: las marcas se insertan en el orden en que se encolaron, que no es el orden en que ocurrieron. Tres correcciones:
 
-- `get_open_entry` ordena por **hora de entrada** y no por orden de inserción, y acepta un corte `antes_de`.
+- `marcaje_abierto` ordena por **hora de entrada** y no por orden de inserción, y acepta un corte `antes_de`.
 - Una entrada abierta de otra jornada (más de 18 h) no es la que la marca viene a cerrar.
 - Una marca que cae **dentro** de una jornada ya registrada se descarta. No alcanza con "¿marcó ese día?": la jornada partida tiene dos entradas legítimas en la misma fecha.
 
@@ -137,7 +137,7 @@ El empleado ve su horario en el portal, debajo del parte del día, con la marca 
 
 ## El pasado se mide con el horario del pasado
 
-Resolver un turno pide una fecha, y esa fecha elige la versión. `db.get_turno(turno_id, dia)` devuelve la definición que regía ese día, y `resolver_turno` le pasa la fecha que ya recibía y antes descartaba — la corrección cabía en una línea, pero no había dónde guardar la respuesta.
+Resolver un turno pide una fecha, y esa fecha elige la versión. `db.obtener_turno(turno_id, dia)` devuelve la definición que regía ese día, y `resolver_turno` le pasa la fecha que ya recibía y antes descartaba — la corrección cabía en una línea, pero no había dónde guardar la respuesta.
 
 Una fecha anterior a la primera versión conocida devuelve esa primera versión. Es deliberado: la alternativa —no resolver ningún horario— deja la marca sin poder liquidarse, y medir contra la definición más vieja que existe es la aproximación menos mala a un horario que nadie llegó a anotar.
 

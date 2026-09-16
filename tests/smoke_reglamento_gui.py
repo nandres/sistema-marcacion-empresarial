@@ -1,5 +1,5 @@
 """Smoke de JustificacionesTab (artículos por vínculo + disponibilidad + horas)
-y EmployeeDashboard (historial enero-cualquier-año → hoy)."""
+y TableroEmpleado (historial enero-cualquier-año → hoy)."""
 import sys
 import traceback
 from datetime import date
@@ -18,8 +18,8 @@ def verificar(app):
     try:
         db = database.Database()
         db.initialize()
-        admin = db.get_user_by_username("admin")
-        juan = db.get_user_by_username("juan")
+        admin = db.usuario_por_cedula("admin")
+        juan = db.usuario_por_cedula("juan")
         db._execute("DELETE FROM justificaciones WHERE usuario_id = %s", (juan["id"],))
         db.connection.commit()
         print("OK limpieza previa de justificaciones de juan")
@@ -72,7 +72,7 @@ def verificar(app):
         print("OK segunda justificacion bloqueada por cuota:", just.lbl_resultado.cget("text"))
         panel.destroy()
 
-        dash = gui.EmployeeDashboard(app, db, juan, on_volver=lambda: None)
+        dash = gui.TableroEmpleado(app, db, juan, on_volver=lambda: None)
         dash.grid(row=0, column=0, sticky="nsew")
         assert dash.ent_hist_desde.get() == f"{date.today().year}-01-01"
         assert dash.ent_hist_hasta.get() == date.today().isoformat()

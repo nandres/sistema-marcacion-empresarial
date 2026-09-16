@@ -9,12 +9,12 @@ import database
 db = database.Database()
 db.initialize()
 
-if not db.get_user_by_username("admin"):
+if not db.usuario_por_cedula("admin"):
     auth.crear_primer_admin(db, "admin", "admin123", "Administrador del Sistema")
 
-admin = db.get_user_by_username("admin")
-if not db.get_user_by_username("juan"):
-    auth.create_user(
+admin = db.usuario_por_cedula("admin")
+if not db.usuario_por_cedula("juan"):
+    auth.crear_usuario(
         db, admin, "juan", "clave123", "Juan Pérez", "Empleado",
         2500000, "Funcionario",
     )
@@ -24,7 +24,7 @@ if not db.get_user_by_username("juan"):
 # la anterior. Los usuarios de la suite arrancan en el turno predeterminado y
 # sin rotaciones pendientes.
 for usuario in ("admin", "juan"):
-    registro = db.get_user_by_username(usuario)
+    registro = db.usuario_por_cedula(usuario)
     db.asignar_turno_base(registro["id"], None)
     for asignacion in db.listar_asignaciones_turno(registro["id"]):
         db.eliminar_asignacion_turno(asignacion["id"])

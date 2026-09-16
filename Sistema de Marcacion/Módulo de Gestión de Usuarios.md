@@ -52,12 +52,12 @@ erDiagram
 ## Seguridad de contraseñas (bcrypt)
 
 ```python
-def hash_password(password: str) -> str:
+def cifrar_contrasena(password: str) -> str:
     """Encripta la contraseña con bcrypt y retorna el hash en texto seguro."""
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-def verify_password(password: str, stored: str) -> bool:
+def verificar_contrasena(password: str, stored: str) -> bool:
     """Verifica la contraseña contra un hash bcrypt almacenado."""
     return bcrypt.checkpw(password.encode("utf-8"), stored.encode("utf-8"))
 ```
@@ -91,10 +91,10 @@ db.registrar_auditoria(
 
 | Operación | Función (`src/auth.py`) | Roles permitidos |
 | --- | --- | --- |
-| Crear usuario | `create_user` | Administrador, RRHH |
-| Editar usuario | `update_user` | Administrador, RRHH |
-| Eliminar usuario | `delete_user` | Administrador |
-| Asignar rol Administrador | `create_user` / `update_user` | Solo Administrador |
+| Crear usuario | `crear_usuario` | Administrador, RRHH |
+| Editar usuario | `actualizar_usuario` | Administrador, RRHH |
+| Eliminar usuario | `eliminar_usuario` | Administrador |
+| Asignar rol Administrador | `crear_usuario` / `actualizar_usuario` | Solo Administrador |
 
 ## Conexión
 

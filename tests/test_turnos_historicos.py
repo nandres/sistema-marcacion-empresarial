@@ -61,7 +61,7 @@ def horario(turno) -> str:
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 
 for viejo in db.listar_turnos(incluir_inactivos=True):
     if viejo["nombre"].startswith(NOMBRE):
@@ -102,15 +102,15 @@ verificar("y la vieja conserva su fecha", historial[1]["vigente_desde"] == MARZO
 # --------------------------------------------- 2. Cada fecha, su definición
 print("\n2) El mismo turno resuelto en dos fechas da dos horarios")
 
-en_abril = db.get_turno(turno_id, ABRIL)
-en_hoy = db.get_turno(turno_id, HOY)
+en_abril = db.obtener_turno(turno_id, ABRIL)
+en_hoy = db.obtener_turno(turno_id, HOY)
 verificar("en abril rige el horario de marzo", horario(en_abril) == "08:00–16:00",
           horario(en_abril))
 verificar("hoy rige el nuevo", horario(en_hoy) == "06:00–13:00", horario(en_hoy))
 verificar("y cada uno dice desde cuándo",
           en_abril["vigente_desde"] == MARZO and en_hoy["vigente_desde"] == HOY)
 
-antiguo = db.get_turno(turno_id, PREHISTORIA)
+antiguo = db.obtener_turno(turno_id, PREHISTORIA)
 verificar("una fecha anterior a todo usa la definición más vieja conocida",
           horario(antiguo) == "08:00–16:00", horario(antiguo))
 
@@ -121,7 +121,7 @@ auth.actualizar_turno(db, admin, turno_id, nombre=f"{NOMBRE} renombrado")
 verificar("renombrar no abre una versión", len(db.historial_turno(turno_id)) == 2,
           f"{len(db.historial_turno(turno_id))} versiones")
 verificar("y el nombre nuevo vale también para el pasado",
-          db.get_turno(turno_id, ABRIL)["nombre"] == f"{NOMBRE} renombrado")
+          db.obtener_turno(turno_id, ABRIL)["nombre"] == f"{NOMBRE} renombrado")
 
 auth.actualizar_turno(
     db, admin, turno_id, tramos=[{"entrada": "06:00", "salida": "13:00"}],
@@ -135,8 +135,8 @@ auth.actualizar_turno(
 verificar("dos cambios el mismo día son una sola versión",
           len(db.historial_turno(turno_id)) == 2,
           str([v["vigente_desde"].isoformat() for v in db.historial_turno(turno_id)]))
-verificar("y queda el último", horario(db.get_turno(turno_id)) == "07:00–15:00",
-          horario(db.get_turno(turno_id)))
+verificar("y queda el último", horario(db.obtener_turno(turno_id)) == "07:00–15:00",
+          horario(db.obtener_turno(turno_id)))
 
 # Se restaura el horario con el que siguen las comprobaciones de abajo.
 auth.actualizar_turno(
@@ -146,10 +146,10 @@ auth.actualizar_turno(
 # ------------------------------------ 4. Lo que de verdad se recalculaba
 print("\n4) Corregir una marca vieja la mide con el horario de entonces")
 
-if not db.get_user_by_username(NOMBRE_EMPLEADO):
-    auth.create_user(db, admin, NOMBRE_EMPLEADO, "clave123456",
+if not db.usuario_por_cedula(NOMBRE_EMPLEADO):
+    auth.crear_usuario(db, admin, NOMBRE_EMPLEADO, "clave123456",
                      "Empleado Histórico", "Empleado", 2500000)
-empleado = db.get_user_by_username(NOMBRE_EMPLEADO)
+empleado = db.usuario_por_cedula(NOMBRE_EMPLEADO)
 db.asignar_turno_base(empleado["id"], turno_id)
 
 resuelto_abril = turnos_dominio.resolver(db, empleado["id"], ABRIL)
@@ -212,16 +212,16 @@ verificar("no agrega una versión: reescribe la de esa fecha",
           len(db.historial_turno(turno_id)) == 2,
           str(len(db.historial_turno(turno_id))))
 verificar("abril pasa a medirse con el horario corregido",
-          horario(db.get_turno(turno_id, ABRIL)) == "09:00–17:00",
-          horario(db.get_turno(turno_id, ABRIL)))
+          horario(db.obtener_turno(turno_id, ABRIL)) == "09:00–17:00",
+          horario(db.obtener_turno(turno_id, ABRIL)))
 verificar("y hoy sigue con el suyo",
-          horario(db.get_turno(turno_id, HOY)) == "06:00–13:00",
-          horario(db.get_turno(turno_id, HOY)))
+          horario(db.obtener_turno(turno_id, HOY)) == "06:00–13:00",
+          horario(db.obtener_turno(turno_id, HOY)))
 
 # ------------------------------------------------ 8. Aislamiento por cliente
 print("\n8) La historia de un turno no cruza de empresa")
 
-otra = db.get_empresa_por_slug("prueba-historial")
+otra = db.empresa_por_slug("prueba-historial")
 if otra is None:
     otra = db.crear_empresa("prueba-historial", "Prueba Historial S.A.")
 propia = db.empresa_id

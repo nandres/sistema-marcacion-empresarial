@@ -49,7 +49,7 @@ def limpiar(db: Database, admin) -> None:
     for usuario in db.listar_usuarios() if hasattr(db, "listar_usuarios") else []:
         if str(usuario.get("username", "")).startswith(PREFIJO):
             with suppress(Exception):
-                auth.delete_user(db, admin, usuario["id"])
+                auth.eliminar_usuario(db, admin, usuario["id"])
 
 
 async def marcar(cliente: httpx.AsyncClient, cedula: str) -> dict:
@@ -96,11 +96,11 @@ def main() -> int:
 
     db = Database()
     db.initialize()
-    admin = db.get_user_by_username("admin")
+    admin = db.usuario_por_cedula("admin")
 
     # El cupo del plan se comprueba al dar de alta: sin levantarlo, la prueba
     # se quedaría sin poder crear su propia plantilla.
-    empresa = db.get_empresa(db.empresa)
+    empresa = db.obtener_empresa(db.empresa)
     cupo_previo = (empresa or {}).get("max_empleados")
     db.fijar_cupo_empresa(db.empresa, None)
 
@@ -110,15 +110,15 @@ def main() -> int:
     cedulas = []
     for indice in range(CUANTOS):
         usuario = f"{PREFIJO}{indice:03d}"
-        existente = db.get_user_by_username(usuario)
+        existente = db.usuario_por_cedula(usuario)
         if existente:
-            auth.delete_user(db, admin, existente["id"])
-        auth.create_user(db, admin, usuario, CLAVE, f"Carga {indice:03d}",
+            auth.eliminar_usuario(db, admin, existente["id"])
+        auth.crear_usuario(db, admin, usuario, CLAVE, f"Carga {indice:03d}",
                          "Empleado", 2500000)
         cedulas.append(usuario)
     verificar("se dieron de alta todos", len(cedulas) == CUANTOS, str(len(cedulas)))
 
-    antes = db.count_marcajes_hoy()
+    antes = db.contar_marcajes_hoy()
 
     print("\n2) Todos marcan en el mismo instante")
     arranque = time.perf_counter()
@@ -146,7 +146,7 @@ def main() -> int:
         print(f"  errores por código: {reparto}")
 
     print("\n3) Cada marca quedó registrada una sola vez")
-    despues = db.count_marcajes_hoy()
+    despues = db.contar_marcajes_hoy()
     verificar("se registraron tantas marcas como éxitos hubo",
               despues - antes == len(exitos),
               f"esperaba {len(exitos)}, hay {despues - antes}")
@@ -154,10 +154,10 @@ def main() -> int:
     abiertas = 0
     duplicadas = 0
     for cedula in cedulas:
-        usuario = db.get_user_by_username(cedula)
+        usuario = db.usuario_por_cedula(cedula)
         if not usuario:
             continue
-        abierta = db.get_open_entry(usuario["id"])
+        abierta = db.marcaje_abierto(usuario["id"])
         if abierta:
             abiertas += 1
         filas = db._execute(
@@ -174,9 +174,9 @@ def main() -> int:
               f"{duplicadas} con más de una")
 
     for cedula in cedulas:
-        registro = db.get_user_by_username(cedula)
+        registro = db.usuario_por_cedula(cedula)
         if registro:
-            auth.delete_user(db, admin, registro["id"])
+            auth.eliminar_usuario(db, admin, registro["id"])
     db.fijar_cupo_empresa(db.empresa, cupo_previo)
     db.cerrar()
 

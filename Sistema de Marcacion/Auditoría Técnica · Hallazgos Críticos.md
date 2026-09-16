@@ -242,15 +242,15 @@ Todo reclamo de tipo "Salida" que RRHH intente aprobar responde 500. El flujo de
 
 ### P2-2 · El turno nocturno no se puede cerrar ✅ corregido
 
-> Cerrado el 2026-09-14. `detectar_accion_hoy` decide por `get_open_entry()` —el estado real— y no por el calendario. Verificado en `tests/test_turno_nocturno.py` con un turno que entra un día y sale el siguiente.
+> Cerrado el 2026-09-14. `detectar_accion_hoy` decide por `marcaje_abierto()` —el estado real— y no por el calendario. Verificado en `tests/test_turno_nocturno.py` con un turno que entra un día y sale el siguiente.
 
-`src/clock_engine.py:332-339` → `detectar_accion_hoy()` consulta `get_entries_by_date(user, hoy)`.
+`src/clock_engine.py:332-339` → `detectar_accion_hoy()` consulta `marcajes_del_dia(user, hoy)`.
 
-Un empleado entra el lunes 22:00 y quiere salir el martes 06:00. El martes no hay marcajes con fecha de martes, así que la función decide `ENTRADA`; `clock_in` encuentra la entrada abierta y aborta con "Ya hay una entrada abierta sin salida registrada".
+Un empleado entra el lunes 22:00 y quiere salir el martes 06:00. El martes no hay marcajes con fecha de martes, así que la función decide `ENTRADA`; `marcar_entrada` encuentra la entrada abierta y aborta con "Ya hay una entrada abierta sin salida registrada".
 
 **El empleado queda atrapado: no puede marcar salida ni entrada.** Es exactamente el caso de uso que el README promociona como soportado.
 
-**Corrección aplicada**: la decisión se basa en `get_open_entry()` (estado real del empleado) y no en el calendario. El guardia de "ya marcó entrada y salida hoy" se conserva, pero después de resolver la jornada abierta.
+**Corrección aplicada**: la decisión se basa en `marcaje_abierto()` (estado real del empleado) y no en el calendario. El guardia de "ya marcó entrada y salida hoy" se conserva, pero después de resolver la jornada abierta.
 
 ### P2-3 · El sistema queda ciego a partir de enero de 2027 ✅
 
@@ -291,7 +291,7 @@ El defecto estaba latente porque el `.env` coincidía con el valor por defecto. 
 
 > Cerrado el 2026-09-14 junto con P2-2.
 
-`get_open_entry` no filtraba por antigüedad. Si alguien olvidaba marcar la salida, la entrada quedaba abierta indefinidamente y **todas** sus marcaciones futuras fallaban con "Ya hay una entrada abierta". No había auto-cierre ni escalamiento a RRHH.
+`marcaje_abierto` no filtraba por antigüedad. Si alguien olvidaba marcar la salida, la entrada quedaba abierta indefinidamente y **todas** sus marcaciones futuras fallaban con "Ya hay una entrada abierta". No había auto-cierre ni escalamiento a RRHH.
 
 **Corrección aplicada**: pasadas 18 horas (`MAX_JORNADA_ABIERTA`, que cubre con holgura el turno nocturno de 7 h más extras) la entrada se marca como **abandonada** con la incidencia *Salida no registrada*, se avisa a Recursos Humanos y el empleado vuelve a marcar. No se inventa la hora de salida: la repone el circuito de correcciones, que ya existía.
 
@@ -404,12 +404,12 @@ De paso quedó a la vista que `resumen_empleado` tenía su **propia copia** del 
 
 ### P3-9 · Escaneo completo de justificaciones por consulta ✅ corregido
 
-> Cerrado el 2026-09-14. `list_justificaciones(usuario_id)` filtra en la base; se agregaron `get_justificacion(id)` y `contar_justificaciones()` para los tres llamadores que traían la tabla entera para quedarse con una fila o con un número.
+> Cerrado el 2026-09-14. `listar_justificaciones(usuario_id)` filtra en la base; se agregaron `obtener_justificacion(id)` y `contar_justificaciones()` para los tres llamadores que traían la tabla entera para quedarse con una fila o con un número.
 
 `reglamento.disponibilidad_permisos` (línea 523) trae **todas las justificaciones de la empresa** y filtra en Python:
 
 ```python
-todas = [j for j in db.list_justificaciones() if j["usuario_id"] == user["id"]]
+todas = [j for j in db.listar_justificaciones() if j["usuario_id"] == user["id"]]
 ```
 
 Con 500 empleados y tres años de histórico, cada apertura del portal arrastra la tabla entera. Lo mismo en `api_permiso_pdf` (`web_server.py:1072`), que recorre todas las justificaciones para encontrar una por id.

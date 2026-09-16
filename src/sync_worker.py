@@ -23,7 +23,7 @@ import database
 import notifications
 import offline_queue
 from clock_engine import (
-    ClockEngine,
+    MotorDeJornada,
     calcular_horas_paraguay,
     evaluar_asistencia,
     persistir_desglose,
@@ -114,7 +114,7 @@ def sincronizar(
                         f"{pendiente['sync_id'][:8]} · apartada sin aplicar",
                     )
                     continue
-                user = db.get_user_by_username(pendiente["username"])
+                user = db.usuario_por_cedula(pendiente["username"])
                 if not user:
                     raise ValueError("Usuario inexistente en el servidor.")
                 momento = _desde_iso(pendiente["momento_iso"])
@@ -122,7 +122,7 @@ def sincronizar(
                 # el turno nocturno reparte una jornada entre dos fechas y la
                 # jornada partida son dos entradas en la misma. La decisión es
                 # la misma que toma el kiosco en línea.
-                abierto = db.get_open_entry(user["id"], antes_de=momento)
+                abierto = db.marcaje_abierto(user["id"], antes_de=momento)
                 # Una entrada que quedó abierta de otra jornada no es la que
                 # esta marca viene a cerrar: tomarla produciría un turno de
                 # veintidós horas. Es el mismo techo que aplica el kiosco.
@@ -214,7 +214,7 @@ def _sincronizar_entrada(db, user, momento, pendiente, avisar) -> None:
     )
     tolerancia = evaluacion["tolerancia_climatica"] or evaluacion["retraso_min"] > 0
     condicion = evaluacion["condicion_dia"]
-    entry_id = db.open_clock_in(
+    entry_id = db.abrir_marcaje(
         user["id"],
         momento,
         estado != "Normal",
@@ -240,7 +240,7 @@ def _sincronizar_salida(db, user, abierto, momento, pendiente) -> None:
     """Cierra una SALIDA offline con el desglose legal calculado sobre
     el timestamp original."""
     desglose = calcular_horas_paraguay(abierto["hora_entrada"], momento)
-    incidencia = ClockEngine._clasificar_incidencia_salida(
+    incidencia = MotorDeJornada._clasificar_incidencia_salida(
         desglose,
         abierto.get("tipo_incidencia") or "",
         clock_engine.duracion_comprometida(db, user["id"], abierto["hora_entrada"]),

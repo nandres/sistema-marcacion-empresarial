@@ -2,7 +2,7 @@
 
 P2-2 · El botón maestro decidía por calendario. Un turno que entra el lunes
 22:00 y sale el martes 06:00 no tiene marcajes con fecha de martes, así que
-la función respondía ENTRADA, `clock_in` encontraba la entrada abierta y
+la función respondía ENTRADA, `marcar_entrada` encontraba la entrada abierta y
 abortaba: el empleado no podía marcar ni la salida ni una entrada nueva.
 
 P2-6 · Una entrada sin cierre bloqueaba **todas** las marcaciones futuras de
@@ -19,21 +19,21 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import auth
 import clock_engine
-from clock_engine import ClockEngine
+from clock_engine import MotorDeJornada
 from database import Database
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 
 USUARIO = "turno_nocturno"
-previo = db.get_user_by_username(USUARIO)
+previo = db.usuario_por_cedula(USUARIO)
 if previo:
-    auth.delete_user(db, admin, previo["id"])
-auth.create_user(db, admin, USUARIO, "clave123", "Noche Prueba", "Empleado",
+    auth.eliminar_usuario(db, admin, previo["id"])
+auth.crear_usuario(db, admin, USUARIO, "clave123", "Noche Prueba", "Empleado",
                  2500000, "Funcionario")
-empleado = db.get_user_by_username(USUARIO)
-motor = ClockEngine(db, empleado)
+empleado = db.usuario_por_cedula(USUARIO)
+motor = MotorDeJornada(db, empleado)
 
 fallos = 0
 
@@ -55,7 +55,7 @@ def limpiar() -> None:
 # --- P2-2 · turno que cruza la medianoche ---------------------------------
 limpiar()
 ayer = clock_engine.ahora_local() - timedelta(hours=8)
-entrada_id = db.open_clock_in(empleado["id"], ayer, False)
+entrada_id = db.abrir_marcaje(empleado["id"], ayer, False)
 verificar("entrada de anoche registrada", entrada_id is not None)
 
 verificar("el turno que cruza la medianoche resuelve SALIDA",
@@ -65,7 +65,7 @@ entry_id, momento, tipo = motor.registrar_asistencia()
 verificar("y la salida se registra de verdad", tipo == "SALIDA",
           f"marcaje #{entry_id} a las {momento.strftime('%H:%M')}")
 
-cerrado = next(m for m in db.get_all_entries(empleado["id"]) if m["id"] == entrada_id)
+cerrado = next(m for m in db.listar_marcajes(empleado["id"]) if m["id"] == entrada_id)
 verificar("el marcaje quedó cerrado con su desglose",
           cerrado["hora_salida"] is not None
           and cerrado["horas_ordinarias"].total_seconds() > 0,
@@ -74,7 +74,7 @@ verificar("el marcaje quedó cerrado con su desglose",
 # --- P2-6 · entrada que nadie cerró ---------------------------------------
 limpiar()
 vieja = clock_engine.ahora_local() - timedelta(hours=30)
-olvidada = db.open_clock_in(empleado["id"], vieja, False)
+olvidada = db.abrir_marcaje(empleado["id"], vieja, False)
 verificar("entrada de hace 30 horas registrada", olvidada is not None)
 verificar("supera el máximo de jornada abierta",
           timedelta(hours=30) > clock_engine.MAX_JORNADA_ABIERTA,
@@ -83,7 +83,7 @@ verificar("supera el máximo de jornada abierta",
 verificar("el empleado no queda atrapado: puede volver a entrar",
           motor.detectar_accion_hoy() == "ENTRADA")
 
-abandonada = next(m for m in db.get_all_entries(empleado["id"]) if m["id"] == olvidada)
+abandonada = next(m for m in db.listar_marcajes(empleado["id"]) if m["id"] == olvidada)
 verificar("la entrada olvidada queda marcada como abandonada",
           abandonada["abandonado"] is True)
 verificar("con su incidencia, para que RRHH la corrija",
@@ -106,14 +106,14 @@ verificar("la marcación nueva entra sin problemas", tipo == "ENTRADA", f"#{entr
 # siguiente: es lo que hizo fallar al kiosco con una cola acumulada.
 limpiar()
 viejas = [
-    db.open_clock_in(empleado["id"], clock_engine.ahora_local() - timedelta(days=d), False)
+    db.abrir_marcaje(empleado["id"], clock_engine.ahora_local() - timedelta(days=d), False)
     for d in (5, 3, 2)
 ]
 verificar("tres entradas vencidas sembradas", all(viejas))
 verificar("una sola marcación las libera a todas",
           motor.detectar_accion_hoy() == "ENTRADA")
 pendientes = [
-    m for m in db.get_all_entries(empleado["id"])
+    m for m in db.listar_marcajes(empleado["id"])
     if m["id"] in viejas and not m["abandonado"]
 ]
 verificar("no queda ninguna sin descartar", not pendientes,
@@ -122,14 +122,14 @@ verificar("no queda ninguna sin descartar", not pendientes,
 # --- Una jornada abierta pero reciente NO se toca --------------------------
 limpiar()
 reciente = clock_engine.ahora_local() - timedelta(hours=3)
-en_curso = db.open_clock_in(empleado["id"], reciente, False)
+en_curso = db.abrir_marcaje(empleado["id"], reciente, False)
 verificar("una jornada de 3 horas sigue en curso",
           motor.detectar_accion_hoy() == "SALIDA")
-vigente = next(m for m in db.get_all_entries(empleado["id"]) if m["id"] == en_curso)
+vigente = next(m for m in db.listar_marcajes(empleado["id"]) if m["id"] == en_curso)
 verificar("y no se marca como abandonada", vigente["abandonado"] is False)
 
 limpiar()
-auth.delete_user(db, admin, empleado["id"])
+auth.eliminar_usuario(db, admin, empleado["id"])
 db.cerrar()
 
 print()

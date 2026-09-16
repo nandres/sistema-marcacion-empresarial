@@ -51,7 +51,7 @@ print("encoladas:", len(pendientes))
 resumen = sync_worker.sincronizar(cola, db=db)
 print("lote 1:", resumen, "cola restante:", len(cola))
 
-registros = db.get_entries_by_date(2, hace)
+registros = db.marcajes_del_dia(2, hace)
 print("registros día puntual:", len(registros))
 r = registros[0]
 print("entrada preservada:", r["hora_entrada"].isoformat(), "== 07:30 UTC?",
@@ -60,7 +60,7 @@ print("salida preservada:", r["hora_salida"].isoformat(), "== 17:00 UTC?",
       r["hora_salida"] == momento_salida)
 print("sync_id presente:", bool(r["sync_id"]))
 
-registros2 = db.get_entries_by_date(2, dia_tarde)
+registros2 = db.marcajes_del_dia(2, dia_tarde)
 print("registros día tardío:", len(registros2),
       "incidencia:", registros2[0]["tipo_incidencia"])
 
@@ -72,7 +72,7 @@ print("lote 2 (duplicados):", resumen2, "cola restante:", len(cola))
 cola.encolar("juan", momento_entrada)
 resumen3 = sync_worker.sincronizar(cola, db=db)
 print("lote 3 (reinserción):", resumen3)
-print("sin duplicados:", len(db.get_entries_by_date(2, hace)) == 1)
+print("sin duplicados:", len(db.marcajes_del_dia(2, hace)) == 1)
 
 alertas = db.listar_alertas(limite=30)
 tardanzas = [a for a in alertas if a["tipo"] == "marcacion_incidente"]

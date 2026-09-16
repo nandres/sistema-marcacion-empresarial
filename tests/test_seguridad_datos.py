@@ -31,7 +31,7 @@ from database import Database
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 
 fallos = 0
 
@@ -49,12 +49,12 @@ print("Biometría cifrada en reposo (Ley 6534/2020)")
 verificar("hay clave de cifrado configurada", biometria.configurada())
 
 USUARIO = "seg_biometria"
-previo = db.get_user_by_username(USUARIO)
+previo = db.usuario_por_cedula(USUARIO)
 if previo:
-    auth.delete_user(db, admin, previo["id"])
-auth.create_user(db, admin, USUARIO, "clave123", "Biometría Prueba", "Empleado",
+    auth.eliminar_usuario(db, admin, previo["id"])
+auth.crear_usuario(db, admin, USUARIO, "clave123", "Biometría Prueba", "Empleado",
                  2000000, "Funcionario")
-empleado = db.get_user_by_username(USUARIO)
+empleado = db.usuario_por_cedula(USUARIO)
 
 PLANTILLA = b"\xff\xd8\xff\xe0" + b"plantilla-facial-simulada" * 8
 db.guardar_foto(empleado["id"], PLANTILLA)
@@ -69,7 +69,7 @@ verificar("y no contiene la plantilla en claro", PLANTILLA not in guardado,
 verificar("ni siquiera la cabecera JPEG", not guardado.startswith(b"\xff\xd8"))
 
 verificar("la aplicación la recupera intacta",
-          db.get_foto(empleado["id"]) == PLANTILLA)
+          db.obtener_foto(empleado["id"]) == PLANTILLA)
 
 # El identificador del empleado es dato autenticado: mover la fila no sirve.
 verificar("una foto reasignada a otro empleado no abre",
@@ -87,7 +87,7 @@ db._execute(
 )
 db.connection.commit()
 verificar("una foto antigua en claro se sigue leyendo",
-          db.get_foto(empleado["id"]) == PLANTILLA)
+          db.obtener_foto(empleado["id"]) == PLANTILLA)
 convertidas = biometria.migrar_fotos(db)
 verificar("y la migración la cifra", convertidas >= 1, f"{convertidas} convertidas")
 crudo = db._execute(
@@ -99,9 +99,9 @@ verificar("dejándola cifrada en reposo", biometria.esta_cifrada(bytes(crudo["im
 baja = auth.dar_de_baja(db, admin, empleado["id"])
 verificar("la baja destruye la plantilla facial",
           baja["biometria_eliminada"] and not db.tiene_foto(empleado["id"]))
-verificar("pero conserva el legajo", db.get_user_by_id(empleado["id"]) is not None)
+verificar("pero conserva el legajo", db.usuario_por_id(empleado["id"]) is not None)
 
-auth.delete_user(db, admin, empleado["id"])
+auth.eliminar_usuario(db, admin, empleado["id"])
 
 # --- P3-3 · freno de intentos ----------------------------------------------
 print("\nFreno de intentos fallidos")

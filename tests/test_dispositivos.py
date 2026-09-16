@@ -39,7 +39,7 @@ def verificar(descripcion: str, condicion: bool, detalle: str = "") -> None:
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 
 for existente in db.listar_dispositivos(incluir_inactivos=True):
     if existente["nombre"].startswith("Prueba "):
@@ -94,10 +94,10 @@ except Exception:
     print("  (sin servidor en WEB_BASE: se omiten las comprobaciones por HTTP)")
 
 if hay_servidor:
-    if not db.get_user_by_username("disp_juan"):
-        auth.create_user(db, admin, "disp_juan", "clave123456", "Juan del Puesto",
+    if not db.usuario_por_cedula("disp_juan"):
+        auth.crear_usuario(db, admin, "disp_juan", "clave123456", "Juan del Puesto",
                          "Empleado", 2500000)
-    empleado = db.get_user_by_username("disp_juan")
+    empleado = db.usuario_por_cedula("disp_juan")
     db.limpiar_marcajes_prueba(empleado["id"], "2000-01-01", "2100-01-01")
 
     respuesta = httpx.post(
@@ -163,7 +163,7 @@ os.environ["DISPOSITIVO_OBLIGATORIO"] = previo
 # ------------------------------------------------------ 6. Entre clientes
 print("\n6) El token de un cliente no sirve en otro")
 
-otra = db.get_empresa_por_slug("prueba-dispositivos")
+otra = db.empresa_por_slug("prueba-dispositivos")
 if otra is None:
     otra = db.crear_empresa("prueba-dispositivos", "Prueba Dispositivos S.A.")
 propia = db.empresa_id

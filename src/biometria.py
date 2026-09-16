@@ -129,7 +129,7 @@ def migrar_fotos(db) -> int:
         Cantidad de plantillas convertidas.
     """
     convertidas = 0
-    for foto in db.list_fotos(descifrar=False):
+    for foto in db.listar_fotos(descifrar=False):
         if esta_cifrada(foto["imagen"]):
             continue
         db.guardar_foto(foto["user_id"], bytes(foto["imagen"]))

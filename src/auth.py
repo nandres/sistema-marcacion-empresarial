@@ -136,21 +136,21 @@ def autorizado(*roles: str) -> Callable[[F], F]:
     return decorador
 
 
-def hash_password(password: str) -> str:
+def cifrar_contrasena(password: str) -> str:
     """Encripta la contraseña con bcrypt y retorna el hash en texto seguro."""
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-def verify_password(password: str, stored: str) -> bool:
+def verificar_contrasena(password: str, stored: str) -> bool:
     """Verifica la contraseña contra un hash bcrypt almacenado."""
     return bcrypt.checkpw(password.encode("utf-8"), stored.encode("utf-8"))
 
 
-def get_role_name(db: Database, user: Dict) -> str:
+def nombre_de_rol(db: Database, user: Dict) -> str:
     """Resuelve el nombre del rol del usuario autenticado."""
     if "role_name" in user:
         return user["role_name"]
-    return db.get_user_by_id(user["id"])["role_name"]
+    return db.usuario_por_id(user["id"])["role_name"]
 
 
 def require_role(db: Database, user: Dict, allowed_roles: tuple) -> str:
@@ -159,7 +159,7 @@ def require_role(db: Database, user: Dict, allowed_roles: tuple) -> str:
     Raises:
         PermissionError: si el rol no figura entre los permitidos.
     """
-    role = get_role_name(db, user)
+    role = nombre_de_rol(db, user)
     if role not in allowed_roles:
         raise PermissionError(
             f"Rol '{role}' no autorizado. Requiere: {', '.join(allowed_roles)}"
@@ -190,7 +190,7 @@ def authenticate(
     if empresa:
         objetivo = empresa.strip().lower()
         candidatos = [c for c in candidatos if c["empresa_slug"] == objetivo]
-    validos = [c for c in candidatos if verify_password(password, c["password_hash"])]
+    validos = [c for c in candidatos if verificar_contrasena(password, c["password_hash"])]
     if len(validos) != 1:
         return None
     credencial = validos[0]
@@ -199,16 +199,16 @@ def authenticate(
     # Resuelta la empresa, el legajo completo se lee por el camino normal, ya
     # acotado: la excepción que cruza empresas se limita a decidir quién entra.
     db.empresa_id = credencial["empresa_id"]
-    usuario = db.get_user_by_id(credencial["id"])
+    usuario = db.usuario_por_id(credencial["id"])
     if not usuario:
         return None
-    alojada = db.get_empresa(credencial["empresa_id"])
+    alojada = db.obtener_empresa(credencial["empresa_id"])
     usuario["empresa_slug"] = alojada["slug"]
     usuario["empresa_nombre"] = alojada["razon_social"]
     return usuario
 
 
-def prompt_login(db: Database) -> Optional[Dict]:
+def pedir_credenciales(db: Database) -> Optional[Dict]:
     """Solicita credenciales por consola y autentica al usuario."""
     username = input("Usuario: ").strip()
     password = getpass.getpass("Contraseña: ")
@@ -224,10 +224,10 @@ def crear_primer_admin(
     tiene que poder crearle su administrador aunque los otros clientes ya
     tengan el suyo.
     """
-    if db.list_users(incluir_bajas=True):
+    if db.listar_usuarios(incluir_bajas=True):
         raise PermissionError("El administrador inicial ya fue creado.")
-    role = db.get_role_by_name(ROLE_ADMIN)
-    return db.create_user(username, hash_password(password), full_name, role["id"])
+    role = db.rol_por_nombre(ROLE_ADMIN)
+    return db.crear_usuario(username, cifrar_contrasena(password), full_name, role["id"])
 
 
 def _valores_auditoria(user: Dict) -> Dict[str, Any]:
@@ -242,7 +242,7 @@ def _valores_auditoria(user: Dict) -> Dict[str, Any]:
 
 
 @autorizado(ROLE_ADMIN, ROLE_RRHH)
-def create_user(
+def crear_usuario(
     db: Database,
     actor: Dict,
     username: str,
@@ -263,25 +263,25 @@ def create_user(
         require_role(db, actor, (ROLE_ADMIN,))
     if tipo_vinculo not in TIPOS_VINCULO:
         raise ValueError(f"Tipo de vínculo inválido. Use: {', '.join(TIPOS_VINCULO)}")
-    role = db.get_role_by_name(role_name)
+    role = db.rol_por_nombre(role_name)
     if not role:
         raise ValueError(f"El rol '{role_name}' no existe.")
-    if db.get_user_by_username(username):
+    if db.usuario_por_cedula(username):
         raise ValueError("El usuario ya existe.")
-    if turno_id is not None and not db.get_turno(turno_id):
+    if turno_id is not None and not db.obtener_turno(turno_id):
         raise ValueError("El turno indicado no existe.")
     # El cupo del plan se comprueba al dar de alta y no al facturar: enterarse
     # un mes después de que el cliente se pasó no sirve para nada.
-    empresa = db.get_empresa(db.empresa)
+    empresa = db.obtener_empresa(db.empresa)
     cupo = (empresa or {}).get("max_empleados")
     if cupo is not None and db.contar_empleados() >= int(cupo):
         raise ValueError(
             f"La empresa llegó a su tope de {cupo} empleados activos. "
             f"Dá de baja a alguien o ampliá el plan contratado."
         )
-    user_id = db.create_user(
+    user_id = db.crear_usuario(
         username,
-        hash_password(password),
+        cifrar_contrasena(password),
         full_name,
         role["id"],
         salario_mensual,
@@ -308,7 +308,7 @@ def create_user(
 
 
 @autorizado(ROLE_ADMIN, ROLE_RRHH)
-def update_user(
+def actualizar_usuario(
     db: Database,
     actor: Dict,
     user_id: int,
@@ -329,23 +329,23 @@ def update_user(
         require_role(db, actor, (ROLE_ADMIN,))
     if tipo_vinculo is not None and tipo_vinculo not in TIPOS_VINCULO:
         raise ValueError(f"Tipo de vínculo inválido. Use: {', '.join(TIPOS_VINCULO)}")
-    target = db.get_user_by_id(user_id)
+    target = db.usuario_por_id(user_id)
     if not target:
         raise ValueError("El usuario no existe.")
     role_id = None
     if role_name is not None:
-        role = db.get_role_by_name(role_name)
+        role = db.rol_por_nombre(role_name)
         if not role:
             raise ValueError(f"El rol '{role_name}' no existe.")
         role_id = role["id"]
     limpiar_turno = turno_id is not SIN_CAMBIO and turno_id is None
     if turno_id is SIN_CAMBIO:
         turno_id = None
-    elif turno_id is not None and not db.get_turno(turno_id):
+    elif turno_id is not None and not db.obtener_turno(turno_id):
         raise ValueError("El turno indicado no existe.")
     anterior = _valores_auditoria(target)
-    password_hash = hash_password(password) if password else None
-    db.update_user(
+    password_hash = cifrar_contrasena(password) if password else None
+    db.actualizar_usuario(
         user_id,
         full_name=full_name,
         password_hash=password_hash,
@@ -388,11 +388,11 @@ def cambiar_clave(db: Database, user: Dict, clave_actual: str, clave_nueva: str)
     Raises:
         ValueError: si la clave actual no coincide o la nueva es muy corta.
     """
-    if not verify_password(clave_actual, user["password_hash"]):
+    if not verificar_contrasena(clave_actual, user["password_hash"]):
         raise ValueError("La contraseña actual no es correcta.")
     if len(clave_nueva) < 6:
         raise ValueError("La contraseña nueva debe tener al menos 6 caracteres.")
-    db.update_user(user["id"], password_hash=hash_password(clave_nueva))
+    db.actualizar_usuario(user["id"], password_hash=cifrar_contrasena(clave_nueva))
     db.registrar_auditoria(
         user["id"],
         "ACTUALIZAR",
@@ -433,7 +433,7 @@ def crear_justificacion(
         raise ValueError(
             f"Tipo de permiso inválido. Use: {', '.join(TIPOS_PERMISO)}"
         )
-    empleado = db.get_user_by_id(empleado_id)
+    empleado = db.usuario_por_id(empleado_id)
     if not empleado:
         raise ValueError("El empleado no existe.")
     articulo = reglamento.encontrar_articulo(
@@ -665,7 +665,7 @@ def resolver_solicitud_permiso(
     cuota se vuelve a verificar en este momento y no en el del pedido,
     porque entre uno y otro pudo aprobarse otra solicitud.
     """
-    solicitud = db.get_solicitud_permiso(solicitud_id)
+    solicitud = db.obtener_solicitud_permiso(solicitud_id)
     if not solicitud:
         raise ValueError(f"La solicitud #{solicitud_id} no existe.")
     if solicitud["estado"] != "Pendiente":
@@ -777,7 +777,7 @@ def dar_de_baja(
     siguen existiendo. Borrarlo destruiría el respaldo de liquidaciones ya
     pagadas, que es justo lo que un archivo laboral tiene que poder exhibir.
     """
-    empleado = db.get_user_by_id(user_id)
+    empleado = db.usuario_por_id(user_id)
     if not empleado:
         raise ValueError("El empleado no existe.")
     if int(user_id) == int(actor["id"]):
@@ -813,7 +813,7 @@ def dar_de_baja(
 @autorizado(ROLE_ADMIN, ROLE_RRHH)
 def reincorporar(db: Database, actor: Dict, user_id: int) -> Dict[str, Any]:
     """Reincorpora a un empleado dado de baja, devolviéndole el acceso."""
-    empleado = db.get_user_by_id(user_id)
+    empleado = db.usuario_por_id(user_id)
     if not empleado:
         raise ValueError("El empleado no existe.")
     if empleado.get("activo") is not False:
@@ -828,20 +828,20 @@ def reincorporar(db: Database, actor: Dict, user_id: int) -> Dict[str, Any]:
 
 
 @autorizado(ROLE_ADMIN,)
-def delete_user(db: Database, actor: Dict, user_id: int) -> None:
+def eliminar_usuario(db: Database, actor: Dict, user_id: int) -> None:
     """Elimina un usuario (solo Admin) auditando los valores previos."""
     if user_id == actor["id"]:
         raise ValueError("No puede eliminarse a sí mismo.")
-    target = db.get_user_by_id(user_id)
+    target = db.usuario_por_id(user_id)
     if not target:
         raise ValueError("El usuario no existe.")
-    db.delete_user(user_id)
+    db.eliminar_usuario(user_id)
     db.registrar_auditoria(
         actor["id"], "ELIMINAR", "users", user_id, anterior=_valores_auditoria(target)
     )
 
 
-def can_register_marks(db: Database, user: Dict) -> bool:
+def puede_marcar(db: Database, user: Dict) -> bool:
     """Autoriza el registro de marcas a cualquier rol autenticado."""
     require_role(db, user, ROLES_MARCAJES)
     return True
@@ -866,7 +866,7 @@ def aprobar_solicitud_correccion(
     Returns:
         El estado final de la solicitud (``Aprobado`` o ``Rechazado``).
     """
-    solicitud = db.get_solicitud_correccion(solicitud_id)
+    solicitud = db.obtener_solicitud_correccion(solicitud_id)
     if not solicitud:
         raise ValueError("La solicitud no existe.")
     if solicitud["estado"] != "Pendiente":
@@ -927,7 +927,7 @@ def _corregir_entrada(
     db: Database, actor: Dict, solicitud: Dict, instante: datetime
 ) -> None:
     """Crea o ajusta la entrada de la fecha reclamada según la hora propuesta."""
-    marcajes = db.get_entries_by_date(solicitud["usuario_id"], instante.date())
+    marcajes = db.marcajes_del_dia(solicitud["usuario_id"], instante.date())
     # La corrección se evalúa con la misma regla que la marcación en vivo: si
     # aplicara su propia gracia, corregir una marca a la hora exacta a la que
     # se fichó podría convertir un día normal en una llegada tardía.
@@ -972,7 +972,7 @@ def _corregir_salida(
     """Cierra el marcaje abierto de la fecha reclamada con la hora propuesta."""
     abiertos = [
         m
-        for m in db.get_entries_by_date(solicitud["usuario_id"], instante.date())
+        for m in db.marcajes_del_dia(solicitud["usuario_id"], instante.date())
         if m["hora_salida"] is None
     ]
     if not abiertos:
@@ -1037,7 +1037,7 @@ def crear_turno(
     nombre = (nombre or "").strip()
     if len(nombre) < 3:
         raise ValueError("El turno necesita un nombre de al menos 3 caracteres.")
-    if db.get_turno_por_nombre(nombre):
+    if db.turno_por_nombre(nombre):
         raise ValueError(f"Ya existe un turno llamado '{nombre}'.")
     definidos = turnos.construir_tramos(_tramos_de_entrada(tramos))
     mascara = turnos.normalizar_mascara(dias)
@@ -1063,7 +1063,7 @@ def crear_turno(
             "tramos": [t.etiqueta() for t in definidos],
         },
     )
-    return _turno_como_dict(db.get_turno(turno_id))
+    return _turno_como_dict(db.obtener_turno(turno_id))
 
 
 # --------------------------------------------- Dispositivos de marcación
@@ -1189,13 +1189,13 @@ def actualizar_turno(
     ese período, y queda anotado en la auditoría con quién y cuándo lo hizo.
     """
     desde = _como_fecha(vigente_desde, "vigente_desde") if vigente_desde else None
-    actual = db.get_turno(turno_id, desde)
+    actual = db.obtener_turno(turno_id, desde)
     if not actual:
         raise ValueError("El turno no existe.")
     anterior = _turno_como_dict(actual)
     if nombre is not None:
         nombre = nombre.strip()
-        existente = db.get_turno_por_nombre(nombre)
+        existente = db.turno_por_nombre(nombre)
         if existente and existente["id"] != turno_id:
             raise ValueError(f"Ya existe un turno llamado '{nombre}'.")
     definidos = (
@@ -1221,7 +1221,7 @@ def actualizar_turno(
         vigente_desde=desde,
         creado_por=actor["id"],
     )
-    actualizado = _turno_como_dict(db.get_turno(turno_id, desde))
+    actualizado = _turno_como_dict(db.obtener_turno(turno_id, desde))
     db.registrar_auditoria(
         actor["id"],
         "ACTUALIZAR",
@@ -1243,7 +1243,7 @@ def historial_turno(
     a nadie que se acuerde, que es la pregunta que aparece cuando un empleado
     reclama una tardanza de hace dos meses.
     """
-    turno = db.get_turno(turno_id)
+    turno = db.obtener_turno(turno_id)
     if not turno:
         raise ValueError("El turno no existe.")
     versiones = []
@@ -1275,7 +1275,7 @@ def retirar_turno(db: Database, actor: Dict, turno_id: int) -> str:
     en silencio a ser otro y sus tardanzas se medirían contra una hora que
     nadie les comunicó.
     """
-    turno = db.get_turno(turno_id)
+    turno = db.obtener_turno(turno_id)
     if not turno:
         raise ValueError("El turno no existe.")
     if turno["predeterminado"]:
@@ -1312,7 +1312,7 @@ def designar_turno_predeterminado(
     db: Database, actor: Dict, turno_id: int
 ) -> Dict[str, Any]:
     """Elige el turno que rige para quien no tiene ninguno asignado."""
-    turno = db.get_turno(turno_id)
+    turno = db.obtener_turno(turno_id)
     if not turno:
         raise ValueError("El turno no existe.")
     if not turno["activo"]:
@@ -1325,7 +1325,7 @@ def designar_turno_predeterminado(
         turno_id,
         nuevos={"predeterminado": True, "nombre": turno["nombre"]},
     )
-    return _turno_como_dict(db.get_turno(turno_id))
+    return _turno_como_dict(db.obtener_turno(turno_id))
 
 
 @autorizado(ROLE_ADMIN, ROLE_RRHH)
@@ -1333,11 +1333,11 @@ def asignar_turno_base(
     db: Database, actor: Dict, usuario_id: int, turno_id: Optional[int]
 ) -> Dict[str, Any]:
     """Fija el turno de contrato de un legajo."""
-    empleado = db.get_user_by_id(usuario_id)
+    empleado = db.usuario_por_id(usuario_id)
     if not empleado:
         raise ValueError("El empleado no existe.")
     if turno_id is not None:
-        turno = db.get_turno(turno_id)
+        turno = db.obtener_turno(turno_id)
         if not turno:
             raise ValueError("El turno no existe.")
         if not turno["activo"]:
@@ -1369,10 +1369,10 @@ def rotar_turno(
     Al vencer la asignación el empleado vuelve solo a su turno de contrato,
     sin que nadie tenga que acordarse de deshacer el cambio.
     """
-    empleado = db.get_user_by_id(usuario_id)
+    empleado = db.usuario_por_id(usuario_id)
     if not empleado:
         raise ValueError("El empleado no existe.")
-    turno = db.get_turno(turno_id)
+    turno = db.obtener_turno(turno_id)
     if not turno:
         raise ValueError("El turno no existe.")
     if not turno["activo"]:
@@ -1434,7 +1434,7 @@ def turno_de_empleado(
     proyectado = vigente.como_dict()
     proyectado["fecha"] = dia.isoformat()
     proyectado["trabaja_hoy"] = vigente.trabaja(dia)
-    ciclo = db.get_ciclo_de(usuario_id)
+    ciclo = db.ciclo_de(usuario_id)
     proyectado["ciclo"] = (
         {
             "nombre": ciclo["nombre"],
@@ -1553,7 +1553,7 @@ def crear_ciclo(
     if len(set(ids)) != len(ids):
         raise ValueError("Un turno no puede aparecer dos veces en el mismo ciclo.")
     for turno_id in ids:
-        turno = db.get_turno(turno_id)
+        turno = db.obtener_turno(turno_id)
         if not turno:
             raise ValueError("Uno de los turnos del ciclo no existe.")
         if not turno["activo"]:
@@ -1582,13 +1582,13 @@ def crear_ciclo(
             "ancla": inicio.isoformat(),
         },
     )
-    return _ciclo_como_dict(db.get_ciclo(ciclo_id))
+    return _ciclo_como_dict(db.obtener_ciclo(ciclo_id))
 
 
 @autorizado(ROLE_ADMIN, ROLE_RRHH)
 def eliminar_ciclo(db: Database, actor: Dict, ciclo_id: int) -> bool:
     """Elimina un ciclo que no tenga gente adentro."""
-    ciclo = db.get_ciclo(ciclo_id)
+    ciclo = db.obtener_ciclo(ciclo_id)
     if not ciclo:
         raise ValueError("El ciclo no existe.")
     dotacion = db.contar_personal_en_ciclo(ciclo_id)
@@ -1619,11 +1619,11 @@ def asignar_ciclo(
     en turnos distintos: sin ella, todo el equipo rotaría en bloque y no
     quedaría nadie cubriendo el otro turno.
     """
-    empleado = db.get_user_by_id(usuario_id)
+    empleado = db.usuario_por_id(usuario_id)
     if not empleado:
         raise ValueError("El empleado no existe.")
     if ciclo_id is not None:
-        ciclo = db.get_ciclo(ciclo_id)
+        ciclo = db.obtener_ciclo(ciclo_id)
         if not ciclo:
             raise ValueError("El ciclo no existe.")
         if not 0 <= int(posicion) < len(ciclo["turnos"]):
@@ -1652,7 +1652,7 @@ def calendario_de_rotacion(
     ajeno = actor["id"] != usuario_id
     if ajeno and actor.get("role_name") not in ROLES_GESTION_USUARIOS:
         raise PermissionError("No tiene permiso para consultar turnos ajenos.")
-    ciclo = db.get_ciclo_de(usuario_id)
+    ciclo = db.ciclo_de(usuario_id)
     if not ciclo:
         return []
     paso = int(ciclo["dias_por_tramo"])

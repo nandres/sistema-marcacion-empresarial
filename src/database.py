@@ -460,21 +460,21 @@ class Database:
         que va a ver. Todo lo demás lee ese valor.
         """
         if isinstance(referencia, int):
-            empresa = self.get_empresa(referencia)
+            empresa = self.obtener_empresa(referencia)
         else:
-            empresa = self.get_empresa_por_slug(str(referencia))
+            empresa = self.empresa_por_slug(str(referencia))
         if not empresa:
             raise SinEmpresa(f"No existe la empresa '{referencia}'.")
         self.empresa_id = empresa["id"]
         return empresa
 
-    def get_empresa(self, empresa_id: int) -> Optional[Dict[str, Any]]:
+    def obtener_empresa(self, empresa_id: int) -> Optional[Dict[str, Any]]:
         """Devuelve una empresa por identificador."""
         return self._execute(
             "SELECT * FROM empresas WHERE id = %s", (empresa_id,), fetch="one"
         )
 
-    def get_empresa_por_slug(self, slug: str) -> Optional[Dict[str, Any]]:
+    def empresa_por_slug(self, slug: str) -> Optional[Dict[str, Any]]:
         """Devuelve una empresa por su nombre corto."""
         return self._execute(
             "SELECT * FROM empresas WHERE slug = %s", (slug.strip().lower(),),
@@ -717,7 +717,7 @@ class Database:
         )
         self.connection.commit()
 
-    def create_user(
+    def crear_usuario(
         self,
         username: str,
         password_hash: str,
@@ -748,7 +748,7 @@ class Database:
         self.connection.commit()
         return cursor.fetchone()["id"]
 
-    def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+    def usuario_por_cedula(self, username: str) -> Optional[Dict[str, Any]]:
         """Busca un usuario por nombre de acceso, incluyendo su rol."""
         return self._execute(
             """
@@ -760,7 +760,7 @@ class Database:
             fetch="one",
         )
 
-    def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+    def usuario_por_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Busca un usuario por identificador, incluyendo su rol."""
         return self._execute(
             """
@@ -772,7 +772,7 @@ class Database:
             fetch="one",
         )
 
-    def list_users(self, incluir_bajas: bool = False) -> List[Dict[str, Any]]:
+    def listar_usuarios(self, incluir_bajas: bool = False) -> List[Dict[str, Any]]:
         """Lista el personal con su rol, salario, vínculo y fecha de ingreso.
 
         Por defecto devuelve solo la plantilla activa: una baja conserva sus
@@ -810,7 +810,7 @@ class Database:
         self.connection.commit()
         return cursor.rowcount > 0
 
-    def update_user(
+    def actualizar_usuario(
         self,
         user_id: int,
         full_name: Optional[str] = None,
@@ -864,7 +864,7 @@ class Database:
         self.connection.commit()
         return True
 
-    def delete_user(self, user_id: int) -> None:
+    def eliminar_usuario(self, user_id: int) -> None:
         """Elimina un usuario; sus marcajes se borran en cascada."""
         self._execute(
             "DELETE FROM users WHERE empresa_id = %s AND id = %s",
@@ -881,13 +881,13 @@ class Database:
         )
         self.connection.commit()
 
-    def get_role_by_name(self, nombre: str) -> Optional[Dict[str, Any]]:
+    def rol_por_nombre(self, nombre: str) -> Optional[Dict[str, Any]]:
         """Busca un rol por su nombre canónico."""
         return self._execute(
             "SELECT * FROM roles WHERE nombre = %s", (nombre,), fetch="one"
         )
 
-    def list_roles(self) -> List[Dict[str, Any]]:
+    def listar_roles(self) -> List[Dict[str, Any]]:
         """Lista todos los roles registrados."""
         return self._execute("SELECT * FROM roles ORDER BY id", fetch="all")
 
@@ -988,7 +988,7 @@ class Database:
             fetch="all",
         ) or []
 
-    def get_turno(self, turno_id: int, dia: Any = None) -> Optional[Dict[str, Any]]:
+    def obtener_turno(self, turno_id: int, dia: Any = None) -> Optional[Dict[str, Any]]:
         """Turno con la definición que regía en ``dia`` (hoy por omisión).
 
         El nombre y la sucursal salen de ``turnos`` porque son identidad y no
@@ -1035,7 +1035,7 @@ class Database:
             version["tramos"] = self._tramos_de_version(version["id"])
         return [dict(v) for v in versiones]
 
-    def get_turno_por_nombre(self, nombre: str) -> Optional[Dict[str, Any]]:
+    def turno_por_nombre(self, nombre: str) -> Optional[Dict[str, Any]]:
         """Busca un turno por su nombre, que es único."""
         fila = self._execute(
             "SELECT id FROM turnos "
@@ -1043,7 +1043,7 @@ class Database:
             (self.empresa, nombre),
             fetch="one",
         )
-        return self.get_turno(fila["id"]) if fila else None
+        return self.obtener_turno(fila["id"]) if fila else None
 
     def crear_turno(
         self,
@@ -1190,7 +1190,7 @@ class Database:
                 tuple(params + [self.empresa, turno_id]),
             )
 
-        base = self.get_turno(turno_id, vigente_desde)
+        base = self.obtener_turno(turno_id, vigente_desde)
         if base is None:
             if identidad:
                 self.connection.commit()
@@ -1508,7 +1508,7 @@ class Database:
             return None
         # Con la fecha, no sin ella: acá es donde una corrección de marzo
         # dejaba de medirse contra el horario de marzo.
-        turno = self.get_turno(fila["turno_id"], dia)
+        turno = self.obtener_turno(fila["turno_id"], dia)
         if turno:
             turno["origen"] = fila["origen"]
         return turno
@@ -1604,7 +1604,7 @@ class Database:
             ciclo["turnos"] = por_ciclo.get(ciclo["id"], [])
         return ciclos
 
-    def get_ciclo(self, ciclo_id: int) -> Optional[Dict[str, Any]]:
+    def obtener_ciclo(self, ciclo_id: int) -> Optional[Dict[str, Any]]:
         """Devuelve un ciclo con sus turnos ordenados, o ``None``."""
         ciclo = self._execute(
             "SELECT * FROM ciclos_rotacion WHERE empresa_id = %s AND id = %s",
@@ -1693,7 +1693,7 @@ class Database:
         self.connection.commit()
         return cursor.rowcount > 0
 
-    def get_ciclo_de(self, user_id: int) -> Optional[Dict[str, Any]]:
+    def ciclo_de(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Ciclo del empleado con su posición, o ``None`` si no rota."""
         fila = self._execute(
             "SELECT ciclo_id, ciclo_posicion FROM users "
@@ -1703,7 +1703,7 @@ class Database:
         )
         if not fila or fila["ciclo_id"] is None:
             return None
-        ciclo = self.get_ciclo(fila["ciclo_id"])
+        ciclo = self.obtener_ciclo(fila["ciclo_id"])
         if ciclo:
             ciclo["posicion"] = int(fila["ciclo_posicion"] or 0)
         return ciclo
@@ -1727,7 +1727,7 @@ class Database:
             fetch="all",
         )
 
-    def open_clock_in(
+    def abrir_marcaje(
         self,
         user_id: int,
         hora_entrada: datetime,
@@ -1800,7 +1800,7 @@ class Database:
         )
         return int(fila["total"])
 
-    def close_clock_out(
+    def cerrar_marcaje(
         self,
         entry_id: int,
         hora_salida: datetime,
@@ -1845,7 +1845,7 @@ class Database:
         )
         self.connection.commit()
 
-    def get_open_entry(
+    def marcaje_abierto(
         self, user_id: int, antes_de: Optional[datetime] = None
     ) -> Optional[Dict[str, Any]]:
         """Retorna el marcaje abierto más reciente del usuario, si existe.
@@ -1925,7 +1925,7 @@ class Database:
             fetch="all",
         )
 
-    def get_entries_by_date(self, user_id: int, date) -> List[Dict[str, Any]]:
+    def marcajes_del_dia(self, user_id: int, date) -> List[Dict[str, Any]]:
         """Lista los marcajes de un usuario para una fecha concreta."""
         return self._execute(
             """
@@ -1937,7 +1937,7 @@ class Database:
             fetch="all",
         )
 
-    def get_all_entries(self, user_id: int) -> List[Dict[str, Any]]:
+    def listar_marcajes(self, user_id: int) -> List[Dict[str, Any]]:
         """Lista todos los marcajes de un usuario, del más reciente al más antiguo."""
         return self._execute(
             """
@@ -1949,7 +1949,7 @@ class Database:
             fetch="all",
         )
 
-    def get_marcajes_month(self, anio: int, mes: int) -> List[Dict[str, Any]]:
+    def marcajes_del_mes(self, anio: int, mes: int) -> List[Dict[str, Any]]:
         """Lista los marcajes de todos los empleados dentro de un mes calendario."""
         inicio = datetime(anio, mes, 1)
         fin = datetime(anio + 1, 1, 1) if mes == 12 else datetime(anio, mes + 1, 1)
@@ -2001,7 +2001,7 @@ class Database:
         self.connection.commit()
         return cursor.fetchone()["id"]
 
-    def get_justificacion_por_fecha(
+    def justificacion_por_fecha(
         self, usuario_id: int, fecha: Any
     ) -> Optional[Dict[str, Any]]:
         """Retorna la justificación aprobada que cubre una fecha, si existe."""
@@ -2018,7 +2018,7 @@ class Database:
             fetch="one",
         )
 
-    def list_justificaciones(
+    def listar_justificaciones(
         self, usuario_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """Lista las justificaciones con datos del empleado y del aprobador.
@@ -2042,7 +2042,7 @@ class Database:
             fetch="all",
         )
 
-    def get_justificacion(self, justificacion_id: int) -> Optional[Dict[str, Any]]:
+    def obtener_justificacion(self, justificacion_id: int) -> Optional[Dict[str, Any]]:
         """Recupera una justificación puntual sin recorrer toda la tabla."""
         return self._execute(
             """
@@ -2107,21 +2107,6 @@ class Database:
             fetch="all",
         )
 
-    def list_solicitudes_correccion(self) -> List[Dict[str, Any]]:
-        """Lista las solicitudes de corrección con datos del solicitante."""
-        return self._execute(
-            """
-            SELECT s.*, u.username, u.full_name, r.username AS revisor
-            FROM solicitudes_correccion s
-            JOIN users u ON u.id = s.usuario_id
-            LEFT JOIN users r ON r.id = s.revisado_por
-            WHERE s.empresa_id = %s
-            ORDER BY s.id DESC
-            """,
-            (self.empresa,),
-            fetch="all",
-        )
-
     def contar_marcas_sin_verificar(self, dias: int = 7) -> int:
         """Marcas recientes que el control biométrico no pudo verificar.
 
@@ -2141,7 +2126,7 @@ class Database:
         )
         return int(fila["total"])
 
-    def count_marcajes_hoy(self) -> int:
+    def contar_marcajes_hoy(self) -> int:
         """Cantidad de marcajes con entrada registrada en la fecha actual."""
         fila = self._execute(
             "SELECT COUNT(*) AS total FROM marcajes "
@@ -2151,7 +2136,7 @@ class Database:
         )
         return int(fila["total"]) if fila else 0
 
-    def get_alerta(self, alerta_id: int) -> Optional[Dict[str, Any]]:
+    def obtener_alerta(self, alerta_id: int) -> Optional[Dict[str, Any]]:
         """Recupera una alerta puntual, para repetirla entre procesos."""
         return self._execute(
             "SELECT * FROM alertas WHERE empresa_id = %s AND id = %s",
@@ -2196,7 +2181,7 @@ class Database:
         )
         self.connection.commit()
 
-    def get_foto(self, user_id: int) -> Optional[bytes]:
+    def obtener_foto(self, user_id: int) -> Optional[bytes]:
         """Retorna los bytes JPEG de la foto del usuario, si existe."""
         fila = self._execute(
             "SELECT imagen FROM fotos WHERE empresa_id = %s AND user_id = %s",
@@ -2216,7 +2201,7 @@ class Database:
         )
         return fila is not None
 
-    def list_fotos(self, descifrar: bool = True) -> List[Dict[str, Any]]:
+    def listar_fotos(self, descifrar: bool = True) -> List[Dict[str, Any]]:
         """Lista las plantillas faciales para entrenar el modelo.
 
         ``descifrar=False`` devuelve el contenido tal como está guardado, que
@@ -2247,7 +2232,7 @@ class Database:
         )
         self.connection.commit()
 
-    def get_horas_extra_year(self, anio: int) -> List[Dict[str, Any]]:
+    def horas_extra_del_anio(self, anio: int) -> List[Dict[str, Any]]:
         """Acumula por empleado las horas con recargo del año (suma de INTERVAL).
 
         Incluye las horas ordinarias nocturnas, que llevan el recargo del
@@ -2269,7 +2254,7 @@ class Database:
             fetch="all",
         )
 
-    def get_marcajes_rango(self, user_id: int, desde: Any, hasta: Any) -> List[Dict[str, Any]]:
+    def marcajes_en_rango(self, user_id: int, desde: Any, hasta: Any) -> List[Dict[str, Any]]:
         """Lista los marcajes de un empleado dentro de un rango de fechas."""
         inicio = datetime.combine(desde, time.min)
         fin = datetime.combine(hasta, time.max)
@@ -2307,7 +2292,7 @@ class Database:
         self.connection.commit()
         return cursor.fetchone()["id"]
 
-    def get_solicitud_correccion(self, solicitud_id: int) -> Optional[Dict[str, Any]]:
+    def obtener_solicitud_correccion(self, solicitud_id: int) -> Optional[Dict[str, Any]]:
         """Retorna una solicitud de corrección con datos del solicitante."""
         return self._execute(
             """
@@ -2322,7 +2307,13 @@ class Database:
         )
 
     def listar_solicitudes_correccion(self) -> List[Dict[str, Any]]:
-        """Lista los reclamos ordenados por antigüedad y estado."""
+        """Lista los reclamos con los pendientes primero, y los viejos antes.
+
+        Había dos versiones de esta consulta —la misma sobre la misma tabla,
+        con distinto ``ORDER BY``— y cada panel usaba una: el de escritorio
+        veía los pendientes arriba y el web los veía por id. La misma lista,
+        en dos órdenes, según por dónde se entrara.
+        """
         return self._execute(
             """
             SELECT s.*, u.username, u.full_name, r.username AS revisor
@@ -2386,7 +2377,7 @@ class Database:
         self.connection.commit()
         return cursor.fetchone()
 
-    def get_condicion_dia(self, fecha: Any) -> Optional[Dict[str, Any]]:
+    def condicion_del_dia(self, fecha: Any) -> Optional[Dict[str, Any]]:
         """Condición declarada para una fecha, o ``None`` si el día es normal."""
         return self._execute(
             "SELECT * FROM condiciones_dia WHERE empresa_id = %s AND fecha = %s",
@@ -2446,7 +2437,7 @@ class Database:
         self.connection.commit()
         return cursor.fetchone()["id"]
 
-    def get_solicitud_permiso(self, solicitud_id: int) -> Optional[Dict[str, Any]]:
+    def obtener_solicitud_permiso(self, solicitud_id: int) -> Optional[Dict[str, Any]]:
         """Devuelve una solicitud con los datos del solicitante y del revisor."""
         return self._execute(
             """
@@ -2548,7 +2539,7 @@ class Database:
         )
         self.connection.commit()
 
-    def get_metricas_tardanzas(
+    def metricas_tardanzas(
         self, desde: datetime.date, hasta: datetime.date
     ) -> List[Dict[str, Any]]:
         """Cantidad de llegadas tardías por día dentro de un rango."""
@@ -2572,7 +2563,7 @@ class Database:
         )
         return [dict(fila) for fila in cursor]
 
-    def get_horas_extra_por_departamento(self) -> List[Dict[str, Any]]:
+    def horas_extra_por_departamento(self) -> List[Dict[str, Any]]:
         """Horas extra al 50% y 100% acumuladas por departamento."""
         cursor = self._execute(
             """
@@ -2591,7 +2582,7 @@ class Database:
         )
         return [dict(fila) for fila in cursor]
 
-    def get_proyeccion_aguinaldos(self) -> List[Dict[str, Any]]:
+    def proyeccion_aguinaldos(self) -> List[Dict[str, Any]]:
         """Salarios y departamento de cada empleado para proyectar aguinaldos."""
         cursor = self._execute(
             """

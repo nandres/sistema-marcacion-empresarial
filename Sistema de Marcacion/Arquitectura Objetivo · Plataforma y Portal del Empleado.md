@@ -9,7 +9,7 @@
 
 El sistema funciona, pero tres decisiones tempranas limitan todo lo que venga después.
 
-**El dominio no existe como capa.** Las reglas laborales viven mezcladas con acceso a datos: `clock_engine.calcular_horas_paraguay` es una función pura y comprobable, pero `evaluar_asistencia` recibe un `Database` y consulta la base para decidir una regla de negocio. Eso hace que la regla no se pueda probar sin PostgreSQL, y que el mismo cálculo se reimplemente en tres lugares (`ClockEngine.clock_out`, `sync_worker._sincronizar_salida`, `auth._corregir_salida`) con resultados que ya divergen entre sí.
+**El dominio no existe como capa.** Las reglas laborales viven mezcladas con acceso a datos: `clock_engine.calcular_horas_paraguay` es una función pura y comprobable, pero `evaluar_asistencia` recibe un `Database` y consulta la base para decidir una regla de negocio. Eso hace que la regla no se pueda probar sin PostgreSQL, y que el mismo cálculo se reimplemente en tres lugares (`MotorDeJornada.marcar_salida`, `sync_worker._sincronizar_salida`, `auth._corregir_salida`) con resultados que ya divergen entre sí.
 
 **La presentación está incrustada en el servidor.** `web_server.py` son 1.490 líneas, de las cuales ~800 son un `f-string` de HTML con llaves duplicadas (`{{`) para escapar el formateo. Cada cambio de interfaz toca el archivo que también define los endpoints y las reglas de autorización. `gui.py` suma otras 2.575 líneas con la misma mezcla. No hay forma de que un diseñador toque la interfaz sin riesgo de romper la API.
 

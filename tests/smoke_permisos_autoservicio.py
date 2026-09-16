@@ -25,15 +25,15 @@ from database import Database
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 
 USUARIO = "permiso_autoservicio"
-previo = db.get_user_by_username(USUARIO)
+previo = db.usuario_por_cedula(USUARIO)
 if previo:
-    auth.delete_user(db, admin, previo["id"])
-auth.create_user(db, admin, USUARIO, "clave123", "Ana Solicitante", "Empleado",
+    auth.eliminar_usuario(db, admin, previo["id"])
+auth.crear_usuario(db, admin, USUARIO, "clave123", "Ana Solicitante", "Empleado",
                  3000000, "Funcionario")
-empleado = db.get_user_by_username(USUARIO)
+empleado = db.usuario_por_cedula(USUARIO)
 
 fallos = 0
 
@@ -124,7 +124,7 @@ verificar("la aprobación emite la justificación",
           f"justificación #{resultado['justificacion_id']}")
 
 justificacion = next(
-    (j for j in db.list_justificaciones() if j["id"] == resultado["justificacion_id"]),
+    (j for j in db.listar_justificaciones() if j["id"] == resultado["justificacion_id"]),
     None,
 )
 verificar("la justificación queda a nombre del empleado",
@@ -159,7 +159,7 @@ art = saldo("Salidas Personales")
 verificar("un pedido rechazado no consume cuota",
           art["usados"] == 0 and art["pendientes"] == 0,
           f"usados {art['usados']} · pendientes {art['pendientes']}")
-rechazado = db.get_solicitud_permiso(otro["id"])
+rechazado = db.obtener_solicitud_permiso(otro["id"])
 verificar("el motivo del rechazo queda con el pedido",
           rechazado["observacion"] == "Ese día hay cierre de mes.")
 
@@ -174,7 +174,7 @@ try:
 except PermissionError as error:
     verificar("un Empleado no puede aprobar su propio pedido", True, str(error))
 
-auth.delete_user(db, admin, empleado["id"])
+auth.eliminar_usuario(db, admin, empleado["id"])
 db.cerrar()
 
 print()

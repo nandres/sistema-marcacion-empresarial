@@ -19,14 +19,14 @@ from typing import Callable, List, Optional, Tuple
 
 import auth
 import reports
-from clock_engine import ClockEngine
+from clock_engine import MotorDeJornada
 from database import Database, SinEmpresa
 
 
 def menu_listar_usuarios(db: Database) -> None:
     """Muestra el listado de usuarios con su rol."""
     print("\n=== Usuarios registrados ===")
-    for user in db.list_users():
+    for user in db.listar_usuarios():
         print(
             f"  #{user['id']} {user['username']} | {user['full_name']} | "
             f"{user['role_name']}"
@@ -39,13 +39,13 @@ def menu_crear_usuario(db: Database, actor: dict) -> None:
     username = input("Nombre de usuario: ").strip()
     full_name = input("Nombre completo: ").strip()
     print("Roles disponibles:")
-    for role in db.list_roles():
+    for role in db.listar_roles():
         print(f"  - {role['nombre']}")
     role_name = input("Rol: ").strip()
     password = input("Contraseña: ")
     salario = _prompt_salario()
     try:
-        user_id = auth.create_user(
+        user_id = auth.crear_usuario(
             db, actor, username, password, full_name, role_name, salario
         )
     except (ValueError, PermissionError) as error:
@@ -64,7 +64,7 @@ def menu_editar_usuario(db: Database, actor: dict) -> None:
     """Asiste la edición de un usuario desde consola."""
     print("\n=== Editar usuario ===")
     user_id = input("ID del usuario a editar: ").strip()
-    target = db.get_user_by_id(int(user_id))
+    target = db.usuario_por_id(int(user_id))
     if not target:
         print("Usuario no encontrado.")
         return
@@ -75,11 +75,11 @@ def menu_editar_usuario(db: Database, actor: dict) -> None:
     salario_input = input(f"Nuevo salario mensual (Gs.) [{salario_actual}]: ").strip()
     salario = float(salario_input) if salario_input else None
     print("Roles disponibles:")
-    for role in db.list_roles():
+    for role in db.listar_roles():
         print(f"  - {role['nombre']}")
     role_input = input(f"Nuevo rol [{target['role_name']}]: ").strip() or None
     try:
-        auth.update_user(
+        auth.actualizar_usuario(
             db,
             actor,
             int(user_id),
@@ -99,7 +99,7 @@ def menu_eliminar_usuario(db: Database, actor: dict) -> None:
     print("\n=== Eliminar usuario ===")
     user_id = input("ID del usuario a eliminar: ").strip()
     try:
-        auth.delete_user(db, actor, int(user_id))
+        auth.eliminar_usuario(db, actor, int(user_id))
     except (ValueError, PermissionError) as error:
         print(error)
         return
@@ -126,7 +126,7 @@ def menu_crear_justificacion(db: Database, actor: dict) -> None:
 
     print("\n=== Crear justificación ===")
     username = input("Empleado (nombre de usuario): ").strip()
-    empleado = db.get_user_by_username(username)
+    empleado = db.usuario_por_cedula(username)
     if not empleado:
         print("Empleado no encontrado.")
         return
@@ -216,7 +216,7 @@ def alta_de_empresa(db: Database) -> None:
     if not slug or not razon:
         print("El nombre corto y la razón social son obligatorios.")
         return
-    if db.get_empresa_por_slug(slug):
+    if db.empresa_por_slug(slug):
         print(f"Ya hay una empresa con el nombre corto '{slug}'.")
         return
     empresa = db.crear_empresa(slug, razon, ruc)
@@ -248,20 +248,20 @@ class OpcionMenu:
     """Una entrada del menú: qué dice, quién la ve y qué hace."""
 
     etiqueta: str
-    accion: Callable[[Database, dict, ClockEngine], None]
+    accion: Callable[[Database, dict, MotorDeJornada], None]
     roles: Optional[Tuple[str, ...]] = None
 
     def visible_para(self, rol: str) -> bool:
         return self.roles is None or rol in self.roles
 
 
-def _marcar(tipo: str) -> Callable[[Database, dict, ClockEngine], None]:
+def _marcar(tipo: str) -> Callable[[Database, dict, MotorDeJornada], None]:
     """Arma la acción de marcar entrada o salida, que solo difieren en eso."""
-    def accion(db: Database, usuario: dict, motor: ClockEngine) -> None:
+    def accion(db: Database, usuario: dict, motor: MotorDeJornada) -> None:
         try:
-            auth.can_register_marks(db, usuario)
-            marcaje_id, momento = (motor.clock_in() if tipo == "ENTRADA"
-                                   else motor.clock_out())
+            auth.puede_marcar(db, usuario)
+            marcaje_id, momento = (motor.marcar_entrada() if tipo == "ENTRADA"
+                                   else motor.marcar_salida())
             print(f"{tipo.capitalize()} registrada correctamente.")
             print(reports.comprobante_marcacion(marcaje_id, momento, tipo))
         except (ValueError, PermissionError) as error:
@@ -269,16 +269,16 @@ def _marcar(tipo: str) -> Callable[[Database, dict, ClockEngine], None]:
     return accion
 
 
-def _mostrar_total(db: Database, usuario: dict, motor: ClockEngine) -> None:
-    total = motor.total_worked_seconds()
-    print(f"Total acumulado: {motor.format_duration(total)}")
+def _mostrar_total(db: Database, usuario: dict, motor: MotorDeJornada) -> None:
+    total = motor.segundos_trabajados()
+    print(f"Total acumulado: {motor.formatear_duracion(total)}")
 
 
 OPCIONES: Tuple[OpcionMenu, ...] = (
     OpcionMenu("Marcar entrada", _marcar("ENTRADA")),
     OpcionMenu("Marcar salida", _marcar("SALIDA")),
     OpcionMenu("Registros de hoy",
-               lambda db, usuario, motor: print(motor.report_today())),
+               lambda db, usuario, motor: print(motor.resumen_de_hoy())),
     OpcionMenu("Total de horas trabajadas", _mostrar_total),
     OpcionMenu("Listar usuarios",
                lambda db, usuario, motor: menu_listar_usuarios(db),
@@ -333,17 +333,17 @@ def main() -> None:
         alta_de_empresa(db)
         return
     elegir_empresa(db)
-    if not db.list_users(incluir_bajas=True):
+    if not db.listar_usuarios(incluir_bajas=True):
         pedir_primer_admin(db)
 
     user: Optional[dict] = None
     while user is None:
-        user = auth.prompt_login(db)
+        user = auth.pedir_credenciales(db)
         if user is None:
             print("Credenciales incorrectas.")
 
-    rol = auth.get_role_name(db, user)
-    motor = ClockEngine(db, user)
+    rol = auth.nombre_de_rol(db, user)
+    motor = MotorDeJornada(db, user)
     print(f"\nBienvenido, {user['full_name']} ({rol}).")
     menu = _menu_de(rol)
 

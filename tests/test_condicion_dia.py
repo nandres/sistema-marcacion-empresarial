@@ -25,15 +25,15 @@ from database import Database
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 
 USUARIO = "p1_1_clima"
-previo = db.get_user_by_username(USUARIO)
+previo = db.usuario_por_cedula(USUARIO)
 if previo:
-    auth.delete_user(db, admin, previo["id"])
-auth.create_user(db, admin, USUARIO, "clave123", "Clima Prueba",
+    auth.eliminar_usuario(db, admin, previo["id"])
+auth.crear_usuario(db, admin, USUARIO, "clave123", "Clima Prueba",
                  "Empleado", 2500000, "Funcionario")
-empleado = db.get_user_by_username(USUARIO)
+empleado = db.usuario_por_cedula(USUARIO)
 
 fallos = 0
 
@@ -77,7 +77,7 @@ verificar("la tolerancia efectiva es 15 + 30",
           str(evaluacion["tolerancia_efectiva_min"]))
 
 # 3) La declaración queda firmada y es auditable.
-declarada = db.get_condicion_dia(dia)
+declarada = db.condicion_del_dia(dia)
 verificar("queda registrado quién la firmó",
           declarada["declarado_por"] == admin["id"])
 
@@ -106,7 +106,7 @@ firma_evaluar = inspect.signature(clock_engine.evaluar_asistencia).parameters
 verificar("evaluar_asistencia ya no acepta es_dia_lluvioso",
           "es_dia_lluvioso" not in firma_evaluar, ", ".join(firma_evaluar))
 
-firma_marcar = inspect.signature(clock_engine.ClockEngine.registrar_asistencia).parameters
+firma_marcar = inspect.signature(clock_engine.MotorDeJornada.registrar_asistencia).parameters
 verificar("registrar_asistencia tampoco lo acepta",
           "es_dia_lluvioso" not in firma_marcar, ", ".join(firma_marcar))
 
@@ -127,7 +127,7 @@ verificar("el kiosco de escritorio tampoco la tiene",
           "dia_lluvioso" not in gui)
 
 db.borrar_condicion_dia(dia)
-auth.delete_user(db, admin, empleado["id"])
+auth.eliminar_usuario(db, admin, empleado["id"])
 db.cerrar()
 
 print()

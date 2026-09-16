@@ -290,11 +290,11 @@ def calcular_aguinaldo(db: Database, anio: int) -> List[Dict[str, Any]]:
     """
     inicio_anio = date(anio, 1, 1)
     fin_anio = date(anio, 12, 31)
-    extras = {r["user_id"]: r for r in db.get_horas_extra_year(anio)}
+    extras = {r["user_id"]: r for r in db.horas_extra_del_anio(anio)}
     resultados: List[Dict[str, Any]] = []
     # El aguinaldo del año alcanza también a quien se fue en julio: la
     # baja saca de la nómina, no del período ya devengado.
-    for usuario in db.list_users(incluir_bajas=True):
+    for usuario in db.listar_usuarios(incluir_bajas=True):
         salario = float(usuario["salario_mensual"] or 0)
         base = max(reglamento.fecha_ingreso(usuario), inicio_anio)
         if base > fin_anio:
@@ -351,7 +351,7 @@ def resumen_consulta(
         Diccionario con ``usuario``, ``nombre``, ``fecha``, ``marcas_dia``,
         ``extras_mes`` y ``aguinaldo`` (o ``None`` si aún no proyecta).
     """
-    marcas = db.get_entries_by_date(user["id"], fecha)
+    marcas = db.marcajes_del_dia(user["id"], fecha)
     marcas_dia = [
         {
             "id": m["id"],
@@ -367,7 +367,7 @@ def resumen_consulta(
         }
         for m in marcas
     ]
-    del_mes = [m for m in db.get_marcajes_month(fecha.year, fecha.month)
+    del_mes = [m for m in db.marcajes_del_mes(fecha.year, fecha.month)
                if m["user_id"] == user["id"]]
     extra_50 = sum(
         ((m["horas_extra_50"] or timedelta(0)) for m in del_mes), timedelta(0)
@@ -423,7 +423,7 @@ def resumen_historico(
         raise ValueError(
             f"La fecha 'hasta' no puede superar el día de hoy ({hoy.isoformat()})."
         )
-    marcajes = db.get_marcajes_rango(user["id"], desde, hasta)
+    marcajes = db.marcajes_en_rango(user["id"], desde, hasta)
     marcas = [
         {
             "id": m["id"],
@@ -491,7 +491,7 @@ def aguinaldo_periodo(
     while cursor <= hasta:
         meses += 1
         cursor = _sumar_mes(cursor)
-    extras = db.get_marcajes_rango(user["id"], desde, hasta)
+    extras = db.marcajes_en_rango(user["id"], desde, hasta)
     extra_50 = sum(
         ((m["horas_extra_50"] or timedelta(0)) for m in extras), timedelta(0)
     )
@@ -596,7 +596,7 @@ def exportar_asistencia_mensual(
     auth.require_role(db, actor, auth.ROLES_REPORTES)
     if formato not in ("xlsx", "csv"):
         raise ValueError("Formato no soportado. Use 'xlsx' o 'csv'.")
-    marcajes = db.get_marcajes_month(anio, mes)
+    marcajes = db.marcajes_del_mes(anio, mes)
     grupos = _agrupar(marcajes)
     if ruta is None:
         ruta = Path("reportes") / f"asistencia_{anio:04d}-{mes:02d}.{formato}"
@@ -620,7 +620,7 @@ def obtener_metricas_tardanzas(
     hoy = date.today()
     desde = desde or date(hoy.year, hoy.month, 1)
     hasta = hasta or hoy
-    filas = db.get_metricas_tardanzas(desde, hasta)
+    filas = db.metricas_tardanzas(desde, hasta)
     mapa = {fila["fecha"]: int(fila["cantidad"]) for fila in filas}
     dias: List[Dict[str, Any]] = []
     dia = desde
@@ -632,7 +632,7 @@ def obtener_metricas_tardanzas(
 
 def obtener_horas_extra_por_departamento(db: Database) -> List[Dict[str, Any]]:
     """Horas extra acumuladas al 50% y 100% agrupadas por departamento."""
-    filas = db.get_horas_extra_por_departamento()
+    filas = db.horas_extra_por_departamento()
     return [
         {
             "departamento": fila["departamento"],
@@ -653,7 +653,7 @@ def obtener_proyeccion_aguinaldos_totales(
     """
     if anio is None:
         anio = date.today().year
-    filas = db.get_proyeccion_aguinaldos()
+    filas = db.proyeccion_aguinaldos()
     meses_transcurridos = date.today().month
     por_departamento: Dict[str, Dict[str, float]] = {}
     for fila in filas:
@@ -877,7 +877,7 @@ def resumen_empleado(
     vinculo = user.get("tipo_vinculo") or "Funcionario"
     turno = clock_engine.turno_vigente(db, user["id"], hoy)
     antiguedad = reglamento.antiguedad_anios(user, hoy)
-    justificaciones = db.list_justificaciones(user["id"])
+    justificaciones = db.listar_justificaciones(user["id"])
     tipo_vacaciones = "Vacaciones" if vinculo == "Funcionario" else "Licencia de Pasante"
     # Los días consumidos los cuenta el catálogo y no este tablero. Tenía su
     # propia copia —días corridos, imputados al año de la fecha de inicio— y
@@ -903,7 +903,7 @@ def resumen_empleado(
         detalle[j["tipo_permiso"]] = detalle.get(j["tipo_permiso"], 0) + 1
     marcajes = [
         m
-        for m in db.get_marcajes_month(hoy.year, hoy.month)
+        for m in db.marcajes_del_mes(hoy.year, hoy.month)
         if m["user_id"] == user["id"]
     ]
     extra_50 = sum(
@@ -1048,7 +1048,7 @@ def planilla_horas_extra(
     """
     desde = date(anio, mes, 1)
     hasta = _sumar_mes(desde) - timedelta(days=1)
-    marcajes = db.get_marcajes_rango(user["id"], desde, hasta)
+    marcajes = db.marcajes_en_rango(user["id"], desde, hasta)
 
     filas: List[Dict[str, Any]] = []
     for marca in marcajes:
@@ -1272,7 +1272,7 @@ def generar_pdf_constancia(
     """
     if hasta < desde:
         raise ValueError("La fecha de fin no puede ser anterior al inicio.")
-    marcajes = db.get_marcajes_rango(user["id"], desde, hasta)
+    marcajes = db.marcajes_en_rango(user["id"], desde, hasta)
     cerrados = [m for m in marcajes if m["hora_salida"]]
     dias = len({m["hora_entrada"].astimezone().date() for m in marcajes})
     tardanzas = sum(1 for m in marcajes if m["es_tardanza"])
@@ -1287,7 +1287,7 @@ def generar_pdf_constancia(
     )
     justificaciones = [
         j
-        for j in db.list_justificaciones(user["id"])
+        for j in db.listar_justificaciones(user["id"])
         if j["fecha_inicio"] <= hasta and j["fecha_fin"] >= desde
     ]
 
@@ -1394,11 +1394,11 @@ def generar_pdf_permiso(db: Database, solicitud_id: int) -> str:
     Raises:
         ValueError: Si el permiso no existe o no puede componerse.
     """
-    justificacion = db.get_justificacion(solicitud_id)
+    justificacion = db.obtener_justificacion(solicitud_id)
     if not justificacion:
         raise ValueError(f"El permiso #{solicitud_id} no existe.")
-    empleado = db.get_user_by_id(justificacion["usuario_id"])
-    tutor = db.get_user_by_id(justificacion["aprobado_por"])
+    empleado = db.usuario_por_id(justificacion["usuario_id"])
+    tutor = db.usuario_por_id(justificacion["aprobado_por"])
     if not empleado or not tutor:
         raise ValueError("Datos del empleado o tutor incompletos.")
     hash_legal = hashlib.sha256(

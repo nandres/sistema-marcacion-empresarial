@@ -31,7 +31,7 @@ erDiagram
 | Auditoría | Cada alta se registra en `logs_auditoria` |
 
 ```python
-# ClockEngine
+# MotorDeJornada
 def horas_justificadas(self, fecha: date) -> timedelta:
     if not self.justificacion_para(fecha):      # aprobada y que cubra la fecha
         return timedelta(0)
@@ -42,7 +42,7 @@ def horas_justificadas(self, fecha: date) -> timedelta:
 def es_falta_no_justificada(self, fecha: date) -> bool:
     return (self.es_dia_laboral(fecha)
             and not self.justificacion_para(fecha)
-            and not self.db.get_entries_by_date(self.user["id"], fecha))
+            and not self.db.marcajes_del_dia(self.user["id"], fecha))
 ```
 
 ## 2. Comprobante de marcación (fidelidad legal)

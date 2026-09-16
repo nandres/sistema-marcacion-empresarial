@@ -24,12 +24,12 @@ import auth
 import clock_engine
 import reports
 import turnos
-from clock_engine import ClockEngine
+from clock_engine import MotorDeJornada
 from database import Database
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 
 fallos = 0
 
@@ -45,17 +45,17 @@ def verificar(descripcion: str, condicion: bool, detalle: str = "") -> None:
 
 
 def empleado_de_prueba(usuario: str, nombre: str, vinculo: str = "Funcionario"):
-    previo = db.get_user_by_username(usuario)
+    previo = db.usuario_por_cedula(usuario)
     if previo:
-        auth.delete_user(db, admin, previo["id"])
-    auth.create_user(db, admin, usuario, "clave123", nombre, "Empleado",
+        auth.eliminar_usuario(db, admin, previo["id"])
+    auth.crear_usuario(db, admin, usuario, "clave123", nombre, "Empleado",
                      2800000, vinculo)
-    return db.get_user_by_username(usuario)
+    return db.usuario_por_cedula(usuario)
 
 
 def turno_de_prueba(nombre: str, tramos, dias=turnos.MASCARA_LUNES_VIERNES,
                     tolerancia=None):
-    previo = db.get_turno_por_nombre(nombre)
+    previo = db.turno_por_nombre(nombre)
     if previo:
         db.eliminar_turno(previo["id"])
     return auth.crear_turno(db, admin, nombre, tramos, dias,
@@ -184,7 +184,7 @@ verificar("trabajar un sábado fuera de turno no genera tardanza",
           evaluacion["estado"] == "Normal" and evaluacion["fuera_de_turno"],
           evaluacion["detalle"])
 
-motor = ClockEngine(db, db.get_user_by_id(beto["id"]))
+motor = MotorDeJornada(db, db.usuario_por_id(beto["id"]))
 verificar("el sábado no es día laboral para ese turno",
           not motor.es_dia_laboral(sabado))
 verificar("pero el lunes sí", motor.es_dia_laboral(LUNES))
@@ -200,15 +200,15 @@ print("\n5) Horas previstas por el Art. 194")
 
 verificar("el turno diurno de 8 horas rinde 8 ordinarias",
           clock_engine.horas_previstas_legales(
-              turnos.desde_fila(db.get_turno(manana["id"])), LUNES
+              turnos.desde_fila(db.obtener_turno(manana["id"])), LUNES
           ) == timedelta(hours=8))
 verificar("el nocturno de 8 horas rinde solo 7 (tope del Art. 194)",
           clock_engine.horas_previstas_legales(
-              turnos.desde_fila(db.get_turno(noche["id"])), LUNES
+              turnos.desde_fila(db.obtener_turno(noche["id"])), LUNES
           ) == timedelta(hours=7))
 verificar("la partida de 4+4 rinde 8",
           clock_engine.horas_previstas_legales(
-              turnos.desde_fila(db.get_turno(partida["id"])), LUNES
+              turnos.desde_fila(db.obtener_turno(partida["id"])), LUNES
           ) == timedelta(hours=8))
 
 # ------------------------------------------------------ 6. Jornada partida
@@ -216,7 +216,7 @@ print("\n6) Jornada partida: dos entradas y dos salidas")
 
 carla = empleado_de_prueba("turno_carla", "Carla Comercio")
 auth.asignar_turno_base(db, admin, carla["id"], partida["id"])
-motor_carla = ClockEngine(db, db.get_user_by_id(carla["id"]))
+motor_carla = MotorDeJornada(db, db.usuario_por_id(carla["id"]))
 db.limpiar_marcajes_prueba(carla["id"], date.today() - timedelta(days=30),
                            date.today() + timedelta(days=1))
 
@@ -232,16 +232,16 @@ inicio_tarde = cierre_tarde - timedelta(hours=4)
 cierre_manana = inicio_tarde - timedelta(hours=3)
 inicio_manana = cierre_manana - timedelta(hours=4)
 
-primera = db.open_clock_in(carla["id"], inicio_manana, False, "")
-db.close_clock_out(primera, cierre_manana, False, timedelta(hours=4),
+primera = db.abrir_marcaje(carla["id"], inicio_manana, False, "")
+db.cerrar_marcaje(primera, cierre_manana, False, timedelta(hours=4),
                    timedelta(0), timedelta(0), "", timedelta(0), "Diurna")
 verificar("cerrado el primer tramo, la acción sigue siendo ENTRADA",
           motor_carla.detectar_accion_hoy() == "ENTRADA")
 
-segunda = db.open_clock_in(carla["id"], inicio_tarde, False, "")
+segunda = db.abrir_marcaje(carla["id"], inicio_tarde, False, "")
 verificar("con el segundo tramo abierto corresponde SALIDA",
           motor_carla.detectar_accion_hoy() == "SALIDA")
-db.close_clock_out(segunda, cierre_tarde, False, timedelta(hours=4),
+db.cerrar_marcaje(segunda, cierre_tarde, False, timedelta(hours=4),
                    timedelta(0), timedelta(0), "", timedelta(0), "Diurna")
 try:
     motor_carla.detectar_accion_hoy()
@@ -251,7 +251,7 @@ except ValueError as error:
               "tramos" in str(error), str(error))
 
 # Cerrar un tramo de 4 horas es cumplir, no irse antes.
-incidencia = ClockEngine._clasificar_incidencia_salida(
+incidencia = MotorDeJornada._clasificar_incidencia_salida(
     clock_engine.calcular_horas_paraguay(
         datetime.combine(LUNES, time(7, 0)), datetime.combine(LUNES, time(11, 0))
     ),
@@ -266,14 +266,14 @@ print("\n7) El turno nocturno no se bloquea a sí mismo")
 
 dario = empleado_de_prueba("turno_dario", "Darío Nocturno")
 auth.asignar_turno_base(db, admin, dario["id"], noche["id"])
-motor_dario = ClockEngine(db, db.get_user_by_id(dario["id"]))
+motor_dario = MotorDeJornada(db, db.usuario_por_id(dario["id"]))
 db.limpiar_marcajes_prueba(dario["id"], date.today() - timedelta(days=30),
                            date.today() + timedelta(days=1))
 
 ahora = datetime.now().astimezone().replace(microsecond=0)
 anoche = ahora - timedelta(hours=24)
-jornada_anterior = db.open_clock_in(dario["id"], anoche, False, "")
-db.close_clock_out(jornada_anterior, anoche + timedelta(hours=8), False,
+jornada_anterior = db.abrir_marcaje(dario["id"], anoche, False, "")
+db.cerrar_marcaje(jornada_anterior, anoche + timedelta(hours=8), False,
                    timedelta(hours=7), timedelta(0), timedelta(hours=1), "",
                    timedelta(hours=7), "Nocturna")
 verificar("la jornada de anoche no bloquea la de hoy",
@@ -290,8 +290,8 @@ verificar("y no cuenta como tramo consumido de la jornada en curso",
 db.limpiar_marcajes_prueba(dario["id"], date.today() - timedelta(days=30),
                            date.today() + timedelta(days=1))
 recien = ahora - timedelta(minutes=5)
-cerrada = db.open_clock_in(dario["id"], recien - timedelta(hours=8), False, "")
-db.close_clock_out(cerrada, recien, False, timedelta(hours=7), timedelta(0),
+cerrada = db.abrir_marcaje(dario["id"], recien - timedelta(hours=8), False, "")
+db.cerrar_marcaje(cerrada, recien, False, timedelta(hours=7), timedelta(0),
                    timedelta(hours=1), "", timedelta(hours=7), "Nocturna")
 try:
     motor_dario.detectar_accion_hoy()
@@ -333,13 +333,13 @@ resultado = auth.retirar_turno(db, admin, vacante["id"])
 verificar("uno sin usar se elimina directamente", resultado == "eliminado", resultado)
 
 try:
-    auth.listar_turnos(db, db.get_user_by_id(ana["id"]))
+    auth.listar_turnos(db, db.usuario_por_id(ana["id"]))
     verificar("un Empleado puede consultar el catálogo", True)
 except PermissionError as error:
     verificar("un Empleado puede consultar el catálogo", False, str(error))
 
 try:
-    auth.crear_turno(db, db.get_user_by_id(ana["id"]), "Turno Pirata",
+    auth.crear_turno(db, db.usuario_por_id(ana["id"]), "Turno Pirata",
                      [{"entrada": "00:00", "salida": "08:00"}])
     verificar("pero no puede crear turnos", False)
 except PermissionError as error:
@@ -348,18 +348,18 @@ except PermissionError as error:
 # ------------------------------------------------------------- 10. Portal
 print("\n10) El empleado ve su horario en el portal")
 
-resumen = reports.resumen_empleado(db, db.get_user_by_id(beto["id"]))
+resumen = reports.resumen_empleado(db, db.usuario_por_id(beto["id"]))
 verificar("el resumen expone el turno vigente",
           resumen["turno"]["nombre"] == "Prueba Mañana", resumen["turno"]["horario"])
 verificar("con su horario y sus días",
           resumen["turno"]["dias_texto"] == "Lun a Vie"
           and resumen["turno"]["entrada_prevista"] == "06:00")
 
-propio = auth.turno_de_empleado(db, db.get_user_by_id(ana["id"]), ana["id"])
+propio = auth.turno_de_empleado(db, db.usuario_por_id(ana["id"]), ana["id"])
 verificar("y cada uno puede consultar el suyo", propio["nombre"] in
           ("Prueba Mañana", "Prueba Tarde"), propio["nombre"])
 try:
-    auth.turno_de_empleado(db, db.get_user_by_id(ana["id"]), beto["id"])
+    auth.turno_de_empleado(db, db.usuario_por_id(ana["id"]), beto["id"])
     verificar("pero no el de un compañero", False)
 except PermissionError as error:
     verificar("pero no el de un compañero", True, str(error))
@@ -386,7 +386,7 @@ db.limpiar_marcajes_prueba(felipe["id"], LUNES - timedelta(days=2),
 for hora in (time(7, 0), time(11, 0), time(14, 0), time(18, 0)):
     cola.encolar("turno_felipe", datetime.combine(LUNES, hora).astimezone())
 resumen = sync_worker.sincronizar(cola, db=db)
-repuestos = db.get_entries_by_date(felipe["id"], LUNES)
+repuestos = db.marcajes_del_dia(felipe["id"], LUNES)
 verificar("las cuatro marcas suben sin descartes",
           resumen["subidas"] == 4 and resumen["descartadas"] == 0, str(resumen))
 verificar("y quedan dos jornadas cerradas, no una",
@@ -400,12 +400,12 @@ verificar("ninguna se reprocha como salida anticipada",
 # ------------------------------------------------------------- Limpieza
 for usuario in ("turno_ana", "turno_beto", "turno_carla", "turno_dario", "turno_elsa",
                 "turno_felipe"):
-    registro = db.get_user_by_username(usuario)
+    registro = db.usuario_por_cedula(usuario)
     if registro:
-        auth.delete_user(db, admin, registro["id"])
+        auth.eliminar_usuario(db, admin, registro["id"])
 for nombre in ("Prueba Mañana", "Prueba Tarde", "Prueba Noche", "Prueba Partida",
                "Prueba Estricta"):
-    registro = db.get_turno_por_nombre(nombre)
+    registro = db.turno_por_nombre(nombre)
     if registro:
         db.eliminar_turno(registro["id"])
 

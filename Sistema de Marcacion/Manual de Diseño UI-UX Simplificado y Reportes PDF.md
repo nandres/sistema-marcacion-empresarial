@@ -33,7 +33,7 @@
 ## Portal del Empleado
 
 - Kiosco público: reloj, marcación con interruptor de lluvia y ticket de salida; a la derecha, el **login** (usuario + contraseña) con enlace a **Cambiar contraseña** (verifica la clave actual, exige 6+ caracteres y audita el cambio).
-- `EmployeeDashboard` en `src/gui.py`: tarjetas de **Vacaciones Art. 23** (disponibles/usadas/devengadas), **Permisos del mes Art. 25** (total + detalle por tipo) y **Horas extra del mes** (50%/100% Ley 213), gráfico matplotlib de horas ordinarias por día y lista de permisos con botón **Descargar PDF**.
+- `TableroEmpleado` en `src/gui.py`: tarjetas de **Vacaciones Art. 23** (disponibles/usadas/devengadas), **Permisos del mes Art. 25** (total + detalle por tipo) y **Horas extra del mes** (50%/100% Ley 213), gráfico matplotlib de horas ordinarias por día y lista de permisos con botón **Descargar PDF**.
 - Datos provistos por `reports.resumen_empleado(db, user, fecha=None)`.
 
 ## Reportes PDF oficiales

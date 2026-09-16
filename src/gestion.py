@@ -110,7 +110,7 @@ class PanelGestion(ctk.CTkFrame):
         ).grid(row=0, column=0, sticky="w", padx=16, pady=(18, 2))
         etiqueta(
             sidebar,
-            f"{self.actor['full_name']}\n{auth.get_role_name(self.db, self.actor)}",
+            f"{self.actor['full_name']}\n{auth.nombre_de_rol(self.db, self.actor)}",
             11,
             t("MUTED"),
         ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 14))
@@ -1024,7 +1024,7 @@ class TurnosTab(ctk.CTkFrame):
             t("MUTED"),
         ).pack(anchor="w", pady=(0, 8))
         vigentes = self.db.turnos_vigentes_de_la_plantilla(datetime.date.today())
-        for persona in self.db.list_users():
+        for persona in self.db.listar_usuarios():
             self._fila_persona(persona, vigentes.get(persona["id"]) or {}, activos)
 
     def _fila_turno(self, turno: Dict) -> None:
@@ -1375,7 +1375,7 @@ class PersonalTab(ctk.CTkFrame):
         self.ent_nombre.pack(pady=5)
         self.menu_rol = ctk.CTkOptionMenu(
             formulario,
-            values=[r["nombre"] for r in self.db.list_roles()],
+            values=[r["nombre"] for r in self.db.listar_roles()],
             font=(FONT, 14),
             fg_color=t("INPUT_BG"),
             button_color=t("PRIMARY"),
@@ -1430,7 +1430,7 @@ class PersonalTab(ctk.CTkFrame):
     def _refrescar(self) -> None:
         for hijo in self.scroll.winfo_children():
             hijo.destroy()
-        for usuario in self.db.list_users():
+        for usuario in self.db.listar_usuarios():
             vinculo = usuario.get("tipo_vinculo") or "Funcionario"
             fila = ctk.CTkFrame(self.scroll, fg_color=t("INPUT_BG"), corner_radius=RADIO)
             fila.pack(fill="x", pady=4)
@@ -1542,7 +1542,7 @@ class PersonalTab(ctk.CTkFrame):
         fila_2.grid_columnconfigure(1, weight=1)
         self.menu_ed_rol = ctk.CTkOptionMenu(
             fila_2,
-            values=[r["nombre"] for r in self.db.list_roles()],
+            values=[r["nombre"] for r in self.db.listar_roles()],
             font=(FONT, 13),
             fg_color=t("INPUT_BG"),
             button_color=t("PRIMARY"),
@@ -1583,7 +1583,7 @@ class PersonalTab(ctk.CTkFrame):
         except ValueError:
             salario = 0.0
         try:
-            auth.create_user(
+            auth.crear_usuario(
                 self.db,
                 self.actor,
                 self.ent_usuario.get().strip(),
@@ -1619,7 +1619,7 @@ class PersonalTab(ctk.CTkFrame):
             salario = None
         clave = self.ent_ed_clave.get() or None
         try:
-            auth.update_user(
+            auth.actualizar_usuario(
                 self.db,
                 self.actor,
                 self.editando["id"],
@@ -1641,7 +1641,7 @@ class PersonalTab(ctk.CTkFrame):
 
     def _eliminar(self, usuario: Dict) -> None:
         try:
-            auth.delete_user(self.db, self.actor, usuario["id"])
+            auth.eliminar_usuario(self.db, self.actor, usuario["id"])
         except (ValueError, PermissionError) as error:
             self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
             return
@@ -1737,7 +1737,7 @@ class JustificacionesTab(ctk.CTkFrame):
         """Lista las justificaciones con su botón de descarga del PDF legal."""
         for hijo in self.scroll_just.winfo_children():
             hijo.destroy()
-        for justificacion in self.db.list_justificaciones():
+        for justificacion in self.db.listar_justificaciones():
             fila = ctk.CTkFrame(self.scroll_just, fg_color=t("INPUT_BG"), corner_radius=RADIO)
             fila.pack(fill="x", pady=4)
             fila.grid_columnconfigure(0, weight=1)
@@ -1774,7 +1774,7 @@ class JustificacionesTab(ctk.CTkFrame):
             ).grid(row=0, column=1, rowspan=2, padx=(0, 12))
 
     def refrescar_empleados(self) -> None:
-        self.empleados = self.db.list_users()
+        self.empleados = self.db.listar_usuarios()
         self.menu_empleado.configure(
             values=[f"{e['username']} ({e['full_name']})" for e in self.empleados]
         )

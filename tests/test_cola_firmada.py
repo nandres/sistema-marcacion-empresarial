@@ -49,7 +49,7 @@ cola = ColaOffline(ruta=RUTA)
 
 db = database.Database()
 db.initialize()
-empleado = db.get_user_by_username("juan")
+empleado = db.usuario_por_cedula("juan")
 DIA = datetime.now().astimezone() - timedelta(days=9)
 db.limpiar_marcajes_prueba(empleado["id"], DIA.date(), DIA.date())
 
@@ -96,9 +96,9 @@ verificar("cambiarle el empleado a una fila legítima la invalida",
 # ------------------------------------------- 2. El sincronizador la aparta
 print("\n2) Lo que no verifica no entra al servidor central")
 
-antes = len(db.get_entries_by_date(empleado["id"], DIA.date()))
+antes = len(db.marcajes_del_dia(empleado["id"], DIA.date()))
 resumen = sync_worker.sincronizar(cola, db=db)
-despues = len(db.get_entries_by_date(empleado["id"], DIA.date()))
+despues = len(db.marcajes_del_dia(empleado["id"], DIA.date()))
 
 verificar("las dos filas sin firma válida se cuentan como falsificadas",
           resumen["falsificadas"] == 2, str(resumen))
@@ -118,7 +118,7 @@ print("\n3) Una marca firmada por el kiosco sí entra")
 cola.encolar("juan", DIA, "Verificada")
 resumen = sync_worker.sincronizar(cola, db=db)
 verificar("sube la marca firmada", resumen["subidas"] == 1, str(resumen))
-marcas = db.get_entries_by_date(empleado["id"], DIA.date())
+marcas = db.marcajes_del_dia(empleado["id"], DIA.date())
 verificar("y llega con el veredicto biométrico que registró el kiosco",
           marcas and marcas[-1]["verificacion_facial"] == "Verificada",
           marcas[-1]["verificacion_facial"] if marcas else "sin marcas")

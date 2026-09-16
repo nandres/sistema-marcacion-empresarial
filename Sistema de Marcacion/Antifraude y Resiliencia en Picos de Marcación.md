@@ -36,7 +36,7 @@ Tres capas, en orden de costo/beneficio:
 
 El checkbox de "día lluvioso" lo viola de forma directa (P1-1). Pero el mismo principio ordena el resto del diseño: la condición climática es un estado del día que declara RRHH o consume un servicio meteorológico por sucursal; el turno lo asigna el supervisor; la hora la pone el servidor, nunca el cliente.
 
-Ese último punto importa: `ClockEngine.clock_in` usa `ahora_local()` del servidor, que es correcto. Pero `sync_worker` reinyecta el `momento_iso` que escribió el kiosco, y el reloj del kiosco es manipulable. Una marca offline necesita, como mínimo, ventana máxima de antigüedad y comparación contra la hora de recepción.
+Ese último punto importa: `MotorDeJornada.marcar_entrada` usa `ahora_local()` del servidor, que es correcto. Pero `sync_worker` reinyecta el `momento_iso` que escribió el kiosco, y el reloj del kiosco es manipulable. Una marca offline necesita, como mínimo, ventana máxima de antigüedad y comparación contra la hora de recepción.
 
 ### Evidencia mínima por marca
 

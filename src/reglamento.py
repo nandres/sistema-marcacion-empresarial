@@ -648,7 +648,7 @@ def disponibilidad_permisos(
     hoy = fecha or date.today()
     vinculo = user.get("tipo_vinculo") or "Funcionario"
     antiguedad = antiguedad_anios(user, hoy)
-    todas = db.list_justificaciones(user["id"])
+    todas = db.listar_justificaciones(user["id"])
     try:
         pendientes_usuario = db.listar_solicitudes_permiso(
             user["id"], solo_pendientes=True

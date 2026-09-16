@@ -52,7 +52,7 @@ def autorizado(*roles: str) -> Callable[[F], F]:
 
 
 @autorizado(ROLE_ADMIN, ROLE_RRHH)
-def create_user(db, actor, username, password, full_name, role_name) -> int:
+def crear_usuario(db, actor, username, password, full_name, role_name) -> int:
     if role_name == ROLE_ADMIN:                      # endurecimiento anti-escalada
         require_role(db, actor, (ROLE_ADMIN,))
     ...

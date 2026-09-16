@@ -25,7 +25,7 @@ from database import Database
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 
 fallos = 0
 
@@ -42,16 +42,16 @@ def verificar(descripcion: str, condicion: bool, detalle: str = "") -> None:
 
 def limpiar() -> None:
     for nombre in ("Rot Mañana", "Rot Tarde", "Rot Noche"):
-        turno = db.get_turno_por_nombre(nombre)
+        turno = db.turno_por_nombre(nombre)
         if turno:
             db.eliminar_turno(turno["id"])
     for ciclo in db.listar_ciclos(incluir_inactivos=True):
         if ciclo["nombre"].startswith("Prueba "):
             db.eliminar_ciclo(ciclo["id"])
     for usuario in ("rot_ana", "rot_beto", "rot_caro"):
-        registro = db.get_user_by_username(usuario)
+        registro = db.usuario_por_cedula(usuario)
         if registro:
-            auth.delete_user(db, admin, registro["id"])
+            auth.eliminar_usuario(db, admin, registro["id"])
 
 
 limpiar()
@@ -69,8 +69,8 @@ noche = auth.crear_turno(db, admin, "Rot Noche",
 
 
 def empleado(usuario: str):
-    auth.create_user(db, admin, usuario, "clave123", usuario, "Empleado", 2500000)
-    return db.get_user_by_username(usuario)
+    auth.crear_usuario(db, admin, usuario, "clave123", usuario, "Empleado", 2500000)
+    return db.usuario_por_cedula(usuario)
 
 
 print("ROTACIÓN AUTOMÁTICA")
@@ -175,10 +175,10 @@ verificar("y los tramos son contiguos",
             for a, b in pairwise(calendario)
           ))
 
-propio = auth.calendario_de_rotacion(db, db.get_user_by_id(beto["id"]), beto["id"])
+propio = auth.calendario_de_rotacion(db, db.usuario_por_id(beto["id"]), beto["id"])
 verificar("el empleado puede ver el suyo", len(propio) > 0)
 try:
-    auth.calendario_de_rotacion(db, db.get_user_by_id(beto["id"]), ana["id"])
+    auth.calendario_de_rotacion(db, db.usuario_por_id(beto["id"]), ana["id"])
     verificar("pero no el de un compañero", False)
 except PermissionError as error:
     verificar("pero no el de un compañero", True, str(error))

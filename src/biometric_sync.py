@@ -172,7 +172,7 @@ def sincronizar_empleados(db: Database, ids_biometricos: List[int]) -> Dict[str,
     """
     emparejados = 0
     for identificador in ids_biometricos:
-        usuario = db.get_user_by_username(str(identificador))
+        usuario = db.usuario_por_cedula(str(identificador))
         if usuario:
             db.asignar_biometrico_id(usuario["id"], identificador)
             emparejados += 1

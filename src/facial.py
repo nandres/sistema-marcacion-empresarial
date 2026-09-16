@@ -253,7 +253,7 @@ def validar(db: Any, user_id: int, frame_bgr) -> Resultado:
 
     muestras: List[Any] = []
     etiquetas: List[int] = []
-    fotos = db.list_fotos()
+    fotos = db.listar_fotos()
     for foto in fotos:
         imagen = cv2.imdecode(np.frombuffer(foto["imagen"], np.uint8), cv2.IMREAD_COLOR)
         if imagen is None:

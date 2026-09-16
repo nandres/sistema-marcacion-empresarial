@@ -359,7 +359,7 @@ def _usuario_del_token(token: str) -> Dict[str, Any]:
         raise sin_sesion from None
     db = _cliente(claims.get("emp"))
     try:
-        usuario = db.get_user_by_id(int(claims["sub"]))
+        usuario = db.usuario_por_id(int(claims["sub"]))
         if not usuario:
             raise ValueError("Usuario del token inexistente.")
         return usuario
@@ -572,7 +572,7 @@ def api_login(
             _registrar_fallo(request, cedula)
             raise HTTPException(status_code=401, detail="Cédula o contraseña incorrectas.")
         _limpiar_freno(request, cedula)
-        rol = auth.get_role_name(db, user)
+        rol = auth.nombre_de_rol(db, user)
         token = auth.crear_token_acceso(user["id"], rol, user["empresa_id"])
         _abrir_sesion(respuesta, request, token)
         return {
@@ -609,7 +609,7 @@ def api_sesion(
     """
     db = _cliente_de(usuario)
     try:
-        empresa = db.get_empresa(usuario["empresa_id"])
+        empresa = db.obtener_empresa(usuario["empresa_id"])
         return {
             "nombre": usuario["full_name"],
             "rol": usuario["role_name"],
@@ -645,7 +645,7 @@ def api_permiso_pdf(
     """
     db = _cliente_de(usuario)
     try:
-        justificacion = db.get_justificacion(solicitud_id)
+        justificacion = db.obtener_justificacion(solicitud_id)
         if not justificacion or justificacion["usuario_id"] != usuario["id"]:
             raise HTTPException(status_code=404, detail="Permiso no encontrado.")
         ruta = Path(reports.generar_pdf_permiso(db, solicitud_id))
@@ -945,7 +945,7 @@ def api_condicion_hoy(request: Request, empresa: str = "") -> Dict[str, Any]:
         alojadas = db.listar_empresas()
         elegida_por_host = empresa or _empresa_del_host(request)
         if elegida_por_host:
-            elegida = db.get_empresa_por_slug(elegida_por_host)
+            elegida = db.empresa_por_slug(elegida_por_host)
         elif len(alojadas) == 1:
             elegida = alojadas[0]
         else:
@@ -1012,7 +1012,7 @@ def api_marcar(payload: MarcarRequest, request: Request) -> Dict[str, Any]:
                 status_code=403,
                 detail="La verificación biométrica es obligatoria: marcá en el kiosco.",
             )
-        engine = clock_engine.ClockEngine(db, usuario)
+        engine = clock_engine.MotorDeJornada(db, usuario)
         try:
             registro_id, momento, tipo = engine.registrar_asistencia(decision.marca)
         except ValueError as error:
@@ -1050,12 +1050,12 @@ def api_panel_resumen(
     db = _cliente_de(usuario)
     try:
         return {
-            "personal": len(db.list_users()),
-            "marcas_hoy": db.count_marcajes_hoy(),
+            "personal": len(db.listar_usuarios()),
+            "marcas_hoy": db.contar_marcajes_hoy(),
             "justificaciones": db.contar_justificaciones(),
             "correcciones_pendientes": sum(
                 1
-                for c in db.list_solicitudes_correccion()
+                for c in db.listar_solicitudes_correccion()
                 if c.get("estado") == "Pendiente"
             ),
             "permisos_pendientes": len(
@@ -1081,7 +1081,7 @@ def api_panel_personal(
     try:
         vigentes = db.turnos_vigentes_de_la_plantilla(datetime.date.today())
         return {
-            "roles": [r["nombre"] for r in db.list_roles()],
+            "roles": [r["nombre"] for r in db.listar_roles()],
             "turnos": auth.listar_turnos(db, usuario),
             "personal": [
                 dict(
@@ -1089,7 +1089,7 @@ def api_panel_personal(
                     turno_hoy=(vigentes.get(u["id"]) or {}).get("turno_nombre"),
                     turno_origen=(vigentes.get(u["id"]) or {}).get("origen"),
                 )
-                for u in db.list_users(incluir_bajas=True)
+                for u in db.listar_usuarios(incluir_bajas=True)
             ],
         }
     finally:
@@ -1106,7 +1106,7 @@ def api_panel_personal_crear(
     db = _cliente_de(usuario)
     try:
         try:
-            nuevo_id = auth.create_user(
+            nuevo_id = auth.crear_usuario(
                 db,
                 usuario,
                 payload.username.strip(),
@@ -1137,7 +1137,7 @@ def api_panel_personal_editar(
     db = _cliente_de(usuario)
     try:
         try:
-            auth.update_user(
+            auth.actualizar_usuario(
                 db,
                 usuario,
                 user_id,
@@ -1210,7 +1210,7 @@ def api_panel_personal_eliminar(
     db = _cliente_de(usuario)
     try:
         try:
-            auth.delete_user(db, usuario, user_id)
+            auth.eliminar_usuario(db, usuario, user_id)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         return {"mensaje": "Personal eliminado correctamente."}
@@ -1227,8 +1227,8 @@ def api_panel_justificaciones(
     db = _cliente_de(usuario)
     try:
         return {
-            "justificaciones": db.list_justificaciones(),
-            "personal": [_personal_publico(u) for u in db.list_users()],
+            "justificaciones": db.listar_justificaciones(),
+            "personal": [_personal_publico(u) for u in db.listar_usuarios()],
             "tipos": list(auth.TIPOS_PERMISO),
         }
     finally:
@@ -1298,7 +1298,7 @@ def api_panel_correcciones(
     _exigir_rrhh(usuario)
     db = _cliente_de(usuario)
     try:
-        return db.list_solicitudes_correccion()
+        return db.listar_solicitudes_correccion()
     finally:
         db.cerrar()
 
@@ -1459,7 +1459,7 @@ def api_panel_horas_extra_pdf(
         raise HTTPException(status_code=422, detail="Mes fuera de rango.")
     db = _cliente_de(usuario)
     try:
-        empleado = db.get_user_by_id(user_id)
+        empleado = db.usuario_por_id(user_id)
         if not empleado:
             raise HTTPException(status_code=404, detail="Empleado no encontrado.")
         ruta = Path(reports.generar_pdf_horas_extra(db, empleado, anio, mes))
@@ -1868,7 +1868,7 @@ def api_panel_empresa(
     _exigir_rrhh(usuario)
     db = _cliente_de(usuario)
     try:
-        empresa = db.get_empresa(usuario["empresa_id"]) or {}
+        empresa = db.obtener_empresa(usuario["empresa_id"]) or {}
         empleados = db.contar_empleados()
         cupo = empresa.get("max_empleados")
         return {

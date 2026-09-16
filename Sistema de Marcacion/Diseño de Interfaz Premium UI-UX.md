@@ -41,7 +41,7 @@
   *"Miércoles, 19 de agosto de 2026"*.
 - **Botón maestro único "REGISTRAR ASISTENCIA"** con auto-detección de
   Entrada/Salida (Ley 213); el sistema resuelve al empleado con
-  `db.get_user_by_username()` **sin solicitar contraseña** — decisión de
+  `db.usuario_por_cedula()` **sin solicitar contraseña** — decisión de
   diseño para un terminal público, donde la autenticación fuerte queda en
   el panel de gestión.
 - Al marcar, un **panel de éxito transitorio** reemplaza el área de

@@ -41,9 +41,9 @@ app.entrada_clave.delete(0, "end")
 app.entrada_clave.insert(0, "clave123")
 app._ingresar()
 app.update()
-assert isinstance(app.dashboard_empleado, gui.EmployeeDashboard), \
+assert isinstance(app.dashboard_empleado, gui.TableroEmpleado), \
     "debe abrir el tablero del empleado"
-print("OK juan entra al EmployeeDashboard")
+print("OK juan entra al TableroEmpleado")
 
 def buscar_canvas(raiz):
     resultado = []
@@ -136,7 +136,7 @@ app.entrada_repetir.insert(0, "clave456")
 app._ejecutar_cambio_clave()
 assert app.lbl_cambio.cget("text").startswith("Contraseña actualizada"), \
     app.lbl_cambio.cget("text")
-juan = db.get_user_by_username("juan")
+juan = db.usuario_por_cedula("juan")
 assert auth.authenticate(db, "juan", "clave456"), "la nueva clave debe funcionar"
 assert not auth.authenticate(db, "juan", "clave123"), "la anterior clave no debe funcionar"
 print("OK cambio de contrasena con clave456")

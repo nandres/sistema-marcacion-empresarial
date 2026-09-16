@@ -192,7 +192,7 @@ def _repetir(db: Any, payload: str) -> None:  # pragma: no cover - hilo de fondo
     if empresa is None:
         return
     db.empresa_id = int(empresa)
-    fila = db.get_alerta(int(datos["id"]))
+    fila = db.obtener_alerta(int(datos["id"]))
     if fila:
         BUS.publicar(dict(fila, empresa_id=int(empresa)))
 

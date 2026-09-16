@@ -12,23 +12,23 @@ from database import Database
 
 db = Database()
 db.initialize()
-admin = db.get_user_by_username("admin")
+admin = db.usuario_por_cedula("admin")
 assert admin, "admin no existe"
 
 def nuevo_usuario(nombre, vinculo):
-    previo = db.get_user_by_username(nombre)
+    previo = db.usuario_por_cedula(nombre)
     if previo:
-        auth.delete_user(db, admin, previo["id"])
-    user_id = auth.create_user(
+        auth.eliminar_usuario(db, admin, previo["id"])
+    user_id = auth.crear_usuario(
         db, admin, nombre, "clave123", nombre, "Empleado", 2500000, vinculo
     )
-    return db.get_user_by_id(user_id)
+    return db.usuario_por_id(user_id)
 
 def disponibilidad(user):
     return {d["tipo"]: d for d in reglamento.disponibilidad_permisos(db, user)}
 
 # --- Migración: columna horas_usadas ---
-columnas = db.list_justificaciones()
+columnas = db.listar_justificaciones()
 hoy = date.today()
 
 p1 = nuevo_usuario("p1_2026_func", "Funcionario")
@@ -147,7 +147,7 @@ assert hist["desde"] == "2020-01-01" and hist["hasta"] == hoy.isoformat()
 print("OK resumen_historico enero-2020 -> hoy")
 
 # --- Limpieza ---
-auth.delete_user(db, admin, p2["id"])
-auth.delete_user(db, admin, p1["id"])
+auth.eliminar_usuario(db, admin, p2["id"])
+auth.eliminar_usuario(db, admin, p1["id"])
 print("LIMPIEZA OK")
 print("TODAS LAS VALIDACIONES PASARON")

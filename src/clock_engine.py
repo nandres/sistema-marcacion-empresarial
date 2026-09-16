@@ -256,7 +256,7 @@ def condicion_declarada(db: Database, dia: date) -> Dict[str, Any]:
         ``{"condicion": str, "tolerancia": timedelta, "declarante": str}``;
         condición vacía y tolerancia cero si el día es normal.
     """
-    fila = db.get_condicion_dia(dia)
+    fila = db.condicion_del_dia(dia)
     if not fila:
         return {"condicion": "", "tolerancia": timedelta(0), "declarante": ""}
     minutos = int(fila["tolerancia_min"] or 0)
@@ -298,7 +298,7 @@ def evaluar_asistencia(
         Injustificada), el turno y la hora previstos, las tolerancias
         consideradas y un resumen legible.
     """
-    usuario = db.get_user_by_id(usuario_id)
+    usuario = db.usuario_por_id(usuario_id)
     if not usuario:
         raise ValueError("Empleado no encontrado.")
     vinculo = (usuario.get("tipo_vinculo") or "Funcionario").strip()
@@ -534,7 +534,7 @@ def persistir_desglose(
     por RRHH convergen acá para que las tres rutas no puedan divergir en
     cómo guardan el mismo cálculo.
     """
-    db.close_clock_out(
+    db.cerrar_marcaje(
         marcaje_id,
         hora_salida,
         desglose.toca_descanso,
@@ -547,14 +547,16 @@ def persistir_desglose(
     )
 
 
-class ClockEngine:
+class MotorDeJornada:
     """Orquesta el flujo de marcación aplicando las reglas laborales."""
 
     def __init__(self, db: Database, user: Dict) -> None:
         self.db = db
         self.user = user
 
-    def clock_in(self, verificacion_facial: str = "No verificada") -> Tuple[int, datetime]:
+    def marcar_entrada(
+        self, verificacion_facial: str = "No verificada"
+    ) -> Tuple[int, datetime]:
         """Registra la entrada aplicando la Res. 3028/2024.
 
         La evaluación distingue pasantes de funcionarios, consume la
@@ -572,7 +574,7 @@ class ClockEngine:
             registrado (para el comprobante digital).
         """
         self._descartar_jornadas_abandonadas()
-        open_entry = self.db.get_open_entry(self.user["id"])
+        open_entry = self.db.marcaje_abierto(self.user["id"])
         if open_entry:
             raise ValueError("Ya hay una entrada abierta sin salida registrada.")
         ahora = ahora_local()
@@ -587,7 +589,7 @@ class ClockEngine:
         tolerancia_aplicada = (
             evaluacion["tolerancia_climatica"] or evaluacion["retraso_min"] > 0
         )
-        entry_id = self.db.open_clock_in(
+        entry_id = self.db.abrir_marcaje(
             self.user["id"],
             ahora,
             estado != "Normal",
@@ -607,7 +609,7 @@ class ClockEngine:
             )
         return entry_id, ahora
 
-    def clock_out(self) -> Tuple[int, datetime]:
+    def marcar_salida(self) -> Tuple[int, datetime]:
         """Cierra la salida calculando y persistiendo el desglose legal.
 
         Si la jornada se interrumpe antes de completar las 8 horas legales
@@ -619,7 +621,7 @@ class ClockEngine:
             Tupla con el identificador del marcaje y el instante exacto
             de la salida (para el comprobante digital).
         """
-        open_entry = self.db.get_open_entry(self.user["id"])
+        open_entry = self.db.marcaje_abierto(self.user["id"])
         if not open_entry:
             raise ValueError("No hay una entrada abierta para cerrar.")
         ahora = ahora_local()
@@ -704,7 +706,7 @@ class ClockEngine:
             ValueError: si el empleado ya completó todos los tramos de su turno.
         """
         self._descartar_jornadas_abandonadas()
-        if self.db.get_open_entry(self.user["id"]) is not None:
+        if self.db.marcaje_abierto(self.user["id"]) is not None:
             return "SALIDA"
         ahora = ahora_local()
         turno = turno_vigente(self.db, self.user["id"], ahora.date())
@@ -734,14 +736,14 @@ class ClockEngine:
         """
         accion = self.detectar_accion_hoy()
         if accion == "SALIDA":
-            entry_id, momento = self.clock_out()
+            entry_id, momento = self.marcar_salida()
             return entry_id, momento, "SALIDA"
-        entry_id, momento = self.clock_in(verificacion_facial)
+        entry_id, momento = self.marcar_entrada(verificacion_facial)
         return entry_id, momento, "ENTRADA"
 
     def justificacion_para(self, fecha: date) -> Optional[Dict]:
         """Retorna la justificación aprobada que cubre la fecha, si existe."""
-        return self.db.get_justificacion_por_fecha(self.user["id"], fecha)
+        return self.db.justificacion_por_fecha(self.user["id"], fecha)
 
     def turno_del_dia(self, fecha: date) -> turnos.Turno:
         """Turno que le corresponde al empleado en una fecha."""
@@ -777,7 +779,7 @@ class ClockEngine:
             return False
         if self.justificacion_para(fecha):
             return False
-        return not self.db.get_entries_by_date(self.user["id"], fecha)
+        return not self.db.marcajes_del_dia(self.user["id"], fecha)
 
     def worked_seconds(self, entry: Dict) -> int:
         """Segundos efectivos trabajados en un marcaje cerrado."""
@@ -788,23 +790,23 @@ class ClockEngine:
     def worked_seconds_today(self) -> int:
         """Segundos trabajados por el usuario durante el día actual."""
         today = datetime.now().date()
-        entries = self.db.get_entries_by_date(self.user["id"], today)
+        entries = self.db.marcajes_del_dia(self.user["id"], today)
         return sum(self.worked_seconds(entry) for entry in entries)
 
-    def total_worked_seconds(self) -> int:
+    def segundos_trabajados(self) -> int:
         """Segundos acumulados por el usuario en toda su historia."""
-        entries = self.db.get_all_entries(self.user["id"])
+        entries = self.db.listar_marcajes(self.user["id"])
         return sum(self.worked_seconds(entry) for entry in entries)
 
     @staticmethod
-    def format_duration(seconds: int) -> str:
+    def formatear_duracion(seconds: int) -> str:
         """Formatea una duración en segundos como ``H:MM:SS``."""
         return str(timedelta(seconds=seconds))
 
-    def report_today(self) -> str:
+    def resumen_de_hoy(self) -> str:
         """Genera el reporte textual de marcajes del día con su desglose."""
         today = datetime.now().date()
-        entries = self.db.get_entries_by_date(self.user["id"], today)
+        entries = self.db.marcajes_del_dia(self.user["id"], today)
         justificacion = self.justificacion_para(today)
         lines = [f"Registros de hoy ({today.isoformat()}):"]
         if not entries and justificacion:
@@ -825,5 +827,5 @@ class ClockEngine:
                 f"Extra 50%: {entry['horas_extra_50']} | "
                 f"Extra 100%: {entry['horas_extra_100']}"
             )
-        lines.append(f"Total trabajado: {self.format_duration(self.worked_seconds_today())}")
+        lines.append(f"Total trabajado: {self.formatear_duracion(self.worked_seconds_today())}")
         return "\n".join(lines)
