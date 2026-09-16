@@ -6,10 +6,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import auth
 import gui
+import interfaz
 from database import Database
 
 gui.ctk.set_appearance_mode("light")
-gui.TEMA_ACTIVO = "claro"
+interfaz.TEMA_ACTIVO = "claro"
 
 db = Database()
 db.initialize()
@@ -60,9 +61,9 @@ canvas_antes = buscar_canvas(app.dashboard_empleado)
 assert canvas_antes is not None, "dashboard debe tener su grafico"
 canvas_antes.mi_marca = "viejo"
 app.variable_tema.set(True)
-app._cambiar_tema()
+app.cambiar_tema()
 app.update()
-assert gui.TEMA_ACTIVO == "claro"
+assert interfaz.TEMA_ACTIVO == "claro"
 canvas_despues = buscar_canvas(app.dashboard_empleado)
 assert canvas_despues is not None and not hasattr(canvas_despues, "mi_marca"), \
     "el grafico debe reconstruirse al cambiar tema"
@@ -70,9 +71,9 @@ print("OK tema claro + grafico del dashboard reconstruido")
 
 canvas_despues.mi_marca = "medio"
 app.variable_tema.set(False)
-app._cambiar_tema()
+app.cambiar_tema()
 app.update()
-assert gui.TEMA_ACTIVO == "oscuro"
+assert interfaz.TEMA_ACTIVO == "oscuro"
 canvas_otra = buscar_canvas(app.dashboard_empleado)
 assert canvas_otra is not None and not hasattr(canvas_otra, "mi_marca"), \
     "debe reconstruirse al volver a oscuro"
@@ -91,7 +92,7 @@ clase_plano_seleccionado = gui.ctk.CTkButton(
 )
 clase_plano_seleccionado._rol = "plano"
 app.variable_tema.set(True)
-app._cambiar_tema()
+app.cambiar_tema()
 assert clase_plano.cget("hover_color") == gui.TEMAS["claro"]["INPUT_BG"], \
     "hover plano debe seguir al tema nuevo"
 assert clase_plano.cget("text_color") == gui.TEMAS["claro"]["MUTED"]

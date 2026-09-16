@@ -14,7 +14,7 @@ RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ / "src"))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-import gui  # noqa: E402
+import interfaz  # noqa: E402
 
 TEXTO_NORMAL = 4.5
 INTERFAZ = 3.0
@@ -54,7 +54,7 @@ PARES = [
 ]
 
 fallos = 0
-for nombre, tema in (("claro", gui.TEMA_CLARO), ("oscuro", gui.TEMA_OSCURO)):
+for nombre, tema in (("claro", interfaz.TEMA_CLARO), ("oscuro", interfaz.TEMA_OSCURO)):
     print(f"\nTema {nombre}")
     for frente, fondo, minimo, descripcion in PARES:
         ratio = contraste(tema[frente], tema[fondo])
@@ -65,7 +65,7 @@ for nombre, tema in (("claro", gui.TEMA_CLARO), ("oscuro", gui.TEMA_OSCURO)):
 
 # Las tres superficies tienen que poder distinguirse entre sí: si el campo se
 # funde con la sección, el usuario no ve dónde escribir.
-for nombre, tema in (("claro", gui.TEMA_CLARO), ("oscuro", gui.TEMA_OSCURO)):
+for nombre, tema in (("claro", interfaz.TEMA_CLARO), ("oscuro", interfaz.TEMA_OSCURO)):
     for a, b in (("BG", "CARD"), ("CARD", "INPUT_BG")):
         if tema[a] == tema[b]:
             print(f"  BAJO tema {nombre}: {a} y {b} son el mismo color")
@@ -88,8 +88,8 @@ EQUIVALENCIAS = [
     ("tardanza", "ACCENTO"), ("curso", "SUCCESS"),
     ("regla-fuerte", "INPUT_BORDER"),
 ]
-for bloque, tema, etiqueta in ((":root {", gui.TEMA_CLARO, "claro"),
-                               ('[data-tema="oscuro"] {', gui.TEMA_OSCURO, "oscuro")):
+for bloque, tema, etiqueta in ((":root {", interfaz.TEMA_CLARO, "claro"),
+                               ('[data-tema="oscuro"] {', interfaz.TEMA_OSCURO, "oscuro")):
     for css_var, token in EQUIVALENCIAS:
         web = variable(css_var, bloque)
         escritorio = tema[token].lower()

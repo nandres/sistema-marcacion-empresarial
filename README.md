@@ -379,12 +379,15 @@ la consulta setenta y cuatro.
 ```
 src/
 ├── web_server.py   API del kiosco, el portal y el panel (FastAPI + WebSockets)
-├── gui.py          kiosco y panel de escritorio (CustomTkinter)
+├── gui.py          ventana del kiosco y tablero del empleado (CustomTkinter)
+├── gestion.py      panel de Recursos Humanos, una pestaña por trámite
+├── interfaz.py     vocabulario visual: paleta, tipografía y piezas
 ├── app.py          CLI administrativa
 ├── clock_engine.py motor horario y desglose legal
 ├── turnos.py       tramos, días, rotación y ciclos
 ├── reglamento.py   catálogo de permisos, cuotas y días hábiles
-├── database.py     esquema, aislamiento por empresa y auditoría JSONB
+├── esquema.py      DDL, migraciones y aislamiento por fila
+├── database.py     consultas, acotadas por empresa, con auditoría JSONB
 ├── registro.py     registro operativo con identificador por petición
 ├── auth.py         autenticación, roles y JWT
 ├── biometria.py    cifrado en reposo de las plantillas faciales
@@ -392,6 +395,12 @@ src/
 ├── offline_queue.py  cola local firmada
 └── sync_worker.py  reposición idempotente
 ```
+
+El corte entre `esquema.py` y `database.py` no es de tamaño: el DDL toma locks
+exclusivos de tabla, corre una vez en el despliegue y con el rol
+administrador, mientras que las consultas corren miles de veces por hora con
+un rol que no puede alterar nada. Lo mismo entre `interfaz.py` y el resto del
+escritorio: el vocabulario visual no sabe qué es un marcaje.
 
 Tres reglas que conviene saber antes de tocar código:
 
