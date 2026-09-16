@@ -575,6 +575,26 @@ Los comprobantes emitidos antes de este cambio dejan de validar, porque se firma
 
 ---
 
+### P3-17 · El repositorio no tenía vara de calidad ni idioma único ✅ corregido
+
+> Cerrado el 2026-09-15. `pyproject.toml` con la configuración de ruff, un paso propio en CI, y la capa de datos hablando un solo idioma.
+
+No había linter. Pasarle uno por primera vez a diecisiete mil líneas sacó, entre lo cosmético, tres cosas que no lo eran:
+
+- **`Any` se usaba en una anotación de `gui.py` sin haberse importado nunca.** Sobrevivía porque `from __future__ import annotations` no evalúa las anotaciones. El día que alguien quitara esa línea, el módulo dejaba de importar.
+- **Dieciséis archivos sin salto de línea final.** La misma familia de descuido que pegó dos dependencias en un renglón de `requirements.txt` y dejó el repositorio sin poder instalarse.
+- **`.env.ejemplo` nunca estuvo versionado.** La negación del `.gitignore` decía `!.env.example`, en inglés, y el archivo se llama `.env.ejemplo`: no coincidía con nada. `cp .env.ejemplo .env`, que es el primer paso documentado de la instalación, era imposible para cualquiera que clonara.
+
+**El idioma.** El README decía que el dominio va en español. No decía que eso alcanza a los métodos que lo manipulan, y por esa rendija convivían `db.listar_turnos()` y `db.list_users()` en la misma clase. Cuarenta y siete nombres renombrados. Al hacerlo apareció `list_solicitudes_correccion` junto a `listar_solicitudes_correccion`: el mismo SELECT sobre la misma tabla con distinto `ORDER BY`, uno por panel. El de escritorio mostraba los pendientes primero y el web los ordenaba por id — la misma lista en dos órdenes según por dónde se entrara, que es la familia de [[#P2-4 · Dos definiciones distintas de "llegada tardía" ✅ corregido|P2-4]].
+
+**El tamaño.** `database.py` tenía 3571 líneas y `gui.py` 3348. Se partieron por donde ya estaban partidos, no por tamaño: `esquema.py` porque el DDL toma locks exclusivos, corre una vez en el despliegue y con el rol administrador, mientras que las consultas corren miles de veces por hora con un rol que no puede alterar nada; `interfaz.py` porque el vocabulario visual no sabe qué es un marcaje; `gestion.py` porque son las once pestañas que solo ve Recursos Humanos.
+
+**El guardia de aislamiento tenía su propia copia de la lista de tablas de cliente**, escrita a mano, y había envejecido: revisaba catorce de dieciséis. `dispositivos` y `turno_versiones` no las miraba nadie. Estaban bien acotadas, pero por suerte y no por control. Ahora la toma del esquema, y avisa cuando una de sus excepciones quedó concedida a un método que ya no existe.
+
+**Lección de método.** Las tres listas que fallaron en este proyecto —los pasos de prueba del workflow, las tablas del guardia, la numeración del menú de consola— fallaron igual: alguien las escribió a mano al lado de la cosa que describían, y la cosa cambió. La forma de que una lista no envejezca no es revisarla: es derivarla.
+
+---
+
 ## Prioridad de remediación sugerida
 
 | Orden | Trabajo | Cierra | Estado |
@@ -598,6 +618,7 @@ Los comprobantes emitidos antes de este cambio dejan de validar, porque se firma
 | 16 | Registro operativo, chequeo de salud contra la base y versión de esquema | P3-15 | ✅ hecho |
 | 17 | Versionado histórico de la definición de los turnos | P1-7 | ✅ hecho |
 | 18 | Comprobante verificable desde el papel y vara de calidad en CI | P3-16 | ✅ hecho |
+| 19 | Un idioma, una vara de calidad y módulos partidos por sus costuras | P3-17 | ✅ hecho |
 
 El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].
 
