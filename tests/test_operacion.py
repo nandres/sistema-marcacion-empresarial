@@ -27,7 +27,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import httpx
 from fastapi import Response
 
-import database
+import esquema
 import registro
 import web_server
 from database import Database
@@ -174,29 +174,29 @@ db = Database()
 db.connect()
 
 verificar("la base migrada declara la versión que este código espera",
-          db.version_esquema() == database.ESQUEMA_VERSION,
-          f"{db.version_esquema()} vs {database.ESQUEMA_VERSION}")
+          db.version_esquema() == esquema.ESQUEMA_VERSION,
+          f"{db.version_esquema()} vs {esquema.ESQUEMA_VERSION}")
 verificar("y no le falta nada por aplicar", db.migraciones_pendientes() == [],
           str(db.migraciones_pendientes()))
 verificar("el esquema queda declarado listo", db.esquema_listo())
 
 historial = db.historial_esquema()
 verificar("el historial dice qué se aplicó y cuándo",
-          any(p["nombre"] == f"base:{database.ESQUEMA_VERSION}" for p in historial),
+          any(p["nombre"] == f"base:{esquema.ESQUEMA_VERSION}" for p in historial),
           f"{len(historial)} anotación(es)")
 
 # Subir la versión es exactamente lo que pasa cuando se despliega código nuevo
 # sobre una base vieja. El servidor tiene que negarse a arrancar ahí, y no
 # descubrirlo en la primera marcación.
-version_real = database.ESQUEMA_VERSION
-database.ESQUEMA_VERSION = version_real + 1
+version_real = esquema.ESQUEMA_VERSION
+esquema.ESQUEMA_VERSION = version_real + 1
 try:
     verificar("con código más nuevo que la base, la migración queda pendiente",
               db.migraciones_pendientes() == [f"base:{version_real + 1}"],
               str(db.migraciones_pendientes()))
     verificar("y el esquema NO se declara listo", not db.esquema_listo())
 finally:
-    database.ESQUEMA_VERSION = version_real
+    esquema.ESQUEMA_VERSION = version_real
 
 verificar("al restaurar la versión, la base vuelve a estar al día",
           db.esquema_listo())
@@ -205,16 +205,16 @@ verificar("al restaurar la versión, la base vuelve a estar al día",
 print("\n4) Un paso de una sola vez corre una sola vez")
 
 PASO = "prueba-paso-unico"
-pasos_reales = database.PASOS_UNICOS
-database.PASOS_UNICOS = (
+pasos_reales = esquema.PASOS_UNICOS
+esquema.PASOS_UNICOS = (
     (PASO,
      "CREATE TABLE IF NOT EXISTS prueba_pasos (marca SERIAL PRIMARY KEY); "
      "INSERT INTO prueba_pasos DEFAULT VALUES"),
 )
 cursor = db.connection.cursor()
 try:
-    primera_vez = db._anotar_migraciones(cursor)
-    segunda_vez = db._anotar_migraciones(cursor)
+    primera_vez = esquema.anotar_migraciones(cursor)
+    segunda_vez = esquema.anotar_migraciones(cursor)
     db.connection.commit()
 
     cursor.execute("SELECT COUNT(*) FROM prueba_pasos")
@@ -223,10 +223,10 @@ try:
     verificar("la segunda lo saltea", segunda_vez == [], str(segunda_vez))
     verificar("y su efecto quedó una sola vez en la base", veces == 1, f"{veces} fila(s)")
 finally:
-    database.PASOS_UNICOS = pasos_reales
+    esquema.PASOS_UNICOS = pasos_reales
     cursor.execute("DROP TABLE IF EXISTS prueba_pasos")
     cursor.execute(
-        f"DELETE FROM {database.TABLA_MIGRACIONES} WHERE nombre = %s", (PASO,)
+        f"DELETE FROM {esquema.TABLA_MIGRACIONES} WHERE nombre = %s", (PASO,)
     )
     db.connection.commit()
     cursor.close()

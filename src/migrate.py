@@ -22,7 +22,7 @@ import psycopg2
 
 import auth
 import biometria
-import database
+import esquema
 import registro
 from database import Database
 
@@ -68,7 +68,7 @@ def informar_estado() -> int:
     print(f"Esquema de la base: versión {version}"
           if version is not None else
           "Esquema de la base: sin migrar (no hay registro de migraciones)")
-    print(f"Esperado por este código: versión {database.ESQUEMA_VERSION}")
+    print(f"Esperado por este código: versión {esquema.ESQUEMA_VERSION}")
 
     if historial:
         print("\nAplicado:")
@@ -181,7 +181,7 @@ def main() -> int:
     except Exception as error:
         print(f"Migración fallida: {error}", file=sys.stderr)
         return 1
-    print(f"Esquema aplicado correctamente (versión {database.ESQUEMA_VERSION}).")
+    print(f"Esquema aplicado correctamente (versión {esquema.ESQUEMA_VERSION}).")
     informar_aislamiento()
     if cifradas:
         print(f"Plantillas faciales cifradas en reposo: {cifradas}.")
