@@ -52,6 +52,11 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
+      - name: Estilo y errores estáticos (ruff)
+        run: |
+          pip install --quiet ruff
+          ruff check
+
       - name: Compilación de todos los módulos
         run: python -m py_compile src/*.py
 

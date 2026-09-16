@@ -31,7 +31,8 @@ USUARIO = "p1_1_clima"
 previo = db.get_user_by_username(USUARIO)
 if previo:
     auth.delete_user(db, admin, previo["id"])
-auth.create_user(db, admin, USUARIO, "clave123", "Clima Prueba", "Empleado", 2500000, "Funcionario")
+auth.create_user(db, admin, USUARIO, "clave123", "Clima Prueba",
+                 "Empleado", 2500000, "Funcionario")
 empleado = db.get_user_by_username(USUARIO)
 
 fallos = 0

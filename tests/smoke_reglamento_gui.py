@@ -3,12 +3,12 @@ y EmployeeDashboard (historial enero-cualquier-año → hoy)."""
 import sys
 import traceback
 from datetime import date
-
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import gui
 import database
+import gui
 import reglamento
 
 ERRORES = []
@@ -36,14 +36,17 @@ def verificar(app):
         print("OK disponibilidad renderizada para", len(articulos), "articulos")
         just.menu_empleado.set(f"{juan['username']} ({juan['full_name']})")
         just._cambiar_empleado()
-        assert "Art. 18 · Salidas por motivos personales" in just.menu_tipo.cget("values"), "funcionario debe ver Art. 18"
+        assert "Art. 18 · Salidas por motivos personales" in just.menu_tipo.cget("values"), \
+            "funcionario debe ver Art. 18"
         just.menu_tipo.set("Art. 18 · Salidas por motivos personales")
         just._cambiar_tipo()
-        assert just.ent_horas.winfo_manager() == "grid", "campo de horas no visible para Art. 18"
+        assert just.ent_horas.winfo_manager() == "grid", \
+            "campo de horas no visible para Art. 18"
         just.ent_horas.grid_remove()
         just.menu_tipo.set("Art. 29 · Vacaciones anuales con goce de sueldo")
         just._cambiar_tipo()
-        assert just.ent_horas.winfo_manager() != "grid", "campo de horas visible sin corresponder"
+        assert just.ent_horas.winfo_manager() != "grid", \
+            "campo de horas visible sin corresponder"
         print("OK artículos por vínculo y campo de horas condicional")
         just.menu_tipo.set("Art. 18 · Salidas por motivos personales")
         just._cambiar_tipo()
@@ -51,7 +54,8 @@ def verificar(app):
         just.ent_fin.insert(0, "2099-01-01")
         just.ent_horas.insert(0, "5.5")
         just._crear()
-        assert "no puede superar" in just.lbl_resultado.cget("text"), just.lbl_resultado.cget("text")
+        assert "no puede superar" in just.lbl_resultado.cget("text"), \
+            just.lbl_resultado.cget("text")
         print("OK fecha futura rechazada en la GUI")
         just.ent_fin.delete(0, "end")
         just.ent_fin.insert(0, date.today().isoformat())
@@ -63,7 +67,8 @@ def verificar(app):
         just.ent_horas.delete(0, "end")
         just.ent_horas.insert(0, "1")
         just._crear()
-        assert "Cuota agotada" in just.lbl_resultado.cget("text") or "Solo quedan" in just.lbl_resultado.cget("text")
+        aviso = just.lbl_resultado.cget("text")
+        assert "Cuota agotada" in aviso or "Solo quedan" in aviso
         print("OK segunda justificacion bloqueada por cuota:", just.lbl_resultado.cget("text"))
         panel.destroy()
 
@@ -72,7 +77,8 @@ def verificar(app):
         assert dash.ent_hist_desde.get() == f"{date.today().year}-01-01"
         assert dash.ent_hist_hasta.get() == date.today().isoformat()
         dash._consultar_historial()
-        assert dash.lbl_hist_resultado.cget("text").startswith("0 marcas") or "marcas" in dash.lbl_hist_resultado.cget("text")
+        resumen = dash.lbl_hist_resultado.cget("text")
+        assert resumen.startswith("0 marcas") or "marcas" in resumen
         print("OK historial por defecto enero -> hoy:", dash.lbl_hist_resultado.cget("text"))
         dash.ent_hist_hasta.delete(0, "end")
         dash.ent_hist_hasta.insert(0, "2099-12-31")

@@ -26,7 +26,6 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from typing import Any, Callable, Dict, List, Optional
 
-
 CANAL: str = "alertas_marcacion"
 """Canal de PostgreSQL por el que los procesos se avisan entre sí.
 
@@ -55,7 +54,7 @@ class BusAlertas:
     def __init__(self) -> None:
         self._suscriptores: List[Callable[[Dict[str, Any]], None]] = []
         self._bloqueo = threading.Lock()
-        self._propias: "OrderedDict[int, bool]" = OrderedDict()
+        self._propias: OrderedDict[int, bool] = OrderedDict()
 
     def publicar(self, alerta: Dict[str, Any]) -> None:
         """Entrega la alerta a todos los suscriptores (best-effort)."""

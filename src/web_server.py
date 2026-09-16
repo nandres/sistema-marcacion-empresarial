@@ -19,14 +19,22 @@ import asyncio
 import datetime
 import os
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from time import perf_counter
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import jwt
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi import Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -348,7 +356,7 @@ def _usuario_del_token(token: str) -> Dict[str, Any]:
     try:
         claims = auth.verificar_token_acceso(token)
     except jwt.InvalidTokenError:
-        raise sin_sesion
+        raise sin_sesion from None
     db = _cliente(claims.get("emp"))
     try:
         usuario = db.get_user_by_id(int(claims["sub"]))
@@ -356,7 +364,7 @@ def _usuario_del_token(token: str) -> Dict[str, Any]:
             raise ValueError("Usuario del token inexistente.")
         return usuario
     except (ValueError, KeyError):
-        raise sin_sesion
+        raise sin_sesion from None
     finally:
         db.cerrar()
 
@@ -415,12 +423,12 @@ async def ws_alertas(websocket: WebSocket) -> None:
             alerta.get("usuario_id") is None
             or int(alerta.get("usuario_id") or 0) == int(usuario["id"])
         ):
-            try:
+            # El navegador pudo haberse ido entre el filtro y el envío; una
+            # alerta que no llega a un socket muerto no es una falla.
+            with suppress(Exception):
                 asyncio.run_coroutine_threadsafe(
                     websocket.send_json(_alerta_json(alerta)), loop
                 )
-            except Exception:
-                pass
 
     loop = asyncio.get_running_loop()
     notifications.BUS.suscribir(remitente)
@@ -518,7 +526,7 @@ def _frenar(request: Request, cedula: str) -> str:
             rate_limit.ACCESO.verificar(clave)
         except rate_limit.LimiteExcedido as limite:
             _log.warning("freno de intentos activo sobre %s desde %s", clave, origen)
-            raise HTTPException(status_code=429, detail=str(limite))
+            raise HTTPException(status_code=429, detail=str(limite)) from None
     return f"u:{cedula.lower()}"
 
 
@@ -642,7 +650,7 @@ def api_permiso_pdf(
             raise HTTPException(status_code=404, detail="Permiso no encontrado.")
         ruta = Path(reports.generar_pdf_permiso(db, solicitud_id))
     except ValueError as error:
-        raise HTTPException(status_code=404, detail=str(error))
+        raise HTTPException(status_code=404, detail=str(error)) from None
     finally:
         db.cerrar()
     return FileResponse(
@@ -663,17 +671,21 @@ def api_consulta(
             try:
                 puntual = datetime.date.fromisoformat(payload.fecha.strip())
             except ValueError:
-                raise HTTPException(status_code=422, detail="Fecha inválida. Use AAAA-MM-DD.")
+                raise HTTPException(
+                    status_code=422, detail="Fecha inválida. Use AAAA-MM-DD."
+                ) from None
             return reports.resumen_consulta(db, usuario, puntual)
         try:
             desde = datetime.date.fromisoformat(payload.desde.strip())
             hasta = datetime.date.fromisoformat(payload.hasta.strip())
         except ValueError:
-            raise HTTPException(status_code=422, detail="Rango inválido. Use AAAA-MM-DD.")
+            raise HTTPException(
+                status_code=422, detail="Rango inválido. Use AAAA-MM-DD."
+            ) from None
         try:
             return reports.resumen_historico(db, usuario, desde, hasta)
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error))
+            raise HTTPException(status_code=400, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -695,7 +707,7 @@ def _fecha(valor: str, campo: str) -> datetime.date:
     except (ValueError, AttributeError):
         raise HTTPException(
             status_code=422, detail=f"{campo} inválida. Use AAAA-MM-DD."
-        )
+        ) from None
 
 
 @app.get("/api/permisos/catalogo")
@@ -756,7 +768,7 @@ def api_permisos_solicitar(
                 payload.motivo,
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         solicitud["mensaje"] = (
             f"Solicitud #{solicitud['id']} enviada a Recursos Humanos."
         )
@@ -790,7 +802,7 @@ def api_horas_extra_pdf(
     try:
         ruta = Path(reports.generar_pdf_horas_extra(db, usuario, anio, mes))
     except (ValueError, OSError) as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(status_code=400, detail=str(error)) from error
     finally:
         db.cerrar()
     return FileResponse(ruta, media_type="application/pdf", filename=ruta.name)
@@ -809,7 +821,7 @@ def api_constancia_pdf(
     try:
         ruta = Path(reports.generar_pdf_constancia(db, usuario, inicio, fin))
     except (ValueError, OSError) as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(status_code=400, detail=str(error)) from error
     finally:
         db.cerrar()
     return FileResponse(ruta, media_type="application/pdf", filename=ruta.name)
@@ -827,11 +839,13 @@ def api_reclamo(
         try:
             fecha = datetime.date.fromisoformat(payload.fecha.strip())
         except ValueError:
-            raise HTTPException(status_code=422, detail="Fecha inválida. Use AAAA-MM-DD.")
+            raise HTTPException(
+                status_code=422, detail="Fecha inválida. Use AAAA-MM-DD."
+            ) from None
         try:
             hora = datetime.time.fromisoformat(payload.hora_propuesta.strip())
         except ValueError:
-            raise HTTPException(status_code=422, detail="Hora inválida. Use HH:MM.")
+            raise HTTPException(status_code=422, detail="Hora inválida. Use HH:MM.") from None
         motivo = payload.motivo.strip()
         if len(motivo) < 10:
             raise HTTPException(
@@ -1002,7 +1016,7 @@ def api_marcar(payload: MarcarRequest, request: Request) -> Dict[str, Any]:
         try:
             registro_id, momento, tipo = engine.registrar_asistencia(decision.marca)
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error))
+            raise HTTPException(status_code=400, detail=str(error)) from None
         if dispositivo is not None:
             db.asignar_dispositivo_a_marcaje(registro_id, dispositivo["id"])
             db.marcar_dispositivo_visto(dispositivo["id"])
@@ -1106,7 +1120,7 @@ def api_panel_personal_crear(
                 payload.turno_id,
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {"id": nuevo_id, "mensaje": "Personal creado correctamente."}
     finally:
         db.cerrar()
@@ -1141,7 +1155,7 @@ def api_panel_personal_editar(
                 ),
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {"mensaje": "Personal actualizado correctamente."}
     finally:
         db.cerrar()
@@ -1159,7 +1173,7 @@ def api_panel_personal_baja(
         try:
             baja = auth.dar_de_baja(db, usuario, user_id)
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {
             "mensaje": f"{baja['nombre']} dado de baja el {baja['fecha_baja']}. "
             "Su historial se conserva."
@@ -1180,7 +1194,7 @@ def api_panel_personal_reincorporar(
         try:
             alta = auth.reincorporar(db, usuario, user_id)
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {"mensaje": f"{alta['nombre']} reincorporado."}
     finally:
         db.cerrar()
@@ -1198,7 +1212,7 @@ def api_panel_personal_eliminar(
         try:
             auth.delete_user(db, usuario, user_id)
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {"mensaje": "Personal eliminado correctamente."}
     finally:
         db.cerrar()
@@ -1234,7 +1248,9 @@ def api_panel_justificaciones_crear(
             inicio = datetime.date.fromisoformat(payload.fecha_inicio.strip())
             fin = datetime.date.fromisoformat(payload.fecha_fin.strip())
         except ValueError:
-            raise HTTPException(status_code=422, detail="Fechas inválidas. Use AAAA-MM-DD.")
+            raise HTTPException(
+                status_code=422, detail="Fechas inválidas. Use AAAA-MM-DD."
+            ) from None
         try:
             solicitud_id = auth.crear_justificacion(
                 db,
@@ -1246,7 +1262,7 @@ def api_panel_justificaciones_crear(
                 payload.horas_usadas,
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {
             "id": solicitud_id,
             "mensaje": f"Justificación #{solicitud_id} emitida y aprobada.",
@@ -1266,7 +1282,7 @@ def api_panel_justificaciones_pdf(
     try:
         ruta = reports.generar_pdf_permiso(db, solicitud_id)
     except Exception as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(status_code=400, detail=str(error)) from error
     finally:
         db.cerrar()
     return FileResponse(
@@ -1295,7 +1311,7 @@ def _resolver_correccion(
         try:
             estado = auth.aprobar_solicitud_correccion(db, usuario, solicitud_id, aprobar)
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {"estado": estado, "mensaje": f"Solicitud #{solicitud_id} {estado.lower()}."}
     finally:
         db.cerrar()
@@ -1361,7 +1377,7 @@ def api_panel_resolver_permiso(
                 db, usuario, solicitud_id, payload.aprobar, payload.observacion
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         resultado["mensaje"] = (
             f"Solicitud #{solicitud_id} {resultado['estado'].lower()}."
         )
@@ -1399,7 +1415,7 @@ def api_panel_condiciones_declarar(
                 payload.tolerancia_min, payload.nota,
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {
             "mensaje": f"{payload.condicion} declarada para el {fecha.isoformat()}."
         }
@@ -1418,7 +1434,9 @@ def api_panel_condiciones_revocar(
     try:
         dia = _fecha(fecha, "Fecha")
         if not db.borrar_condicion_dia(dia):
-            raise HTTPException(status_code=404, detail="Ese día no tiene condición declarada.")
+            raise HTTPException(
+                status_code=404, detail="Ese día no tiene condición declarada."
+            )
         db.registrar_auditoria(
             usuario["id"], "REVOCAR", "condiciones_dia", 0,
             anterior={"fecha": dia.isoformat()},
@@ -1446,7 +1464,7 @@ def api_panel_horas_extra_pdf(
             raise HTTPException(status_code=404, detail="Empleado no encontrado.")
         ruta = Path(reports.generar_pdf_horas_extra(db, empleado, anio, mes))
     except (ValueError, OSError) as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(status_code=400, detail=str(error)) from error
     finally:
         db.cerrar()
     return FileResponse(ruta, media_type="application/pdf", filename=ruta.name)
@@ -1543,7 +1561,7 @@ def api_panel_turno_historial(
         try:
             return auth.historial_turno(db, usuario, turno_id)
         except ValueError as error:
-            raise HTTPException(status_code=404, detail=str(error))
+            raise HTTPException(status_code=404, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -1568,7 +1586,7 @@ def api_panel_turnos_crear(
                 payload.tolerancia_min,
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -1605,7 +1623,7 @@ def api_panel_turnos_editar(
                 vigente_desde=payload.vigente_desde,
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -1622,7 +1640,7 @@ def api_panel_turnos_predeterminado(
         try:
             return auth.designar_turno_predeterminado(db, usuario, turno_id)
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -1639,7 +1657,7 @@ def api_panel_turnos_retirar(
         try:
             resultado = auth.retirar_turno(db, usuario, turno_id)
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {"mensaje": f"Turno {resultado}."}
     finally:
         db.cerrar()
@@ -1657,7 +1675,7 @@ def api_panel_turno_empleado(
         try:
             return auth.turno_de_empleado(db, usuario, user_id)
         except ValueError as error:
-            raise HTTPException(status_code=404, detail=str(error))
+            raise HTTPException(status_code=404, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -1675,7 +1693,7 @@ def api_panel_turno_base(
         try:
             return auth.asignar_turno_base(db, usuario, user_id, payload.turno_id)
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -1696,7 +1714,7 @@ def api_panel_rotacion(
                 payload.desde, payload.hasta, payload.motivo,
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -1713,7 +1731,7 @@ def api_panel_rotacion_revocar(
         try:
             auth.revocar_rotacion(db, usuario, asignacion_id)
         except ValueError as error:
-            raise HTTPException(status_code=404, detail=str(error))
+            raise HTTPException(status_code=404, detail=str(error)) from None
         return {"mensaje": "Rotación cancelada."}
     finally:
         db.cerrar()
@@ -1759,7 +1777,7 @@ def api_panel_ciclos_crear(
                 payload.dias_por_tramo, payload.ancla,
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -1776,7 +1794,7 @@ def api_panel_ciclos_eliminar(
         try:
             auth.eliminar_ciclo(db, usuario, ciclo_id)
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {"mensaje": "Ciclo eliminado."}
     finally:
         db.cerrar()
@@ -1819,7 +1837,7 @@ def api_panel_dispositivos_crear(
                 db, usuario, payload.nombre, payload.ubicacion
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -1836,7 +1854,7 @@ def api_panel_dispositivos_revocar(
         try:
             auth.revocar_dispositivo(db, usuario, dispositivo_id)
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
         return {"mensaje": "Puesto de marcación revocado."}
     finally:
         db.cerrar()
@@ -1880,7 +1898,7 @@ def api_panel_ciclo_empleado(
                 db, usuario, user_id, payload.ciclo_id, payload.posicion
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error))
+            raise HTTPException(status_code=422, detail=str(error)) from None
     finally:
         db.cerrar()
 
@@ -1948,7 +1966,7 @@ def main() -> None:
                 "  python src/migrate.py",
                 file=sys.stderr,
             )
-            raise SystemExit(1)
+            raise SystemExit(1) from None
 
     uvicorn.run(
         app,

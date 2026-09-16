@@ -1,15 +1,15 @@
 import os
 import sys
 import tempfile
-
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import database
-from offline_queue import ColaOffline
 import sync_worker
+from offline_queue import ColaOffline
 
 ruta = os.path.join(tempfile.gettempdir(), "marcaciones_offline_prueba.db")
 if os.path.exists(ruta):
@@ -20,12 +20,12 @@ cola = ColaOffline(ruta=ruta)
 db = database.Database()
 db.initialize()
 
-hoy = datetime.now(timezone.utc).date()
+hoy = datetime.now(UTC).date()
 hace = hoy - timedelta(days=7)
 db.limpiar_marcajes_prueba(2, hace - timedelta(days=1), hace)
 
 # 1) Entrada puntual (07:30) -> estado Normal, sin alerta
-momento_entrada = datetime(hace.year, hace.month, hace.day, 7, 30, tzinfo=timezone.utc)
+momento_entrada = datetime(hace.year, hace.month, hace.day, 7, 30, tzinfo=UTC)
 cola.encolar("juan", momento_entrada)
 
 # 2) Entrada tardía -> Llegada Tardía -> alerta para RRHH.
@@ -42,7 +42,7 @@ momento_tarde = datetime(
 cola.encolar("juan", momento_tarde)
 
 # 3) Salida del día puntual (17:00) -> cierra la entrada del punto 1
-momento_salida = datetime(hace.year, hace.month, hace.day, 17, 0, tzinfo=timezone.utc)
+momento_salida = datetime(hace.year, hace.month, hace.day, 17, 0, tzinfo=UTC)
 cola.encolar("juan", momento_salida)
 
 pendientes = cola.pendientes()
@@ -61,7 +61,8 @@ print("salida preservada:", r["hora_salida"].isoformat(), "== 17:00 UTC?",
 print("sync_id presente:", bool(r["sync_id"]))
 
 registros2 = db.get_entries_by_date(2, dia_tarde)
-print("registros día tardío:", len(registros2), "incidencia:", registros2[0]["tipo_incidencia"])
+print("registros día tardío:", len(registros2),
+      "incidencia:", registros2[0]["tipo_incidencia"])
 
 # 4) Segundo lote: no debe duplicar nada
 resumen2 = sync_worker.sincronizar(cola, db=db)

@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from itertools import pairwise
 from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
 DIAS_ABREVIADOS: Tuple[str, ...] = ("Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom")
@@ -305,7 +306,7 @@ def construir_tramos(definiciones: Sequence[Any]) -> Tuple[Tramo, ...]:
                 f"El tramo {tramo.etiqueta()} cruza la medianoche y no es el "
                 f"último del turno."
             )
-    for previo, siguiente in zip(tramos, tramos[1:]):
+    for previo, siguiente in pairwise(tramos):
         if siguiente.entrada < previo.salida:
             raise TurnoInvalido(
                 f"El tramo {siguiente.etiqueta()} empieza antes de que termine "

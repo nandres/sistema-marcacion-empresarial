@@ -1,8 +1,8 @@
 """Validación integral del catálogo reglamentario, cuotas y fechas."""
 import sys
-from datetime import date, datetime, timedelta
-
+from datetime import date, timedelta
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import auth
@@ -81,7 +81,8 @@ print("OK artículo por vínculo")
 
 # --- Días: licencia de pasante y conteo anual ---
 anio_pasado = hoy.replace(year=hoy.year - 1)
-auth.crear_justificacion(db, admin, p2["id"], "Licencia de Pasante", anio_pasado, anio_pasado + timedelta(days=1))
+auth.crear_justificacion(db, admin, p2["id"], "Licencia de Pasante",
+                         anio_pasado, anio_pasado + timedelta(days=1))
 d2d = disponibilidad(p2)
 assert d2d["Licencia de Pasante"]["usados"] == 0, "no debe contar del año pasado"
 
@@ -90,7 +91,8 @@ assert d2d["Licencia de Pasante"]["usados"] == 0, "no debe contar del año pasad
 lunes = hoy - timedelta(days=7)
 while lunes.weekday() != 0:
     lunes -= timedelta(days=1)
-auth.crear_justificacion(db, admin, p2["id"], "Licencia de Pasante", lunes, lunes + timedelta(days=1))
+auth.crear_justificacion(db, admin, p2["id"], "Licencia de Pasante",
+                         lunes, lunes + timedelta(days=1))
 d2e = disponibilidad(p2)
 assert d2e["Licencia de Pasante"]["usados"] == 2, d2e["Licencia de Pasante"]["usados"]
 assert d2e["Licencia de Pasante"]["restantes"] == 8
@@ -98,7 +100,8 @@ print("OK conteo de días por período")
 
 # Un fin de semana no consume cuota de un artículo definido en días hábiles.
 sabado = lunes + timedelta(days=5)
-auth.crear_justificacion(db, admin, p2["id"], "Licencia de Pasante", sabado, sabado + timedelta(days=1))
+auth.crear_justificacion(db, admin, p2["id"], "Licencia de Pasante",
+                         sabado, sabado + timedelta(days=1))
 d2f = disponibilidad(p2)
 assert d2f["Licencia de Pasante"]["usados"] == 2, d2f["Licencia de Pasante"]["usados"]
 print("OK sábado y domingo no consumen días hábiles (P3-7)")

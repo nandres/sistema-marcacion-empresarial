@@ -20,7 +20,8 @@ def pedir(cliente, metodo, ruta, token=None, cuerpo=None):
         d = r.json()
     except Exception:
         d = "<binario " + str(r.status_code) + " " + str(len(r.content)) + " bytes>"
-    print(f"{metodo} {ruta} -> {r.status_code} | {str(d)[:110].encode('ascii', 'replace').decode()}")
+    cuerpo = str(d)[:110].encode('ascii', 'replace').decode()
+    print(f"{metodo} {ruta} -> {r.status_code} | {cuerpo}")
     return r, d
 
 
@@ -56,7 +57,8 @@ with httpx.Client(timeout=30) as c:
     juan_id = next(p["id"] for p in d["personal"] if p["username"] == "juan")
 
     just_id = None
-    for tipo in ["Motivos Particulares", "Duelo", "Matrimonio", "Salud Familiar", "Permiso por Examen"]:
+    for tipo in ["Motivos Particulares", "Duelo", "Matrimonio",
+                 "Salud Familiar", "Permiso por Examen"]:
         r, d = pedir(c, "POST", "/api/panel/justificaciones", token, {
             "empleado_id": juan_id, "tipo_permiso": tipo,
             "fecha_inicio": hoy, "fecha_fin": hoy, "horas_usadas": 0.0,
@@ -68,7 +70,9 @@ with httpx.Client(timeout=30) as c:
     assert just_id, "ningún permiso con cuota disponible"
 
     r, d = pedir(c, "GET", f"/api/panel/justificaciones/{just_id}/pdf", token)
-    assert r.status_code == 200 and r.headers.get("content-type", "").startswith("application/pdf"), r.status_code
+    assert r.status_code == 200, r.status_code
+    assert r.headers.get("content-type", "").startswith("application/pdf"), \
+        r.headers.get("content-type", "")
 
     r, d = pedir(c, "GET", "/api/panel/correcciones", token)
     assert r.status_code == 200
@@ -95,7 +99,8 @@ with httpx.Client(timeout=30) as c:
         assert "COMPROBANTE DE MARCACIÓN" in d["ticket"], "falta el encabezado del ticket"
         assert "Hash de seguridad" in d["ticket"], "el ticket debe llevar su firma"
         if d["tipo"] == "ENTRADA":
-            r2, d2 = pedir(c, "POST", "/api/marcar", cuerpo={"cedula": "juan", "password": "clave123"})
+            r2, d2 = pedir(c, "POST", "/api/marcar",
+                           cuerpo={"cedula": "juan", "password": "clave123"})
             assert r2.status_code == 200 and d2["tipo"] == "SALIDA", d2
     elif r.status_code == 400 and any(
         m in d["detail"] for m in ("entrada abierta", "entrada y su salida de hoy")

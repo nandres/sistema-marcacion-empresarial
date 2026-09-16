@@ -20,10 +20,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
-import sys
 import sqlite3
+import sys
 import threading
 import uuid
+from contextlib import suppress
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -126,12 +127,12 @@ class ColaOffline:
                     ("intentos", "INTEGER NOT NULL DEFAULT 0"),
                     ("ultimo_error", "TEXT NOT NULL DEFAULT ''"),
                 ):
-                    try:
+                    # SQLite no tiene ADD COLUMN IF NOT EXISTS: la forma de
+                    # preguntar si la columna está es intentar agregarla.
+                    with suppress(sqlite3.OperationalError):
                         conexion.execute(
                             f"ALTER TABLE pendientes ADD COLUMN {columna} {definicion}"
                         )
-                    except sqlite3.OperationalError:
-                        pass  # ya existía
                 # Las marcas que no entran se apartan acá en lugar de
                 # reintentarse para siempre: quedan a la vista de quien opere
                 # el kiosco, que es lo único que puede resolverlas.

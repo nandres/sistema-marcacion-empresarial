@@ -137,7 +137,8 @@ assert ce._domingo_de_pascua(2027) == date(2027, 3, 28), "Pascua 2027 incorrecta
 feriados_2026 = ce.feriados_de(2026)
 for esperado in (date(2026, 4, 2), date(2026, 4, 3), date(2026, 2, 9), date(2026, 12, 25)):
     assert esperado in feriados_2026, f"falta el feriado {esperado}"
-assert date(2026, 3, 1) not in feriados_2026, "el traslado del Día de los Héroes no se aplicó"
+assert date(2026, 3, 1) not in feriados_2026, \
+    "el traslado del Día de los Héroes no se aplicó"
 print("  OK   calendario de feriados (Pascua, traslados y fechas fijas)")
 
 # Mezclar naive y aware debe fallar con un mensaje claro, no con un TypeError.

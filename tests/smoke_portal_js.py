@@ -41,7 +41,9 @@ assert not enlineados, f"manejadores en línea en el HTML: {enlineados}"
 print("  sin manejadores onclick en línea: OK")
 
 # El texto que llega de la base nunca se inyecta como HTML en los avisos.
-assert "innerHTML" not in script.split("function notificar")[1].split("function conectarAlertas")[0], \
+cuerpo_notificar = script.split("function notificar")[1] \
+                         .split("function conectarAlertas")[0]
+assert "innerHTML" not in cuerpo_notificar, \
     "el aviso flotante volvió a usar innerHTML (riesgo de XSS)"
 assert "textContent" in script, "el aviso flotante no usa textContent"
 print("  avisos construidos con textContent: OK")

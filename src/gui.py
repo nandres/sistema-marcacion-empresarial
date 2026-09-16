@@ -11,16 +11,18 @@ Dos modos de uso:
 
 from __future__ import annotations
 
-import datetime
 import calendar
+import datetime
 import os
+from contextlib import suppress
 from functools import partial
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import customtkinter as ctk
 import matplotlib
 
 matplotlib.use("TkAgg")
+import psycopg2
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
@@ -35,8 +37,6 @@ import turnos
 from clock_engine import ClockEngine
 from database import Database
 from offline_queue import ColaOffline
-
-import psycopg2
 
 # Tres tipografías con oficios distintos: serif para los títulos, grotesca
 # para el cuerpo y monoespaciada para toda cifra, que es lo que mantiene las
@@ -199,12 +199,13 @@ class CalendarioPopup(ctk.CTkToplevel):
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.title("Elegir fecha")
-        try:
+        # Posicionarlo junto al campo es una cortesía: si el gestor de
+        # ventanas no la acepta, el calendario se abre donde quiera y sirve
+        # igual.
+        with suppress(Exception):
             self.geometry(
                 f"+{master.winfo_rootx() + 80}+{master.winfo_rooty() + 100}"
             )
-        except Exception:
-            pass
         cuerpo = tarjeta(self)
         cuerpo.pack(fill="both", expand=True, padx=10, pady=10)
         fila_nav = ctk.CTkFrame(cuerpo, fg_color="transparent")
@@ -249,7 +250,8 @@ class CalendarioPopup(ctk.CTkToplevel):
 
     def _dibujar_mes(self) -> None:
         """Reconstruye la grilla de días del mes visible."""
-        self.lbl_mes.configure(text=f"{MESES[self.mes_visible.month - 1].capitalize()} {self.mes_visible.year}")
+        mes = MESES[self.mes_visible.month - 1].capitalize()
+        self.lbl_mes.configure(text=f"{mes} {self.mes_visible.year}")
         for boton in self.botones_dias:
             boton.destroy()
         self.botones_dias.clear()
@@ -354,7 +356,8 @@ def campo_fecha(
     return fila
 
 
-def etiqueta(master, texto: str, tamano: int = 14, color: str = t("TEXT"), peso: str = "normal") -> ctk.CTkLabel:
+def etiqueta(master, texto: str, tamano: int = 14, color: str = t("TEXT"),
+             peso: str = "normal") -> ctk.CTkLabel:
     """Texto corriente de la interfaz, en la grotesca del sistema."""
     return ctk.CTkLabel(
         master, text=texto, font=(FONT, tamano, peso), text_color=color
@@ -516,7 +519,7 @@ def _recolorear(widget, anterior: Dict[str, str], nuevo: Dict[str, str]) -> None
         _recolorear(hijo, anterior, nuevo)
 
 
-def interruptor_tema(master, app: "MarcacionApp") -> ctk.CTkSwitch:
+def interruptor_tema(master, app: MarcacionApp) -> ctk.CTkSwitch:
     """Switch superior que alterna el modo claro y el modo oscuro al instante."""
     interruptor = ctk.CTkSwitch(
         master,
@@ -646,7 +649,8 @@ class MarcacionApp(ctk.CTk):
         self.pie.grid_columnconfigure(0, weight=1)
         etiqueta(
             self.pie,
-            "Marque su asistencia en el kiosco · el Portal del Empleado y la Gestión requieren usuario y contraseña",
+            "Marque su asistencia en el kiosco · el Portal del Empleado y la "
+            "Gestión requieren usuario y contraseña",
             12,
             t("MUTED"),
         ).grid(row=0, column=0, sticky="w")
@@ -842,7 +846,8 @@ class MarcacionApp(ctk.CTk):
         self.tarjeta_ticket = tarjeta(master)
         self.tarjeta_ticket.grid(row=2, column=0, sticky="ew")
         self.tarjeta_ticket.grid_columnconfigure(0, weight=1)
-        etiqueta(self.tarjeta_ticket, "Último comprobante criptográfico", 13, t("MUTED")).grid(
+        etiqueta(self.tarjeta_ticket, "Último comprobante criptográfico",
+                 13, t("MUTED")).grid(
             row=0, column=0, sticky="w", padx=20, pady=(16, 10)
         )
         self.ticket_box = ctk.CTkTextbox(
@@ -861,7 +866,8 @@ class MarcacionApp(ctk.CTk):
         self.hora_actual = ahora.strftime("%H:%M:%S")
         self._dibujar_hora()
         self.lbl_fecha.configure(
-            text=f"{DIAS[ahora.weekday()]}, {ahora.day} de {MESES[ahora.month - 1]} de {ahora.year}"
+            text=f"{DIAS[ahora.weekday()]}, {ahora.day} de "
+                 f"{MESES[ahora.month - 1]} de {ahora.year}"
         )
         self.after(1000, self._actualizar_reloj)
 
@@ -1183,7 +1189,8 @@ class EmployeeDashboard(ctk.CTkFrame):
         )
         etiqueta(
             tarjeta_vacaciones,
-            f"Usufructuados {vacaciones['usadas']:.0f} de {vacaciones['devengadas']:.0f} devengados",
+            f"Usufructuados {vacaciones['usadas']:.0f} de "
+            f"{vacaciones['devengadas']:.0f} devengados",
             12,
             t("MUTED"),
         ).grid(row=2, column=0, padx=18, sticky="w", pady=(0, 16))
@@ -1228,7 +1235,8 @@ class EmployeeDashboard(ctk.CTkFrame):
 
         permisos = self.resumen["permisos"]
         if permisos:
-            etiqueta(self.area, "Permisos aprobados · descargue el PDF oficial", 13, t("MUTED")).grid(
+            etiqueta(self.area, "Permisos aprobados · descargue el PDF oficial",
+                     13, t("MUTED")).grid(
                 row=2, column=0, columnspan=2, sticky="w", pady=(4, 6)
             )
             for permiso in permisos:
@@ -1238,7 +1246,8 @@ class EmployeeDashboard(ctk.CTkFrame):
                 etiqueta(
                     fila,
                     f"#{permiso['id']} · {permiso['tipo']} · "
-                    f"{permiso['inicio']} al {permiso['fin']} · aprobó {permiso['aprobador']}",
+                    f"{permiso['inicio']} al {permiso['fin']} · "
+                    f"aprobó {permiso['aprobador']}",
                     12,
                 ).grid(row=0, column=0, sticky="w", padx=14, pady=10)
                 boton_pdf = ctk.CTkButton(
@@ -1464,7 +1473,7 @@ class PanelGestion(ctk.CTkFrame):
         ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 14))
         interruptor_tema(sidebar, self.master).grid(row=2, column=0, sticky="w", padx=16)
         self.botones_seccion: List[ctk.CTkButton] = []
-        for indice, (titulo, detalle) in enumerate(self.SECCIONES):
+        for indice, (titulo, _) in enumerate(self.SECCIONES):
             boton = ctk.CTkButton(
                 sidebar,
                 text=f"{indice + 1:02d}    {titulo}",
@@ -1578,7 +1587,7 @@ class PanelGestion(ctk.CTkFrame):
     def _seleccionar(self, indice: int) -> None:
         """Cambia la sección activa y estiliza el botón del menú lateral."""
         self.indice_activo = indice
-        for posicion, pestana in enumerate(self.pestanas):
+        for pestana in self.pestanas:
             pestana.grid_remove()
         self.pestanas[indice].grid(row=0, column=0, sticky="nsew")
         if indice == len(self.SECCIONES) - 1:
@@ -1705,7 +1714,8 @@ class AuditoriaTab(ctk.CTkFrame):
             hijo.destroy()
         eventos = self.db.listar_auditoria()
         if not eventos:
-            etiqueta(self.scroll, "Sin eventos de auditoría todavía.", 13, t("MUTED")).pack(pady=20)
+            etiqueta(self.scroll, "Sin eventos de auditoría todavía.",
+                     13, t("MUTED")).pack(pady=20)
             return
         for evento in eventos:
             fila = tarjeta(self.scroll)
@@ -1768,7 +1778,8 @@ class CorreccionesTab(ctk.CTkFrame):
         )
         boton_refrescar.grid(row=0, column=1, rowspan=2, padx=16, sticky="e")
         self.lbl_resultado = etiqueta(cabecera, "", 12, t("SUCCESS"))
-        self.lbl_resultado.grid(row=2, column=0, columnspan=2, sticky="w", padx=20, pady=(2, 12))
+        self.lbl_resultado.grid(row=2, column=0, columnspan=2, sticky="w",
+                                padx=20, pady=(2, 12))
 
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
         self.scroll.grid(row=1, column=0, sticky="nsew")
@@ -1779,7 +1790,8 @@ class CorreccionesTab(ctk.CTkFrame):
             hijo.destroy()
         solicitudes = self.db.listar_solicitudes_correccion()
         if not solicitudes:
-            etiqueta(self.scroll, "No hay solicitudes de corrección.", 13, t("MUTED")).pack(pady=20)
+            etiqueta(self.scroll, "No hay solicitudes de corrección.",
+                     13, t("MUTED")).pack(pady=20)
             return
         for solicitud in solicitudes:
             fila = tarjeta(self.scroll)
@@ -2128,7 +2140,8 @@ class CondicionesTab(ctk.CTkFrame):
             hijo.destroy()
         condiciones = self.db.listar_condiciones_dia()
         if not condiciones:
-            etiqueta(self.scroll, "Ningún día con condición declarada.", 13, t("MUTED")).pack(
+            etiqueta(self.scroll, "Ningún día con condición declarada.",
+                     13, t("MUTED")).pack(
                 pady=20
             )
             return
@@ -2483,7 +2496,8 @@ class DashboardTab(ctk.CTkFrame):
         cabecera = tarjeta(self)
         cabecera.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         cabecera.grid_columnconfigure(0, weight=1)
-        titulo(cabecera, "Dashboard Analítico de Recursos Humanos", 16).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 2))
+        titulo(cabecera, "Dashboard Analítico de Recursos Humanos", 16).grid(
+            row=0, column=0, sticky="w", padx=20, pady=(14, 2))
         self.lbl_actualizado = etiqueta(
             cabecera, "Cargando métricas…", 12, t("MUTED")
         )
@@ -2618,7 +2632,8 @@ class DashboardTab(ctk.CTkFrame):
                 eje.annotate(
                     f"Pico: {pico}",
                     xy=(dia_pico, pico), xytext=(6, 12),
-                    textcoords="offset points", color=t("DANGER"), fontsize=10, fontweight="bold",
+                    textcoords="offset points", color=t("DANGER"),
+                    fontsize=10, fontweight="bold",
                 )
             eje.set_xlabel("Día del mes", fontsize=10)
             eje.set_ylabel("Cantidad de tardanzas", fontsize=10)
@@ -2938,7 +2953,8 @@ class PersonalTab(ctk.CTkFrame):
         except (ValueError, PermissionError) as error:
             self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
             return
-        self.lbl_resultado.configure(text="Empleado agregado correctamente.", text_color=t("SUCCESS"))
+        self.lbl_resultado.configure(text="Empleado agregado correctamente.",
+                                     text_color=t("SUCCESS"))
         for campo in (self.ent_usuario, self.ent_nombre, self.ent_salario, self.ent_clave):
             campo.delete(0, "end")
         self._refrescar()
@@ -3177,7 +3193,8 @@ class JustificacionesTab(ctk.CTkFrame):
         """Resuelve el artículo del menú actual."""
         seleccion = self.menu_tipo.get()
         return next(
-            (a for a in self._articulos_actuales() if f"{a['articulo']} · {a['nombre']}" == seleccion),
+            (a for a in self._articulos_actuales()
+             if f"{a['articulo']} · {a['nombre']}" == seleccion),
             None,
         )
 
@@ -3310,7 +3327,8 @@ class ReportesTab(ctk.CTkFrame):
         self.lbl_resultado = etiqueta(self, "", 13, t("SUCCESS"))
         self.lbl_resultado.grid(row=2, column=0, pady=(18, 6))
 
-    def _periodo(self, entrada_anio: ctk.CTkEntry, entrada_mes: Optional[ctk.CTkEntry]) -> tuple:
+    def _periodo(self, entrada_anio: ctk.CTkEntry,
+                 entrada_mes: Optional[ctk.CTkEntry]) -> tuple:
         anio = int(entrada_anio.get().strip() or datetime.datetime.now().year)
         if entrada_mes is None:
             return (anio,)
@@ -3333,7 +3351,8 @@ class ReportesTab(ctk.CTkFrame):
         except (ValueError, PermissionError) as error:
             self.lbl_resultado.configure(text=str(error), text_color=t("DANGER"))
             return
-        self.lbl_resultado.configure(text=f"Aguinaldo exportado: {ruta}", text_color=t("SUCCESS"))
+        self.lbl_resultado.configure(text=f"Aguinaldo exportado: {ruta}",
+                                     text_color=t("SUCCESS"))
 
 
 def main() -> None:

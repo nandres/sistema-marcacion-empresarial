@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import getpass
 import os
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 import bcrypt
 import jwt
 
+import notifications
+import reglamento
+import turnos
 from clock_engine import (
     calcular_horas_paraguay,
     es_feriado_o_domingo,
@@ -25,9 +28,6 @@ from clock_engine import (
     turno_vigente,
 )
 from database import Database, load_dotenv
-import notifications
-import reglamento
-import turnos
 
 SIN_CAMBIO: Any = object()
 """Centinela para distinguir 'no lo toques' de 'ponelo en nulo'."""
@@ -100,7 +100,7 @@ def crear_token_acceso(usuario_id: int, rol: str, empresa_id: int) -> str:
     que ata cada petición a un solo cliente sin que el navegador pueda
     elegirlo.
     """
-    ahora = datetime.now(timezone.utc)
+    ahora = datetime.now(UTC)
     payload = {
         "sub": str(usuario_id),
         "rol": rol,
@@ -1474,7 +1474,7 @@ def _tolerancia_de_turno(valor: Any) -> Optional[int]:
     try:
         minutos = int(valor)
     except (TypeError, ValueError):
-        raise ValueError("La tolerancia del turno se expresa en minutos enteros.")
+        raise ValueError("La tolerancia del turno se expresa en minutos enteros.") from None
     if not 0 <= minutos <= TOLERANCIA_MAXIMA_TURNO:
         raise ValueError(
             f"La tolerancia del turno debe estar entre 0 y "
@@ -1492,7 +1492,7 @@ def _como_fecha(valor: Any, campo: str) -> date:
     try:
         return date.fromisoformat(str(valor).strip())
     except ValueError:
-        raise ValueError(f"Fecha inválida en '{campo}': se espera AAAA-MM-DD.")
+        raise ValueError(f"Fecha inválida en '{campo}': se espera AAAA-MM-DD.") from None
 
 
 # --- Ciclos de rotación -----------------------------------------------------
@@ -1564,7 +1564,7 @@ def crear_ciclo(
     try:
         dias = int(dias_por_tramo)
     except (TypeError, ValueError):
-        raise ValueError("Los días por tramo se expresan en número entero.")
+        raise ValueError("Los días por tramo se expresan en número entero.") from None
     if not 1 <= dias <= 60:
         raise ValueError("Los días por tramo van de 1 a 60.")
     inicio = _como_fecha(ancla, "ancla") if ancla else date.today()

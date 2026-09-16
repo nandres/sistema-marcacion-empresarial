@@ -15,9 +15,10 @@ from __future__ import annotations
 import os
 import sys
 import threading
+from contextlib import suppress
 from datetime import date, datetime, time, timedelta
-from time import monotonic, sleep
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
@@ -26,14 +27,14 @@ import psycopg2.pool
 from psycopg2.extras import Json, RealDictCursor
 
 import biometria
-import reglamento
 import registro
+import reglamento
 import turnos as turnos_dominio
 
 _log = registro.obtener("database")
 
 # Lista SQL de tipos de permiso válidos (catálogo reglamentario + histórico)
-_TIPOS_SQL: str = ", ".join("'%s'" % t for t in reglamento.TIPOS_PERMISO_CHECK)
+_TIPOS_SQL: str = ", ".join(f"'{tipo}'" for tipo in reglamento.TIPOS_PERMISO_CHECK)
 
 DEFAULT_CONFIG: Dict[str, str] = {
     "dbname": "marcacion",
@@ -210,7 +211,7 @@ def _tomar_del_pool(config: Dict[str, str]) -> Any:
                     f"Las {POOL_MAXIMO} conexiones siguen ocupadas después de "
                     f"{POOL_ESPERA:g} s. Subí DB_POOL_MAX, o revisá si algo "
                     f"está reteniendo conexiones sin devolverlas."
-                )
+                ) from None
             sleep(pausa)
             pausa = min(pausa * 2, 0.05)
 
@@ -1603,10 +1604,10 @@ class Database:
         try:
             cursor.execute(query, params or ())
         except psycopg2.Error:
-            try:
+            # Si la conexión ya se cayó, el rollback falla y no hay nada que
+            # hacer al respecto: lo que importa es no tapar el error original.
+            with suppress(psycopg2.Error):
                 self.connection.rollback()
-            except psycopg2.Error:
-                pass
             raise
         if fetch == "one":
             return cursor.fetchone()
@@ -2916,10 +2917,7 @@ class Database:
     def get_marcajes_month(self, anio: int, mes: int) -> List[Dict[str, Any]]:
         """Lista los marcajes de todos los empleados dentro de un mes calendario."""
         inicio = datetime(anio, mes, 1)
-        if mes == 12:
-            fin = datetime(anio + 1, 1, 1)
-        else:
-            fin = datetime(anio, mes + 1, 1)
+        fin = datetime(anio + 1, 1, 1) if mes == 12 else datetime(anio, mes + 1, 1)
         return self._execute(
             """
             SELECT m.*, u.username, u.full_name
@@ -3501,7 +3499,8 @@ class Database:
         return cursor.fetchone()["id"]
 
     def actualizar_hora_entrada(
-        self, entry_id: int, hora_entrada: datetime, es_tardanza: bool, tipo_incidencia: str = ""
+        self, entry_id: int, hora_entrada: datetime, es_tardanza: bool,
+        tipo_incidencia: str = "",
     ) -> None:
         """Corrige la hora de entrada de un marcaje (aprobación de reclamo)."""
         self._execute(

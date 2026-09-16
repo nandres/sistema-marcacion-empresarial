@@ -85,6 +85,7 @@ verificar("la huella identifica la clave sin revelarla",
 original = os.environ.get("BIOMETRIA_CLAVE", "")
 os.environ["BIOMETRIA_CLAVE"] = "una-clave-distinta-de-treinta-y-dos-o-mas-caracteres"
 import biometria
+
 biometria._clave.cache_clear() if hasattr(biometria._clave, "cache_clear") else None
 
 verificar("con otra clave la huella cambia",

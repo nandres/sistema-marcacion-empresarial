@@ -34,9 +34,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from database import Database
 import notifications
 import turnos
+from database import Database
 
 JORNADA_DIURNA: timedelta = timedelta(hours=8)
 JORNADA_NOCTURNA: timedelta = timedelta(hours=7)
@@ -109,7 +109,13 @@ FERIADOS_TRASLADADOS: Dict[int, Dict[date, date]] = {
 
 
 def _domingo_de_pascua(anio: int) -> date:
-    """Domingo de Pascua por el algoritmo gregoriano anónimo."""
+    """Domingo de Pascua por el algoritmo gregoriano anónimo.
+
+    Las variables conservan las letras del algoritmo publicado, `l` incluida.
+    Rebautizarlas con nombres del dominio no aclararía nada —ninguna significa
+    algo por separado— y rompería la única forma de comprobar la fórmula, que
+    es leerla al lado de la original.
+    """
     a = anio % 19
     b, c = divmod(anio, 100)
     d, e = divmod(b, 4)
@@ -117,7 +123,7 @@ def _domingo_de_pascua(anio: int) -> date:
     g = (b - f + 1) // 3
     h = (19 * a + b - d - g + 15) % 30
     i, k = divmod(c, 4)
-    l = (32 + 2 * e + 2 * i - h - k) % 7
+    l = (32 + 2 * e + 2 * i - h - k) % 7  # noqa: E741
     m = (a + 11 * h + 22 * l) // 451
     mes, dia = divmod(h + l - 7 * m + 114, 31)
     return date(anio, mes, dia + 1)

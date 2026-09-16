@@ -48,7 +48,8 @@ def verificar(descripcion: str, condicion: bool, detalle: str = "") -> None:
 
 def limpiar() -> None:
     hoy = datetime.now().date()
-    db.limpiar_marcajes_prueba(empleado["id"], hoy - timedelta(days=40), hoy + timedelta(days=1))
+    db.limpiar_marcajes_prueba(empleado["id"], hoy - timedelta(days=40),
+                               hoy + timedelta(days=1))
 
 
 # --- P2-2 · turno que cruza la medianoche ---------------------------------

@@ -12,6 +12,7 @@ poder verlo, y eso también se comprueba acá.
 
 import sys
 from datetime import date, timedelta
+from itertools import pairwise
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
@@ -114,7 +115,7 @@ verificar("Ana alterna semana a semana", obtenido_ana == esperado,
 verificar("Beto alterna en contrafase", obtenido_beto == esperado[1:] + [esperado[0]],
           " · ".join(obtenido_beto))
 verificar("nunca coinciden de turno",
-          all(a != b for a, b in zip(obtenido_ana, obtenido_beto)))
+          all(a != b for a, b in zip(obtenido_ana, obtenido_beto, strict=True)))
 verificar("y el turno viene del ciclo, no del legajo",
           clock_engine.turno_vigente(db, ana["id"], ANCLA).origen == "ciclo")
 
@@ -171,7 +172,7 @@ verificar("y los tramos son contiguos",
           all(
             date.fromisoformat(b["desde"]) - date.fromisoformat(a["hasta"])
             == timedelta(days=1)
-            for a, b in zip(calendario, calendario[1:])
+            for a, b in pairwise(calendario)
           ))
 
 propio = auth.calendario_de_rotacion(db, db.get_user_by_id(beto["id"]), beto["id"])

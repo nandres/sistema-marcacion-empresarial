@@ -63,7 +63,8 @@ class RelojBiometricoZKTeco:
     """Cliente TCP/IP que dialoga con un reloj biométrico ZKTeco."""
 
     def __init__(
-        self, host: str = HOST_DEFAULT, puerto: int = PUERTO_DEFAULT, timeout: float = TIMEOUT_CONEXION
+        self, host: str = HOST_DEFAULT, puerto: int = PUERTO_DEFAULT,
+        timeout: float = TIMEOUT_CONEXION,
     ) -> None:
         self.host = host
         self.puerto = puerto

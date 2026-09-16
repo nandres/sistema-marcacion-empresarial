@@ -1,0 +1,37 @@
+# El proyecto no se publica como paquete: este archivo existe para que la
+# vara de calidad esté escrita y la aplique el pipeline, en lugar de vivir en
+# la cabeza de quien revisa.
+
+[tool.ruff]
+line-length = 96
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "B", "C4", "SIM", "RET", "UP", "I", "N"]
+ignore = [
+    # FastAPI declara las dependencias como valor por omisión: `Depends()` en
+    # la firma es la forma de la biblioteca, no un descuido.
+    "B008",
+    # El código está en español y sus excepciones también: `PoolAgotado` o
+    # `SinEmpresa` se leen como lo que son. `PoolAgotadoError` sería una
+    # convención inglesa injertada en un vocabulario que no lo es.
+    "N818",
+    # `Dict[str, Any]` y `dict[str, Any]` son igual de legibles, y cambiar las
+    # casi ochocientas anotaciones del proyecto ensuciaría el historial sin
+    # que nadie lea una línea mejor.
+    "UP006", "UP007", "UP035", "UP045",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Las pruebas son guiones sueltos: ponen `src` en el path y recién después
+# importan lo que van a probar, así que sus imports no pueden ir todos arriba.
+"tests/*" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "auth", "biometria", "biometric_sync", "clock_engine", "database",
+    "facial", "gui", "migrate", "notifications", "offline_queue",
+    "rate_limit", "registro", "reglamento", "reports", "respaldo",
+    "sync_worker", "turnos", "web_server",
+]

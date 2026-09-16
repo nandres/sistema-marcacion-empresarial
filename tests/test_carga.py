@@ -17,6 +17,7 @@ import os
 import statistics
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
@@ -47,10 +48,8 @@ def verificar(descripcion: str, condicion: bool, detalle: str = "") -> None:
 def limpiar(db: Database, admin) -> None:
     for usuario in db.listar_usuarios() if hasattr(db, "listar_usuarios") else []:
         if str(usuario.get("username", "")).startswith(PREFIJO):
-            try:
+            with suppress(Exception):
                 auth.delete_user(db, admin, usuario["id"])
-            except Exception:
-                pass
 
 
 async def marcar(cliente: httpx.AsyncClient, cedula: str) -> dict:
@@ -107,7 +106,7 @@ def main() -> int:
 
     print(f"CARGA · {CUANTOS} personas marcando a la vez contra {BASE}")
 
-    print(f"\n1) Plantilla de prueba")
+    print("\n1) Plantilla de prueba")
     cedulas = []
     for indice in range(CUANTOS):
         usuario = f"{PREFIJO}{indice:03d}"
@@ -121,7 +120,7 @@ def main() -> int:
 
     antes = db.count_marcajes_hoy()
 
-    print(f"\n2) Todos marcan en el mismo instante")
+    print("\n2) Todos marcan en el mismo instante")
     arranque = time.perf_counter()
     resultados = asyncio.run(avalancha(cedulas))
     total_s = time.perf_counter() - arranque
@@ -146,7 +145,7 @@ def main() -> int:
             reparto[e["codigo"]] = reparto.get(e["codigo"], 0) + 1
         print(f"  errores por código: {reparto}")
 
-    print(f"\n3) Cada marca quedó registrada una sola vez")
+    print("\n3) Cada marca quedó registrada una sola vez")
     despues = db.count_marcajes_hoy()
     verificar("se registraron tantas marcas como éxitos hubo",
               despues - antes == len(exitos),

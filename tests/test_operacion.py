@@ -72,7 +72,7 @@ salida = en_proceso_aparte(
     "print('ID=' + identificador)\n"
 )
 identificador = next(
-    (l[3:] for l in salida.splitlines() if l.startswith("ID=")), ""
+    (linea[3:] for linea in salida.splitlines() if linea.startswith("ID=")), ""
 )
 verificar("la línea registrada lleva el identificador de la petición",
           bool(identificador) and f"[{identificador}]" in salida,

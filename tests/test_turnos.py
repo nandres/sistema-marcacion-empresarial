@@ -370,8 +370,8 @@ print("\n11) La cola offline repone los dos tramos de la partida")
 import os
 import tempfile
 
-from offline_queue import ColaOffline
 import sync_worker
+from offline_queue import ColaOffline
 
 ruta_cola = os.path.join(tempfile.gettempdir(), "cola_turnos_prueba.db")
 if os.path.exists(ruta_cola):

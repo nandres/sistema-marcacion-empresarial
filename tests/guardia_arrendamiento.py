@@ -73,7 +73,9 @@ def revisar() -> List[str]:
             continue
         if "empresa_id" in cuerpo or "self.empresa" in cuerpo:
             continue
-        faltantes.append(f"{metodo.name} (línea {metodo.lineno}) → {', '.join(sorted(tocadas))}")
+        faltantes.append(
+            f"{metodo.name} (línea {metodo.lineno}) → {', '.join(sorted(tocadas))}"
+        )
     return faltantes
 
 

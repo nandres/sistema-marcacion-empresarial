@@ -41,7 +41,8 @@ verificar("frame sin rostro no se guarda como foto", not ok and not db.tiene_fot
 
 # 2) Captura inservible: se rechaza, no se omite.
 resultado = facial.validar(db, 2, frame_vacio)
-verificar("captura sin rostro se rechaza", resultado.estado == facial.RECHAZADA, resultado.detalle)
+verificar("captura sin rostro se rechaza",
+          resultado.estado == facial.RECHAZADA, resultado.detalle)
 verificar("rechazo bloquea la marca", not facial.decidir(resultado).permitir)
 
 # 3) Sin cámara tampoco hay verificación posible.

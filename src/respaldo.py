@@ -218,8 +218,8 @@ def verificar(archivo: Path) -> Dict[str, Any]:
             f"El archivo no es un volcado legible: "
             f"{(resultado.stderr or '').strip()[:200]}"
         )
-    objetos = [l for l in resultado.stdout.splitlines()
-               if l.strip() and not l.startswith(";")]
+    objetos = [linea for linea in resultado.stdout.splitlines()
+               if linea.strip() and not linea.startswith(";")]
     print(f"{archivo.name}: volcado legible, {len(objetos)} objetos")
 
     manifiesto = leer_manifiesto(archivo)
@@ -293,7 +293,7 @@ def restaurar(
             f"La base de destino tiene que existir antes de restaurar; creala "
             f"con «python src/migrate.py» apuntando a ella.\n"
             f"Detalle: {_detalle(error)}"
-        )
+        ) from error
 
     print(f"\nRestaurando sobre {config['dbname']} en {config['host']}.")
     print("Esto reemplaza el contenido actual de esa base.")

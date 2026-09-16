@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import secrets
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
@@ -353,7 +354,7 @@ def _cambio_medio(cuadros: List[Any]) -> float:
         return 0.0
     diferencias = [
         float(np.mean(cv2.absdiff(anterior, siguiente)))
-        for anterior, siguiente in zip(grises, grises[1:])
+        for anterior, siguiente in pairwise(grises)
     ]
     return float(np.mean(diferencias)) if diferencias else 0.0
 

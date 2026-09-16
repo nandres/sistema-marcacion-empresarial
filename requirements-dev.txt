@@ -3,3 +3,6 @@
 -r requirements.txt
 
 pyinstaller>=6.10
+
+# Vara de calidad del proyecto; su configuración está en pyproject.toml.
+ruff>=0.13

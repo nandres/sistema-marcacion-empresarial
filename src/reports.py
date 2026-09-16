@@ -17,10 +17,6 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import auth
-import clock_engine
-import reglamento
-from database import Database
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
@@ -33,6 +29,11 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+import auth
+import clock_engine
+import reglamento
+from database import Database
 
 MESES: Tuple[str, ...] = (
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -71,6 +72,12 @@ ENCABEZADO_DETALLE: List[str] = [
     "Horas extra 100%",
 ]
 
+
+
+def _total_recargos(datos: Dict[str, Any]) -> float:
+    """Lo que suman los tres recargos sobre el salario ordinario."""
+    return (datos["importe_nocturno"] + datos["importe_50"]
+            + datos["importe_100"])
 
 def _sumar(marcajes: List[Dict], campo: str) -> timedelta:
     """Suma una columna de tipo INTERVAL de una lista de marcajes."""
@@ -304,7 +311,8 @@ def resumen_consulta(
         }
         for m in marcas
     ]
-    del_mes = [m for m in db.get_marcajes_month(fecha.year, fecha.month) if m["user_id"] == user["id"]]
+    del_mes = [m for m in db.get_marcajes_month(fecha.year, fecha.month)
+               if m["user_id"] == user["id"]]
     extra_50 = sum(
         ((m["horas_extra_50"] or timedelta(0)) for m in del_mes), timedelta(0)
     )
@@ -1105,10 +1113,11 @@ def generar_pdf_horas_extra(
             ["Valor hora ordinaria", f"Gs. {datos['valor_hora']:,.0f}"],
             ["Recargo nocturno · Art. 232 (+30 %)", f"Gs. {datos['importe_nocturno']:,.0f}"],
             ["Horas extra diurnas · Art. 234 (+50 %)", f"Gs. {datos['importe_50']:,.0f}"],
-            ["Nocturnas, domingo o feriado · Art. 233 (+100 %)", f"Gs. {datos['importe_100']:,.0f}"],
+            ["Nocturnas, domingo o feriado · Art. 233 (+100 %)",
+             f"Gs. {datos['importe_100']:,.0f}"],
             [
                 "Total a liquidar",
-                f"Gs. {datos['importe_nocturno'] + datos['importe_50'] + datos['importe_100']:,.0f}",
+                f"Gs. {_total_recargos(datos):,.0f}",
             ],
         ],
         colWidths=[110 * mm, 58 * mm],
@@ -1228,7 +1237,7 @@ def generar_pdf_constancia(
 
     sello = hashlib.sha256(
         f"CONSTANCIA|{user['username']}|{desde}|{hasta}|{dias}|"
-        f"{_horas(trabajado)}".encode("utf-8")
+        f"{_horas(trabajado)}".encode()
     ).hexdigest()
 
     carpeta = Path("reportes")
@@ -1398,15 +1407,20 @@ def generar_pdf_permiso(db: Database, solicitud_id: int) -> str:
         tabla,
         Spacer(1, 14 * mm),
         Paragraph(
-            "____________________________________", ParagraphStyle("Firma", parent=normal, alignment=TA_CENTER)
+            "____________________________________",
+            ParagraphStyle("Firma", parent=normal, alignment=TA_CENTER)
         ),
         Paragraph(f"Firma electrónica del tutor · {tutor['full_name']}", normal),
         Spacer(1, 6 * mm),
-        Paragraph("____________________________________", ParagraphStyle("Firma2", parent=normal, alignment=TA_CENTER)),
+        Paragraph(
+            "____________________________________",
+            ParagraphStyle("Firma2", parent=normal, alignment=TA_CENTER),
+        ),
         Paragraph("Sello institucional · Dirección de Talento Humano", normal),
         Spacer(1, 12 * mm),
         Paragraph(
-            f"Hash SHA-256 de validación legal: {hash_legal}", ParagraphStyle("Hash", parent=normal, fontSize=8)
+            f"Hash SHA-256 de validación legal: {hash_legal}",
+            ParagraphStyle("Hash", parent=normal, fontSize=8)
         ),
         Paragraph(
             "Documento generado electrónicamente por el Sistema de Marcación. "

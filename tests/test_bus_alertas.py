@@ -22,7 +22,6 @@ RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ / "src"))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-import database
 import notifications
 from database import Database
 
