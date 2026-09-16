@@ -1,0 +1,17 @@
+# Los finales de línea se normalizan al entrar al repositorio y se entregan
+# según el sistema de quien clona.
+* text=auto
+
+# Menos estos: los corre el runner de Linux. Un CR al final de cada renglón
+# convierte `arrancar` en `arrancar\r`, que bash busca como si fuera otro
+# comando y no encuentra. Falla en CI y nunca en la máquina de quien lo
+# escribió, que es la peor forma de fallar.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+
+# Binarios: que git no intente arreglarles nada.
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary

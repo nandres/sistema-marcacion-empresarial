@@ -139,12 +139,6 @@ def disponible() -> bool:
         return False
 
 
-def _cv2():
-    import cv2
-
-    return cv2
-
-
 def _cascada():
     import cv2
 

@@ -8,6 +8,11 @@ contraseña eso no se puede cambiar. Tampoco había política de retención.
 P3-3 · `/api/login` y `/api/marcar` aceptaban intentos sin límite. La cédula
 es pública en Paraguay, así que sin freno la contraseña de cualquier
 empleado cae por diccionario.
+
+P3-16 · El comprobante de marcación se firmaba con HMAC pero no se podía
+comprobar: la firma cubría el instante con microsegundos y huso, y el papel
+imprimía la hora en HH:MM:SS. Nadie podía reconstruir desde el ticket el
+valor firmado, así que la firma era decorativa.
 """
 
 import sys
@@ -20,6 +25,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import auth
 import biometria
 import rate_limit
+import reports
+from clock_engine import ahora_local
 from database import Database
 
 db = Database()
@@ -129,10 +136,40 @@ verificar("el freno del portal cuenta por usuario y por origen",
           f"{rate_limit.INTENTOS_MAXIMOS} intentos · bloqueo "
           f"{rate_limit.BLOQUEO_SEGUNDOS // 60} min")
 
+# --- P3-16 · el comprobante se puede comprobar ------------------------------
+print("\nComprobante de marcación verificable")
+
+momento = ahora_local()
+ticket = reports.comprobante_marcacion(4321, momento, "ENTRADA")
+
+# Lo esencial: la comprobación parte del papel, no de los valores sueltos que
+# tenía a mano quien lo emitió. Si el ticket no alcanza, la firma no sirve.
+veredicto = reports.verificar_comprobante(ticket)
+verificar("un comprobante recién emitido se valida con su propio texto",
+          veredicto["valido"], veredicto["motivo"])
+verificar("y dice de qué marcaje es", veredicto["registro_id"] == 4321,
+          str(veredicto.get("registro_id")))
+
+alterado = reports.verificar_comprobante(ticket.replace("ENTRADA", "SALIDA"))
+verificar("cambiarle el tipo lo invalida", not alterado["valido"])
+
+corrido = reports.verificar_comprobante(
+    ticket.replace(momento.strftime("%H:%M:%S"), "00:00:00")
+)
+verificar("y correrle la hora también", not corrido["valido"])
+
+verificar("un papel que no es un comprobante se rechaza sin reventar",
+          not reports.verificar_comprobante("hola")["valido"])
+
+# El instante firmado tiene que estar impreso: es la única forma de que quien
+# recibe el papel pueda recalcular la firma.
+verificar("el ticket imprime el instante que firma",
+          momento.replace(microsecond=0).isoformat() in ticket)
+
 db.cerrar()
 
 print()
 if fallos:
     print(f"SEGURIDAD DE DATOS: {fallos} problema(s)")
     raise SystemExit(1)
-print("SEGURIDAD DE DATOS OK · P3-1 y P3-3 cerrados")
+print("SEGURIDAD DE DATOS OK · P3-1, P3-3 y P3-16 cerrados")

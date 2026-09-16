@@ -169,6 +169,18 @@ def _exportar_csv(grupos: Dict[int, Dict[str, Any]], ruta: Path) -> None:
             escritor.writerow(_fila_resumen(grupo))
 
 
+def _instante_firmable(momento: datetime) -> str:
+    """El instante tal como se firma y tal como se imprime.
+
+    Se recorta al segundo a propósito. La firma cubría ``isoformat()`` con
+    microsegundos y huso, y el ticket imprimía la hora en ``HH:MM:SS``: nadie
+    podía reconstruir desde el papel el valor que se había firmado, así que el
+    comprobante era incomprobable. Ahora se firma exactamente lo que se
+    imprime, y lo que se imprime alcanza para volver a calcular la firma.
+    """
+    return momento.replace(microsecond=0).isoformat()
+
+
 def _firma_comprobante(registro_id: int, tipo: str, momento: datetime) -> str:
     """Calcula el HMAC-SHA256 del registro para la fidelidad legal.
 
@@ -177,7 +189,7 @@ def _firma_comprobante(registro_id: int, tipo: str, momento: datetime) -> str:
     cualquier ticket para quien pueda leer el código fuente.
     """
     clave = auth.secreto_requerido("COMPROBANTE_CLAVE")
-    origen = f"{registro_id}|{tipo}|{momento.isoformat()}"
+    origen = f"{registro_id}|{tipo}|{_instante_firmable(momento)}"
     return hmac.new(
         clave.encode("utf-8"), origen.encode("utf-8"), hashlib.sha256
     ).hexdigest()[:16].upper()
@@ -208,6 +220,7 @@ def comprobante_marcacion(registro_id: int, momento: datetime, tipo: str) -> str
         f"  ID del registro: {registro_id}\n"
         f"  Fecha: {momento.strftime('%d/%m/%Y')}\n"
         f"  Hora exacta: {momento.strftime('%H:%M:%S')}\n"
+        f"  Instante firmado: {_instante_firmable(momento)}\n"
         f"  Hash de seguridad: {firma}\n"
         "==========================================\n"
         "  Conservar este comprobante como prueba\n"
@@ -215,12 +228,55 @@ def comprobante_marcacion(registro_id: int, momento: datetime, tipo: str) -> str
     )
 
 
-def verificar_comprobante(
-    registro_id: int, momento: datetime, tipo: str, firma: str
-) -> bool:
-    """Verifica la firma de un comprobante contra su recálculo."""
-    esperada = _firma_comprobante(registro_id, tipo.upper(), momento)
-    return hmac.compare_digest(esperada, firma.upper())
+_CAMPOS_COMPROBANTE = {
+    "Tipo": "tipo",
+    "ID del registro": "registro_id",
+    "Instante firmado": "instante",
+    "Hash de seguridad": "firma",
+}
+
+
+def verificar_comprobante(ticket: str) -> Dict[str, Any]:
+    """Dice si un comprobante impreso es el que este sistema emitió.
+
+    Recibe el texto del ticket —pegado, escaneado o leído de un archivo— y no
+    sus campos sueltos: quien tiene que comprobar un comprobante tiene el
+    comprobante, no una lista de valores.
+
+    Returns:
+        ``{"valido": bool, "motivo": str}`` y, si el ticket se pudo leer, los
+        campos que se usaron para recalcular la firma.
+    """
+    campos: Dict[str, str] = {}
+    for linea in ticket.splitlines():
+        etiqueta, separador, valor = linea.partition(":")
+        if separador and etiqueta.strip() in _CAMPOS_COMPROBANTE:
+            campos[_CAMPOS_COMPROBANTE[etiqueta.strip()]] = valor.strip()
+
+    faltantes = sorted(set(_CAMPOS_COMPROBANTE.values()) - set(campos))
+    if faltantes:
+        return {"valido": False,
+                "motivo": f"Al comprobante le faltan campos: {', '.join(faltantes)}."}
+
+    try:
+        momento = datetime.fromisoformat(campos["instante"])
+        registro_id = int(campos["registro_id"])
+    except ValueError:
+        return {"valido": False,
+                "motivo": "El instante o el identificador del comprobante no se leen."}
+
+    esperada = _firma_comprobante(registro_id, campos["tipo"].upper(), momento)
+    valido = hmac.compare_digest(esperada, campos["firma"].upper())
+    return {
+        "valido": valido,
+        "motivo": ("El comprobante es auténtico."
+                   if valido else
+                   "La firma no corresponde: el comprobante fue alterado, o se "
+                   "emitió con otra clave."),
+        "registro_id": registro_id,
+        "tipo": campos["tipo"].upper(),
+        "instante": momento.isoformat(),
+    }
 
 
 def calcular_aguinaldo(db: Database, anio: int) -> List[Dict[str, Any]]:

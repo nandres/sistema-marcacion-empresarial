@@ -559,6 +559,22 @@ Corregir el pasado sigue siendo posible, con `vigente_desde` hacia atrás, para 
 
 ---
 
+### P3-16 · El comprobante de marcación no se podía comprobar ✅ corregido
+
+> Cerrado el 2026-09-15. La firma cubre el instante que el ticket imprime, y `python src/app.py verificar-comprobante` lo valida desde el papel.
+
+Cada marcación entrega un comprobante con un HMAC-SHA256 "para conservar como prueba de fidelidad del registro". La firma se calculaba sobre `momento.isoformat()` —con microsegundos y huso— y el ticket imprimía la hora como `HH:MM:SS`. Desde el papel no había forma de reconstruir el valor firmado, así que **nadie podía comprobar un comprobante**: la firma era decorativa.
+
+Había además una segunda mitad faltante. `verificar_comprobante()` existía en `reports.py` y no la llamaba nadie, en ningún módulo: el sistema sabía emitir y no sabía verificar. Apareció buscando funciones sin uso, que es como suelen aparecer las mitades que faltan.
+
+Ahora se firma el instante recortado al segundo y ese mismo texto va impreso en el ticket. La verificación recibe el comprobante entero —pegado, escaneado o en un archivo— y no sus campos sueltos: quien tiene que comprobar un comprobante tiene el comprobante, no una lista de valores que alguien le dictó.
+
+Los comprobantes emitidos antes de este cambio dejan de validar, porque se firmaron sobre otro texto. No hay ninguno en circulación: el sistema todavía no se instaló en un cliente.
+
+**Lección de método.** Ninguna prueba tocaba los comprobantes. La firma se veía bien —hay HMAC, hay clave obligatoria, hay `compare_digest`— y ese aspecto de corrección fue suficiente para que nadie ejercitara el camino completo. Una firma no está probada hasta que alguien la verifica **desde lo que el usuario recibe**; comprobarla contra las variables que tenía a mano quien la emitió no prueba nada.
+
+---
+
 ## Prioridad de remediación sugerida
 
 | Orden | Trabajo | Cierra | Estado |
@@ -581,6 +597,7 @@ Corregir el pasado sigue siendo posible, con `vigente_desde` hacia atrás, para 
 | 15 | Arranque verificado del servidor en cada paso de CI | P3-14 | ✅ hecho |
 | 16 | Registro operativo, chequeo de salud contra la base y versión de esquema | P3-15 | ✅ hecho |
 | 17 | Versionado histórico de la definición de los turnos | P1-7 | ✅ hecho |
+| 18 | Comprobante verificable desde el papel y vara de calidad en CI | P3-16 | ✅ hecho |
 
 El detalle del rediseño está en [[Arquitectura Objetivo · Plataforma y Portal del Empleado]]; las contramedidas de fraude y carga, en [[Antifraude y Resiliencia en Picos de Marcación]].
 

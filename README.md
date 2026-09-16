@@ -362,6 +362,7 @@ python tests/guardia_arrendamiento.py  # ninguna consulta de cliente sin acotar
 python tests/test_operacion.py     # registro, salud y versión del esquema
 python tests/test_turnos_historicos.py # el pasado se mide con el horario del pasado
 python src/migrate.py estado       # en qué versión está esta base
+python src/app.py verificar-comprobante ticket.txt  # ¿este papel lo emitimos?
 ```
 
 Son treinta conjuntos en total; el pipeline los corre todos. La lista
@@ -435,6 +436,12 @@ propósito: uno fijo se graba una vez en video y se reproduce siempre.
 > sostenida frente a la cámara— pero quien mueva el teléfono siguiendo la
 > consigna pasa igual. Cerrarlo de verdad pide una cámara con infrarrojo o
 > profundidad, o un modelo de anti-suplantación entrenado.
+
+## Licencia
+
+Propietario, todos los derechos reservados — ver [LICENSE](LICENSE). El código
+está publicado para consulta y evaluación; usarlo en producción o derivar de
+él requiere autorización escrita.
 
 ## Idioma
 

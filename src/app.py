@@ -3,13 +3,19 @@
 Orquesta la autenticación RBAC, la marcación con reglas de la Ley N.º 213,
 la gestión de usuarios con auditoría y la exportación de reportes mensuales.
 El menú se adapta al rol del usuario conectado.
+
+    python src/app.py                            # menú interactivo
+    python src/app.py alta-empresa               # alta de un cliente nuevo
+    python src/app.py verificar-comprobante [archivo]
 """
 
 from __future__ import annotations
 
 import os
 import sys
-from typing import Optional
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, List, Optional, Tuple
 
 import auth
 import reports
@@ -17,7 +23,7 @@ from clock_engine import ClockEngine
 from database import Database, SinEmpresa
 
 
-def list_users_menu(db: Database) -> None:
+def menu_listar_usuarios(db: Database) -> None:
     """Muestra el listado de usuarios con su rol."""
     print("\n=== Usuarios registrados ===")
     for user in db.list_users():
@@ -27,7 +33,7 @@ def list_users_menu(db: Database) -> None:
         )
 
 
-def create_user_menu(db: Database, actor: dict) -> None:
+def menu_crear_usuario(db: Database, actor: dict) -> None:
     """Asiste la creación de un usuario desde consola."""
     print("\n=== Crear usuario ===")
     username = input("Nombre de usuario: ").strip()
@@ -54,7 +60,7 @@ def _prompt_salario() -> float:
     return float(valor) if valor else 0.0
 
 
-def update_user_menu(db: Database, actor: dict) -> None:
+def menu_editar_usuario(db: Database, actor: dict) -> None:
     """Asiste la edición de un usuario desde consola."""
     print("\n=== Editar usuario ===")
     user_id = input("ID del usuario a editar: ").strip()
@@ -88,7 +94,7 @@ def update_user_menu(db: Database, actor: dict) -> None:
     print("Usuario actualizado.")
 
 
-def delete_user_menu(db: Database, actor: dict) -> None:
+def menu_eliminar_usuario(db: Database, actor: dict) -> None:
     """Asiste la eliminación de un usuario desde consola."""
     print("\n=== Eliminar usuario ===")
     user_id = input("ID del usuario a eliminar: ").strip()
@@ -100,7 +106,7 @@ def delete_user_menu(db: Database, actor: dict) -> None:
     print("Usuario eliminado.")
 
 
-def export_monthly_menu(db: Database, actor: dict) -> None:
+def menu_exportar_mes(db: Database, actor: dict) -> None:
     """Asiste la exportación del reporte mensual de asistencia."""
     print("\n=== Exportar asistencia mensual ===")
     try:
@@ -114,7 +120,7 @@ def export_monthly_menu(db: Database, actor: dict) -> None:
     print(f"Reporte exportado: {ruta}")
 
 
-def crear_justificacion_menu(db: Database, actor: dict) -> None:
+def menu_crear_justificacion(db: Database, actor: dict) -> None:
     """Asiste la creación de una justificación aprobada."""
     from datetime import date
 
@@ -138,7 +144,7 @@ def crear_justificacion_menu(db: Database, actor: dict) -> None:
     print(f"Justificación #{justificacion_id} creada y aprobada.")
 
 
-def export_aguinaldo_menu(db: Database, actor: dict) -> None:
+def menu_exportar_aguinaldo(db: Database, actor: dict) -> None:
     """Asiste la exportación de la proyección de aguinaldo."""
     print("\n=== Exportar aguinaldo proporcional ===")
     try:
@@ -150,7 +156,7 @@ def export_aguinaldo_menu(db: Database, actor: dict) -> None:
     print(f"Aguinaldo exportado: {ruta}")
 
 
-def prompt_first_admin(db: Database) -> None:
+def pedir_primer_admin(db: Database) -> None:
     """Crea el primer Administrador en el arranque inicial del sistema."""
     print("=== Crear el primer Administrador ===")
     username = input("Nombre de usuario: ").strip()
@@ -218,11 +224,107 @@ def alta_de_empresa(db: Database) -> None:
     db.initialize()
     db.empresa_id = empresa["id"]
     print(f"Empresa '{razon}' alojada. Ahora su primer administrador:")
-    prompt_first_admin(db)
+    pedir_primer_admin(db)
+
+
+def verificar_comprobante_impreso(origen: Optional[str]) -> int:
+    """Comprueba un comprobante pegado por teclado o leído de un archivo.
+
+    Es la contraparte del ticket que el kiosco entrega: sin ella la firma es
+    decorativa, porque nadie tiene con qué desmentir un papel.
+    """
+    texto = Path(origen).read_text(encoding="utf-8") if origen else sys.stdin.read()
+    veredicto = reports.verificar_comprobante(texto)
+    print(veredicto["motivo"])
+    if veredicto["valido"]:
+        print(f"  Marcaje {veredicto['registro_id']} · {veredicto['tipo']} · "
+              f"{veredicto['instante']}")
+        return 0
+    return 1
+
+
+@dataclass(frozen=True)
+class OpcionMenu:
+    """Una entrada del menú: qué dice, quién la ve y qué hace."""
+
+    etiqueta: str
+    accion: Callable[[Database, dict, ClockEngine], None]
+    roles: Optional[Tuple[str, ...]] = None
+
+    def visible_para(self, rol: str) -> bool:
+        return self.roles is None or rol in self.roles
+
+
+def _marcar(tipo: str) -> Callable[[Database, dict, ClockEngine], None]:
+    """Arma la acción de marcar entrada o salida, que solo difieren en eso."""
+    def accion(db: Database, usuario: dict, motor: ClockEngine) -> None:
+        try:
+            auth.can_register_marks(db, usuario)
+            marcaje_id, momento = (motor.clock_in() if tipo == "ENTRADA"
+                                   else motor.clock_out())
+            print(f"{tipo.capitalize()} registrada correctamente.")
+            print(reports.comprobante_marcacion(marcaje_id, momento, tipo))
+        except (ValueError, PermissionError) as error:
+            print(error)
+    return accion
+
+
+def _mostrar_total(db: Database, usuario: dict, motor: ClockEngine) -> None:
+    total = motor.total_worked_seconds()
+    print(f"Total acumulado: {motor.format_duration(total)}")
+
+
+OPCIONES: Tuple[OpcionMenu, ...] = (
+    OpcionMenu("Marcar entrada", _marcar("ENTRADA")),
+    OpcionMenu("Marcar salida", _marcar("SALIDA")),
+    OpcionMenu("Registros de hoy",
+               lambda db, usuario, motor: print(motor.report_today())),
+    OpcionMenu("Total de horas trabajadas", _mostrar_total),
+    OpcionMenu("Listar usuarios",
+               lambda db, usuario, motor: menu_listar_usuarios(db),
+               auth.ROLES_GESTION_USUARIOS),
+    OpcionMenu("Crear usuario",
+               lambda db, usuario, motor: menu_crear_usuario(db, usuario),
+               auth.ROLES_GESTION_USUARIOS),
+    OpcionMenu("Editar usuario",
+               lambda db, usuario, motor: menu_editar_usuario(db, usuario),
+               auth.ROLES_GESTION_USUARIOS),
+    OpcionMenu("Eliminar usuario",
+               lambda db, usuario, motor: menu_eliminar_usuario(db, usuario),
+               (auth.ROLE_ADMIN,)),
+    OpcionMenu("Crear justificación",
+               lambda db, usuario, motor: menu_crear_justificacion(db, usuario),
+               auth.ROLES_GESTION_USUARIOS),
+    OpcionMenu("Exportar reporte mensual",
+               lambda db, usuario, motor: menu_exportar_mes(db, usuario),
+               auth.ROLES_REPORTES),
+    OpcionMenu("Exportar aguinaldo proporcional",
+               lambda db, usuario, motor: menu_exportar_aguinaldo(db, usuario),
+               auth.ROLES_REPORTES),
+)
+
+
+def _menu_de(rol: str) -> List[Tuple[str, OpcionMenu]]:
+    """Numera, en orden, solo lo que ese rol puede hacer.
+
+    La numeración se calcula en lugar de escribirse. Antes el listado y el
+    despacho eran dos series de números escritas a mano, y se habían
+    desincronizado: el menú imprimía 5, 6, 7, 10, 9, 11, 8.
+    """
+    visibles = (opcion for opcion in OPCIONES if opcion.visible_para(rol))
+    return [(str(numero), opcion)
+            for numero, opcion in enumerate(visibles, start=1)]
 
 
 def main() -> None:
     """Punto de entrada: inicializa la base de datos y lanza el menú."""
+    # Verificar un comprobante no necesita base ni sesión: se resuelve con el
+    # papel y la clave, que es justamente lo que lo hace comprobable.
+    if len(sys.argv) > 1 and sys.argv[1] == "verificar-comprobante":
+        raise SystemExit(verificar_comprobante_impreso(
+            sys.argv[2] if len(sys.argv) > 2 else None
+        ))
+
     db = Database()
     db.initialize()
 
@@ -232,7 +334,7 @@ def main() -> None:
         return
     elegir_empresa(db)
     if not db.list_users(incluir_bajas=True):
-        prompt_first_admin(db)
+        pedir_primer_admin(db)
 
     user: Optional[dict] = None
     while user is None:
@@ -240,69 +342,26 @@ def main() -> None:
         if user is None:
             print("Credenciales incorrectas.")
 
-    role = auth.get_role_name(db, user)
-    engine = ClockEngine(db, user)
-    print(f"\nBienvenido, {user['full_name']} ({role}).")
+    rol = auth.get_role_name(db, user)
+    motor = ClockEngine(db, user)
+    print(f"\nBienvenido, {user['full_name']} ({rol}).")
+    menu = _menu_de(rol)
 
     while True:
         print("\n--- Menú principal ---")
-        print("1. Marcar entrada")
-        print("2. Marcar salida")
-        print("3. Registros de hoy")
-        print("4. Total de horas trabajadas")
-        if role in auth.ROLES_GESTION_USUARIOS:
-            print("5. Listar usuarios")
-            print("6. Crear usuario")
-            print("7. Editar usuario")
-            print("10. Crear justificación")
-        if role in auth.ROLES_REPORTES:
-            print("9. Exportar reporte mensual")
-            print("11. Exportar aguinaldo proporcional")
-        if role == auth.ROLE_ADMIN:
-            print("8. Eliminar usuario")
+        for numero, opcion in menu:
+            print(f"{numero}. {opcion.etiqueta}")
         print("0. Salir")
-        option = input("Seleccione una opción: ").strip()
 
-        if option == "1":
-            try:
-                auth.can_register_marks(db, user)
-                entry_id, momento = engine.clock_in()
-                print("Entrada registrada correctamente.")
-                print(reports.comprobante_marcacion(entry_id, momento, "ENTRADA"))
-            except (ValueError, PermissionError) as error:
-                print(error)
-        elif option == "2":
-            try:
-                auth.can_register_marks(db, user)
-                entry_id, momento = engine.clock_out()
-                print("Salida registrada correctamente.")
-                print(reports.comprobante_marcacion(entry_id, momento, "SALIDA"))
-            except (ValueError, PermissionError) as error:
-                print(error)
-        elif option == "3":
-            print(engine.report_today())
-        elif option == "4":
-            total = engine.total_worked_seconds()
-            print(f"Total acumulado: {engine.format_duration(total)}")
-        elif option == "5" and role in auth.ROLES_GESTION_USUARIOS:
-            list_users_menu(db)
-        elif option == "6" and role in auth.ROLES_GESTION_USUARIOS:
-            create_user_menu(db, user)
-        elif option == "7" and role in auth.ROLES_GESTION_USUARIOS:
-            update_user_menu(db, user)
-        elif option == "9" and role in auth.ROLES_REPORTES:
-            export_monthly_menu(db, user)
-        elif option == "10" and role in auth.ROLES_GESTION_USUARIOS:
-            crear_justificacion_menu(db, user)
-        elif option == "11" and role in auth.ROLES_REPORTES:
-            export_aguinaldo_menu(db, user)
-        elif option == "8" and role == auth.ROLE_ADMIN:
-            delete_user_menu(db, user)
-        elif option == "0":
+        elegida = input("Seleccione una opción: ").strip()
+        if elegida == "0":
             print("Hasta pronto.")
             break
-        else:
+        despacho = dict(menu).get(elegida)
+        if despacho is None:
             print("Opción no válida.")
+            continue
+        despacho.accion(db, user, motor)
 
 
 if __name__ == "__main__":

@@ -97,12 +97,6 @@ class Freno:
             restantes = self.maximos - len(self._purgar(clave, ahora))
             return max(0, restantes), max(0, int(hasta - ahora))
 
-    def reiniciar(self) -> None:
-        """Vacía el estado. Para las pruebas, no para la operación."""
-        with self._candado:
-            self._fallos.clear()
-            self._bloqueados.clear()
-
 
 ACCESO = Freno()
 """Freno compartido por el login del portal y el kiosco web."""
